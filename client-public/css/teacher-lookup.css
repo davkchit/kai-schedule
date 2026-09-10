@@ -28,37 +28,27 @@
 }
 
 .tl-page.is-wide .container {
-    max-width: 960px;
+    max-width: 1120px;
 }
 
+/* Just the mark, styled like the logo on the welcome card — no pill, no
+   caption. The card underneath already says what the page is. */
 .tl-page-header {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 22px;
-    background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(16px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.5);
-    border-radius: 999px;
-    box-shadow: 0 6px 20px rgba(124, 185, 232, 0.16);
     animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .tl-page-header img {
     display: block;
-}
-
-.tl-page-header-title {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: -0.01em;
+    width: min(148px, 60vw);
+    height: auto;
+    filter: drop-shadow(0 4px 12px rgba(124, 185, 232, 0.3));
 }
 
 /* ── Results card ─────────────────────────────────────────────────── */
 
 .card.tl-card-results {
-    padding: 32px 34px 28px;
+    padding: 44px 46px 36px;
     text-align: left;
 }
 
@@ -80,7 +70,7 @@
 
 .tl-teacher-name {
     font-family: 'Montserrat', sans-serif;
-    font-size: 26px;
+    font-size: 31px;
     font-weight: 600;
     color: var(--text-primary);
     letter-spacing: -0.02em;
@@ -89,7 +79,7 @@
 }
 
 .tl-semester-label {
-    font-size: 14px;
+    font-size: 15px;
     color: var(--text-secondary);
 }
 
@@ -102,7 +92,7 @@
 }
 
 .tl-note {
-    font-size: 15px;
+    font-size: 16px;
     color: var(--text-secondary);
     margin: 0;
 }
@@ -149,14 +139,14 @@
     justify-content: center;
     gap: 2px;
     flex-shrink: 0;
-    padding: 7px 12px;
+    padding: 9px 14px;
     background: transparent;
     border: none;
-    border-radius: 11px;
+    border-radius: 12px;
     cursor: pointer;
     color: var(--text-secondary);
     font-family: inherit;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.05em;
     line-height: 1.25;
@@ -189,7 +179,7 @@
 }
 
 .tl-day-date {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     letter-spacing: 0.01em;
     opacity: 0.75;
@@ -200,10 +190,10 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
-    padding: 8px 14px;
+    padding: 10px 16px;
     background: rgba(15, 23, 42, 0.04);
     border: 1px solid transparent;
-    border-radius: 12px;
+    border-radius: 13px;
     color: var(--gray-light);
     transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
                 border-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
@@ -215,12 +205,12 @@
 }
 
 .tl-list-search input {
-    width: 150px;
+    width: 180px;
     background: none;
     border: none;
     outline: none;
     font-family: inherit;
-    font-size: 14px;
+    font-size: 15px;
     color: var(--text-primary);
 }
 
@@ -247,14 +237,14 @@
 .tl-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 14px;
+    font-size: 15px;
     animation: fadeIn 0.35s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 .tl-table th {
-    padding: 14px 12px 10px;
+    padding: 18px 14px 12px;
     text-align: left;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -270,11 +260,11 @@
 .tl-table th:last-child,
 .tl-table td:last-child {
     padding-right: 8px;
-    width: 190px;
+    width: 215px;
 }
 
 .tl-table td {
-    padding: 12px;
+    padding: 17px 14px;
     vertical-align: middle;
     color: var(--text-secondary);
     border-top: 1px solid rgba(15, 23, 42, 0.06);
@@ -316,10 +306,10 @@
    colour-coded at a glance without six saturated blocks fighting the card. */
 .tl-type-badge {
     display: inline-block;
-    min-width: 42px;
-    padding: 4px 9px;
-    border-radius: 8px;
-    font-size: 11px;
+    min-width: 50px;
+    padding: 5px 11px;
+    border-radius: 9px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.01em;
     text-align: center;
@@ -345,9 +335,9 @@
 
 .tl-hours-value {
     flex-shrink: 0;
-    min-width: 48px;
+    min-width: 56px;
     text-align: right;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);
@@ -360,7 +350,7 @@
 .tl-progress-track {
     flex: 1;
     min-width: 60px;
-    height: 6px;
+    height: 7px;
     border-radius: 999px;
     background: rgba(59, 130, 246, 0.13);
     overflow: hidden;
@@ -391,7 +381,7 @@
 }
 
 .tl-totals-caption {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -399,7 +389,7 @@
 }
 
 .tl-totals-value {
-    font-size: 17px;
+    font-size: 19px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);
@@ -409,7 +399,7 @@
 
 @media (max-width: 760px) {
     .card.tl-card-results {
-        padding: 26px 20px 22px;
+        padding: 30px 22px 24px;
     }
 
     .tl-toolbar {
@@ -469,7 +459,7 @@
         display: block;
         padding: 0;
         border: none;
-        font-size: 13px;
+        font-size: 14px;
     }
 
     .tl-table td:first-child,
@@ -495,7 +485,7 @@
     }
 
     .tl-discipline {
-        font-size: 14px;
+        font-size: 15px;
     }
 
     .tl-totals {
@@ -504,16 +494,8 @@
 }
 
 @media (max-width: 480px) {
-    .tl-page-header {
-        padding: 8px 16px;
-    }
-
-    .tl-page-header-title {
-        font-size: 13px;
-    }
-
     .tl-teacher-name {
-        font-size: 21px;
+        font-size: 22px;
     }
 
     .tl-results-top {
@@ -523,13 +505,6 @@
 
 /* ── Dark theme ───────────────────────────────────────────────────── */
 
-[data-theme="dark"] .tl-page-header {
-    background: rgba(30, 41, 59, 0.75);
-    border-color: rgba(255, 255, 255, 0.08);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-}
-
-[data-theme="dark"] .tl-page-header-title,
 [data-theme="dark"] .tl-teacher-name,
 [data-theme="dark"] .tl-discipline,
 [data-theme="dark"] .tl-hours-value,

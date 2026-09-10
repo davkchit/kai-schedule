@@ -179,8 +179,7 @@ export default function TeacherLookupPage() {
     return (
         <div className={`tl-page ${hasTable ? 'is-wide' : ''}`}>
             <header className="tl-page-header">
-                <img src="/assets/logo.png" alt="Логотип КАИ" width="72" height="30" />
-                <span className="tl-page-header-title">Учёт нагрузки</span>
+                <img src="/assets/logo.png" alt="Логотип КАИ" />
             </header>
 
             <div className="background-circles">
