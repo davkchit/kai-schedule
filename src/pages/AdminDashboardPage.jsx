@@ -101,6 +101,8 @@ export default function AdminDashboardPage() {
     const [builderMode, setBuilderMode] = useState('week');
     const [builderWeekStart, setBuilderWeekStart] = useState(() => getMondayOfWeek(new Date()));
     const [builderTemplateWeekType, setBuilderTemplateWeekType] = useState(1);
+    const [draggedLesson, setDraggedLesson] = useState(null);
+    const [dragOverCellKey, setDragOverCellKey] = useState(null);
     const [auditLogs, setAuditLogs] = useState([]);
     const [isAuditLogsLoading, setIsAuditLogsLoading] = useState(false);
     const [backups, setBackups] = useState([]);
@@ -459,7 +461,17 @@ export default function AdminDashboardPage() {
 
         if (full) {
             return (
-                <button type="button" className="builder-lesson-card" onClick={() => openEditModal(full, context)}>
+                <button
+                    type="button"
+                    className={`builder-lesson-card ${draggedLesson?.id === full.id ? 'is-dragging' : ''}`}
+                    onClick={() => openEditModal(full, context)}
+                    draggable
+                    onDragStart={() => setDraggedLesson(full)}
+                    onDragEnd={() => {
+                        setDraggedLesson(null);
+                        setDragOverCellKey(null);
+                    }}
+                >
                     <span className="builder-lesson-subject">{full.subject}</span>
                     <span className="builder-lesson-meta">
                         {full.lesson_type && <span>{full.lesson_type}</span>}
@@ -477,7 +489,17 @@ export default function AdminDashboardPage() {
             return (
                 <div className="builder-cell-split">
                     {sub1 ? (
-                        <button type="button" className="builder-lesson-card half" onClick={() => openEditModal(sub1, context)}>
+                        <button
+                            type="button"
+                            className={`builder-lesson-card half ${draggedLesson?.id === sub1.id ? 'is-dragging' : ''}`}
+                            onClick={() => openEditModal(sub1, context)}
+                            draggable
+                            onDragStart={() => setDraggedLesson(sub1)}
+                            onDragEnd={() => {
+                                setDraggedLesson(null);
+                                setDragOverCellKey(null);
+                            }}
+                        >
                             <span className="builder-lesson-subgroup-tag">1 п/г</span>
                             <span className="builder-lesson-subject">{sub1.subject}</span>
                             {sub1.room && <span className="builder-lesson-room">{sub1.room}</span>}
@@ -487,7 +509,17 @@ export default function AdminDashboardPage() {
                         <button type="button" className="builder-add-btn half" onClick={() => openCreateModal(day, timeStart, timeEnd, 1, context)}>+</button>
                     )}
                     {sub2 ? (
-                        <button type="button" className="builder-lesson-card half" onClick={() => openEditModal(sub2, context)}>
+                        <button
+                            type="button"
+                            className={`builder-lesson-card half ${draggedLesson?.id === sub2.id ? 'is-dragging' : ''}`}
+                            onClick={() => openEditModal(sub2, context)}
+                            draggable
+                            onDragStart={() => setDraggedLesson(sub2)}
+                            onDragEnd={() => {
+                                setDraggedLesson(null);
+                                setDragOverCellKey(null);
+                            }}
+                        >
                             <span className="builder-lesson-subgroup-tag">2 п/г</span>
                             <span className="builder-lesson-subject">{sub2.subject}</span>
                             {sub2.room && <span className="builder-lesson-room">{sub2.room}</span>}
@@ -503,6 +535,70 @@ export default function AdminDashboardPage() {
         return (
             <button type="button" className="builder-add-btn" onClick={() => openCreateModal(day, timeStart, timeEnd, 0, context)}>+</button>
         );
+    }
+
+    // Drag-and-drop moves a lesson to another slot. It deliberately calls the
+    // dedicated move endpoint rather than doing a delete+create from here: the
+    // server does both halves in one transaction, so a failed move can't leave
+    // the lesson missing from both slots.
+    async function handleDropOnCell(day, timeStart, timeEnd) {
+        const lesson = draggedLesson;
+
+        setDraggedLesson(null);
+        setDragOverCellKey(null);
+
+        if (!lesson) {
+            return;
+        }
+
+        const isSameSlot =
+            lesson.day_of_week === day &&
+            lesson.time_start === timeStart &&
+            lesson.time_end === timeEnd;
+
+        if (isSameSlot) {
+            return;
+        }
+
+        if (builderMode === 'week' && builderWeekNumber === null) {
+            setToastMessage('Сначала выберите неделю');
+            return;
+        }
+
+        try {
+            const response = await api('/api/admin/schedule/move-lesson', {
+                method: 'POST',
+                body: JSON.stringify({
+                    lesson_id: lesson.id,
+                    mode: builderMode === 'template' ? 'template' : 'week',
+                    week_number: builderMode === 'template' ? undefined : builderWeekNumber,
+                    day_of_week: day,
+                    time_start: timeStart,
+                    time_end: timeEnd
+                })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                setToastMessage(data.error || 'Не удалось перенести занятие');
+                return;
+            }
+
+            setToastMessage(
+                builderMode === 'template'
+                    ? 'Пара перенесена — с этой недели и далее'
+                    : 'Пара перенесена на этой неделе'
+            );
+            loadLessons(selectedGroupId);
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
+    function cellKey(day, timeStart, timeEnd) {
+        return `${day}|${timeStart}|${timeEnd}`;
     }
 
     function renderBuilderCell(day, timeStart, timeEnd) {
@@ -1086,7 +1182,31 @@ export default function AdminDashboardPage() {
                                         <div className="builder-slot-label">{start}–{end}</div>
                                         <div className="builder-row-cells">
                                             {BUILDER_DAYS.map((day) => (
-                                                <div className="builder-cell" key={day}>
+                                                <div
+                                                    className={`builder-cell ${
+                                                        draggedLesson ? 'is-drop-target' : ''
+                                                    } ${
+                                                        dragOverCellKey === cellKey(day, start, end) ? 'is-drag-over' : ''
+                                                    }`}
+                                                    key={day}
+                                                    onDragOver={(event) => {
+                                                        if (!draggedLesson) {
+                                                            return;
+                                                        }
+
+                                                        event.preventDefault();
+                                                        setDragOverCellKey(cellKey(day, start, end));
+                                                    }}
+                                                    onDragLeave={() => {
+                                                        setDragOverCellKey((previous) =>
+                                                            previous === cellKey(day, start, end) ? null : previous
+                                                        );
+                                                    }}
+                                                    onDrop={(event) => {
+                                                        event.preventDefault();
+                                                        handleDropOnCell(day, start, end);
+                                                    }}
+                                                >
                                                     {builderMode === 'week'
                                                         ? renderBuilderCell(day, start, end)
                                                         : renderTemplateCell(day, start, end)}

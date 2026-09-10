@@ -38,6 +38,7 @@ const {
     validateLoadPlanUpdateBody,
     validateLoginBody,
     validateMaterializeWeekBody,
+    validateMoveLessonBody,
     validateScheduleUploadBody,
     validateSemesterCreateBody,
     validateSemesterUpdateBody,
@@ -626,6 +627,194 @@ router.get('/schedule/export', async (req, res) => {
         console.error('Schedule export error:', error);
         res.status(500).json({ error: 'Не удалось сформировать файл расписания' });
     }
+});
+
+/**
+ * Moves one lesson to a different day/time slot — what a drag-and-drop in the
+ * builder ends up calling. Deliberately built on the same primitives the
+ * normal edit flows already use rather than new logic:
+ *
+ * - template mode: append a tombstone at the old slot + a new row at the new
+ *   one, both stamped from the current week, so past weeks keep resolving to
+ *   where the lesson actually was (the same "edits never rewrite history"
+ *   guarantee every other template edit has).
+ * - week mode, already materialized: the row is real, so just move it.
+ * - week mode, not yet materialized: clone the week's resolved template into
+ *   real rows exactly like materialize-week does, but drop the moved lesson
+ *   at its new slot instead of the old one.
+ *
+ * Every branch runs inside a single transaction: a move can't half-apply and
+ * leave the lesson both gone from the old slot and missing from the new one.
+ */
+router.post('/schedule/move-lesson', (req, res) => {
+    let payload;
+
+    try {
+        payload = validateMoveLessonBody(req.body);
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
+    const db = getDb();
+    const lesson = db.prepare('SELECT * FROM lessons WHERE id = ?').get(payload.lesson_id);
+
+    if (!lesson) {
+        return res.status(404).json({ error: 'Занятие не найдено' });
+    }
+
+    const isSameSlot =
+        lesson.day_of_week === payload.day_of_week &&
+        lesson.time_start === payload.time_start &&
+        lesson.time_end === payload.time_end;
+
+    if (isSameSlot) {
+        return res.json({ success: true, moved: false });
+    }
+
+    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
+    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
+    const currentWeek = getWeekMeta(semesterStart, formatLocalDate()).weekNumber;
+
+    const insertLesson = () => db.prepare(`
+        INSERT INTO lessons (
+            group_id, subgroup, day_of_week, week_type, specific_week,
+            template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher, sort_order, load_plan_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    try {
+        if (payload.mode === 'template') {
+            const occupied = db.prepare(`
+                SELECT id FROM lessons
+                WHERE group_id = ? AND specific_week IS NULL AND day_of_week = ?
+                  AND time_start = ? AND time_end = ? AND subgroup = ?
+                  AND (week_type = 0 OR week_type = ?) AND is_removed = 0
+                LIMIT 1
+            `).get(
+                lesson.group_id,
+                payload.day_of_week,
+                payload.time_start,
+                payload.time_end,
+                lesson.subgroup,
+                lesson.week_type
+            );
+
+            if (occupied) {
+                return res.status(409).json({ error: 'В этой ячейке уже есть занятие' });
+            }
+
+            const transaction = db.transaction(() => {
+                const statement = insertLesson();
+
+                // Tombstone at the old slot, effective from this week forward.
+                statement.run(
+                    lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type, null,
+                    currentWeek, 1,
+                    lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
+                    lesson.lesson_type, lesson.teacher, lesson.sort_order, null
+                );
+
+                // Same lesson, new slot, same effective week.
+                statement.run(
+                    lesson.group_id, lesson.subgroup, payload.day_of_week, lesson.week_type, null,
+                    currentWeek, 0,
+                    payload.time_start, payload.time_end, lesson.subject, lesson.room,
+                    lesson.lesson_type, lesson.teacher, lesson.sort_order, lesson.load_plan_id
+                );
+            });
+
+            transaction();
+        } else {
+            const alreadyMaterialized = db.prepare(
+                'SELECT 1 FROM lessons WHERE group_id = ? AND specific_week = ? LIMIT 1'
+            ).get(lesson.group_id, payload.week_number);
+
+            const occupied = db.prepare(`
+                SELECT id FROM lessons
+                WHERE group_id = ? AND specific_week = ? AND day_of_week = ?
+                  AND time_start = ? AND time_end = ? AND subgroup = ?
+                LIMIT 1
+            `).get(
+                lesson.group_id,
+                payload.week_number,
+                payload.day_of_week,
+                payload.time_start,
+                payload.time_end,
+                lesson.subgroup
+            );
+
+            if (occupied) {
+                return res.status(409).json({ error: 'В этой ячейке уже есть занятие' });
+            }
+
+            if (alreadyMaterialized) {
+                db.prepare(`
+                    UPDATE lessons
+                    SET day_of_week = ?, time_start = ?, time_end = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `).run(payload.day_of_week, payload.time_start, payload.time_end, lesson.id);
+            } else {
+                const weekTypeNumber = payload.week_number % 2 === 0 ? 2 : 1;
+                const templateRows = db.prepare(`
+                    SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
+                           time_start, time_end, subject, room, lesson_type, teacher, sort_order, load_plan_id
+                    FROM lessons
+                    WHERE group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
+                `).all(lesson.group_id, weekTypeNumber);
+
+                const resolved = resolveTemplateLessons(templateRows, payload.week_number);
+                const movedKey = `${lesson.day_of_week}|${lesson.time_start}|${lesson.time_end}|${lesson.subgroup}`;
+
+                const transaction = db.transaction(() => {
+                    const statement = insertLesson();
+                    let sortOrder = 0;
+
+                    for (const row of resolved) {
+                        const key = `${row.day_of_week}|${row.time_start}|${row.time_end}|${row.subgroup}`;
+                        const isMoved = key === movedKey;
+
+                        statement.run(
+                            lesson.group_id,
+                            row.subgroup,
+                            isMoved ? payload.day_of_week : row.day_of_week,
+                            0,
+                            payload.week_number,
+                            1,
+                            0,
+                            isMoved ? payload.time_start : row.time_start,
+                            isMoved ? payload.time_end : row.time_end,
+                            row.subject, row.room, row.lesson_type, row.teacher,
+                            sortOrder, row.load_plan_id
+                        );
+                        sortOrder += 1;
+                    }
+                });
+
+                transaction();
+            }
+        }
+    } catch (error) {
+        console.error('Move lesson error:', error);
+        return res.status(500).json({ error: 'Не удалось перенести занятие' });
+    }
+
+    writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'lesson.move',
+        entityType: 'lesson',
+        entityId: lesson.id,
+        ipAddress: getClientAddress(req),
+        details: {
+            mode: payload.mode,
+            week_number: payload.week_number ?? null,
+            from: { day_of_week: lesson.day_of_week, time_start: lesson.time_start, time_end: lesson.time_end },
+            to: { day_of_week: payload.day_of_week, time_start: payload.time_start, time_end: payload.time_end }
+        }
+    });
+
+    res.json({ success: true, moved: true });
 });
 
 router.post('/schedule/materialize-week', (req, res) => {

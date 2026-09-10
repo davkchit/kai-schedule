@@ -280,6 +280,39 @@ function validateMaterializeWeekBody(body) {
     return result;
 }
 
+function validateMoveLessonBody(body) {
+    assertPlainObject(body, 'Тело запроса должно быть объектом');
+
+    if (!['template', 'week'].includes(body.mode)) {
+        throw createValidationError('Поле mode должно быть template или week');
+    }
+
+    const timeStart = readRequiredString(body.time_start, 'Время начала', 5);
+    const timeEnd = readRequiredString(body.time_end, 'Время окончания', 5);
+
+    if (!isValidTime(timeStart) || !isValidTime(timeEnd)) {
+        throw createValidationError('Некорректное время');
+    }
+
+    if (timeStart >= timeEnd) {
+        throw createValidationError('Время окончания должно быть позже времени начала');
+    }
+
+    const result = {
+        lesson_id: readInteger(body.lesson_id, 'lesson_id', { min: 1 }),
+        mode: body.mode,
+        day_of_week: readInteger(body.day_of_week, 'День недели', { min: 1, max: 7 }),
+        time_start: timeStart,
+        time_end: timeEnd
+    };
+
+    if (body.mode === 'week') {
+        result.week_number = readInteger(body.week_number, 'week_number', { min: 1 });
+    }
+
+    return result;
+}
+
 function validateLessonCreateBody(body) {
     assertPlainObject(body, 'Тело запроса должно быть объектом');
 
@@ -529,6 +562,7 @@ module.exports = {
     validateLoadPlanUpdateBody,
     validateLoginBody,
     validateMaterializeWeekBody,
+    validateMoveLessonBody,
     validateScheduleUploadBody,
     validateSemesterCreateBody,
     validateSemesterUpdateBody,

@@ -770,6 +770,206 @@ test('public API is rate-limited past the configured request budget', async () =
     await context.close();
 });
 
+test('move in template mode: tombstones the old slot and creates the new one, without rewriting past weeks', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+
+    const original = db.prepare('SELECT * FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
+
+    const response = await fetch(`${context.baseUrl}/api/admin/schedule/move-lesson`, {
+        method: 'POST',
+        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            lesson_id: original.id,
+            mode: 'template',
+            day_of_week: 3,
+            time_start: '13:10',
+            time_end: '14:40'
+        })
+    });
+
+    assert.equal(response.status, 200);
+
+    // The original row is untouched — history is never rewritten in place.
+    const untouched = db.prepare('SELECT * FROM lessons WHERE id = ?').get(original.id);
+    assert.equal(untouched.day_of_week, original.day_of_week);
+    assert.equal(untouched.is_removed, 0);
+
+    const currentWeek = getWeekMeta('2026-02-09', formatLocalDate()).weekNumber;
+
+    const tombstone = db.prepare(`
+        SELECT * FROM lessons
+        WHERE group_id = ? AND is_removed = 1 AND day_of_week = ? AND time_start = ?
+    `).get(context.primaryGroupId, original.day_of_week, original.time_start);
+    assert.ok(tombstone, 'expected a tombstone at the old slot');
+    assert.equal(tombstone.template_from_week, currentWeek);
+
+    const moved = db.prepare(`
+        SELECT * FROM lessons
+        WHERE group_id = ? AND day_of_week = 3 AND time_start = '13:10' AND is_removed = 0
+    `).get(context.primaryGroupId);
+    assert.ok(moved, 'expected a new row at the target slot');
+    assert.equal(moved.subject, original.subject);
+    assert.equal(moved.template_from_week, currentWeek);
+
+    // A week before the move still resolves to the old slot.
+    const pastWeekLessons = resolveTemplateLessons(
+        db.prepare('SELECT * FROM lessons WHERE group_id = ? AND specific_week IS NULL').all(context.primaryGroupId),
+        1
+    );
+    assert.equal(pastWeekLessons.length, 1);
+    assert.equal(pastWeekLessons[0].day_of_week, original.day_of_week);
+    assert.equal(pastWeekLessons[0].time_start, original.time_start);
+
+    await context.close();
+});
+
+test('move in week mode materializes the week and places the lesson at its new slot', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+
+    // A second template lesson that must survive the materialization untouched.
+    db.prepare(`
+        INSERT INTO lessons (group_id, subgroup, day_of_week, week_type, specific_week, time_start, time_end, subject, sort_order)
+        VALUES (?, 0, 2, 0, NULL, '11:30', '13:00', 'Физика', 1)
+    `).run(context.primaryGroupId);
+
+    const original = db.prepare("SELECT * FROM lessons WHERE group_id = ? AND subject = 'Высшая математика'").get(context.primaryGroupId);
+
+    const response = await fetch(`${context.baseUrl}/api/admin/schedule/move-lesson`, {
+        method: 'POST',
+        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            lesson_id: original.id,
+            mode: 'week',
+            week_number: 3,
+            day_of_week: 5,
+            time_start: '15:00',
+            time_end: '16:30'
+        })
+    });
+
+    assert.equal(response.status, 200);
+
+    const weekRows = db.prepare('SELECT * FROM lessons WHERE group_id = ? AND specific_week = 3').all(context.primaryGroupId);
+
+    // Both lessons are now real rows for week 3 — the untouched one kept its slot,
+    // the moved one landed on its new one.
+    assert.equal(weekRows.length, 2);
+    const movedRow = weekRows.find((row) => row.subject === 'Высшая математика');
+    const untouchedRow = weekRows.find((row) => row.subject === 'Физика');
+
+    assert.equal(movedRow.day_of_week, 5);
+    assert.equal(movedRow.time_start, '15:00');
+    assert.equal(untouchedRow.day_of_week, 2);
+    assert.equal(untouchedRow.time_start, '11:30');
+
+    // The template itself is untouched — other weeks still show the original slot.
+    const templateRow = db.prepare('SELECT * FROM lessons WHERE id = ?').get(original.id);
+    assert.equal(templateRow.day_of_week, original.day_of_week);
+
+    await context.close();
+});
+
+test('move in an already-materialized week updates that week only', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+
+    db.prepare(`
+        INSERT INTO lessons (group_id, subgroup, day_of_week, week_type, specific_week, time_start, time_end, subject, sort_order)
+        VALUES (?, 0, 1, 0, 4, '09:40', '11:10', 'Уже материализовано', 0)
+    `).run(context.primaryGroupId);
+
+    const weekRow = db.prepare("SELECT * FROM lessons WHERE specific_week = 4 AND group_id = ?").get(context.primaryGroupId);
+
+    const response = await fetch(`${context.baseUrl}/api/admin/schedule/move-lesson`, {
+        method: 'POST',
+        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            lesson_id: weekRow.id,
+            mode: 'week',
+            week_number: 4,
+            day_of_week: 4,
+            time_start: '11:30',
+            time_end: '13:00'
+        })
+    });
+
+    assert.equal(response.status, 200);
+
+    const updated = db.prepare('SELECT * FROM lessons WHERE id = ?').get(weekRow.id);
+    assert.equal(updated.day_of_week, 4);
+    assert.equal(updated.time_start, '11:30');
+    assert.equal(updated.specific_week, 4, 'the row must stay scoped to its own week');
+
+    // No extra rows were created — this branch moves in place.
+    const weekRowCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ? AND specific_week = 4').get(context.primaryGroupId).c;
+    assert.equal(weekRowCount, 1);
+
+    await context.close();
+});
+
+test('move rejects a target slot that is already taken', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+
+    db.prepare(`
+        INSERT INTO lessons (group_id, subgroup, day_of_week, week_type, specific_week, time_start, time_end, subject, sort_order)
+        VALUES (?, 0, 2, 1, NULL, '11:30', '13:00', 'Занятая ячейка', 1)
+    `).run(context.primaryGroupId);
+
+    const original = db.prepare("SELECT * FROM lessons WHERE group_id = ? AND subject = 'Высшая математика'").get(context.primaryGroupId);
+
+    const response = await fetch(`${context.baseUrl}/api/admin/schedule/move-lesson`, {
+        method: 'POST',
+        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            lesson_id: original.id,
+            mode: 'template',
+            day_of_week: 2,
+            time_start: '11:30',
+            time_end: '13:00'
+        })
+    });
+
+    assert.equal(response.status, 409);
+
+    // Nothing was written — no tombstone, no new row.
+    const tombstones = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ? AND is_removed = 1').get(context.primaryGroupId).c;
+    assert.equal(tombstones, 0);
+
+    await context.close();
+});
+
+test('moving a lesson onto its own slot is a no-op', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+
+    const original = db.prepare('SELECT * FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
+    const countBefore = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ?').get(context.primaryGroupId).c;
+
+    const response = await fetch(`${context.baseUrl}/api/admin/schedule/move-lesson`, {
+        method: 'POST',
+        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            lesson_id: original.id,
+            mode: 'template',
+            day_of_week: original.day_of_week,
+            time_start: original.time_start,
+            time_end: original.time_end
+        })
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.moved, false);
+
+    const countAfter = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ?').get(context.primaryGroupId).c;
+    assert.equal(countAfter, countBefore, 'a no-op move must not write anything');
+
+    await context.close();
+});
+
 test('teachers and disciplines: create, list, and reject duplicates', async () => {
     const context = await createTestContext();
 
