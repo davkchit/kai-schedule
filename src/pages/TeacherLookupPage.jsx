@@ -1,6 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
+
+// Short badge + colour tone per lesson type. Keys match LESSON_TYPES in
+// AdminLoadSection.jsx — anything the specialist types that isn't on this
+// list still renders, just abbreviated and in the neutral tone.
+const TYPE_META = {
+    'Лекция': { short: 'Лек', tone: 'lec' },
+    'Практика': { short: 'Пр', tone: 'pr' },
+    'Лаб': { short: 'Лаб', tone: 'lab' },
+    'Лабораторная': { short: 'Лаб', tone: 'lab' },
+    'Консультация': { short: 'Конс', tone: 'kons' },
+    'Зачёт': { short: 'Зач', tone: 'zach' },
+    'Экзамен': { short: 'Экз', tone: 'exam' }
+};
+
+const WEEKDAY_SHORT = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
 
 export default function TeacherLookupPage() {
     const isAssetsReady = usePageAssets({
@@ -20,6 +35,8 @@ export default function TeacherLookupPage() {
     const [loadData, setLoadData] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
+    const [dayFilter, setDayFilter] = useState('all');
+    const [listQuery, setListQuery] = useState('');
 
     useEffect(() => {
         if (selectedTeacher) {
@@ -54,6 +71,38 @@ export default function TeacherLookupPage() {
         };
     }, [inputValue, selectedTeacher]);
 
+    // Mon–Sat of the calendar week the teacher is looking at this page in.
+    // Derived from the browser clock alone: the day tabs only ever filter the
+    // plan rows already fetched, so they need no extra server round-trip.
+    const weekDays = useMemo(buildCurrentWeekDays, []);
+
+    const planRows = loadData?.plan ?? [];
+
+    const visibleRows = useMemo(() => {
+        const normalizedQuery = listQuery.trim().toLowerCase();
+
+        return planRows.filter((row) => {
+            if (dayFilter !== 'all' && !row.occurrences.some((occurrence) => occurrence.date === dayFilter)) {
+                return false;
+            }
+
+            if (!normalizedQuery) {
+                return true;
+            }
+
+            const haystack = `${row.discipline_name} ${row.group_name} ${row.lesson_type}`.toLowerCase();
+            return haystack.includes(normalizedQuery);
+        });
+    }, [planRows, dayFilter, listQuery]);
+
+    const totals = useMemo(() => visibleRows.reduce(
+        (accumulator, row) => ({
+            occurred: accumulator.occurred + row.occurred_hours,
+            planned: accumulator.planned + row.planned_hours
+        }),
+        { occurred: 0, planned: 0 }
+    ), [visibleRows]);
+
     function flashValidationError() {
         setIsInvalid(true);
         window.setTimeout(() => setIsInvalid(false), 500);
@@ -65,6 +114,8 @@ export default function TeacherLookupPage() {
         setSelectedTeacher(teacher);
         setIsLoading(true);
         setErrorMessage('');
+        setDayFilter('all');
+        setListQuery('');
 
         try {
             const response = await fetch(`/api/teachers/${teacher.id}/load`);
@@ -115,14 +166,18 @@ export default function TeacherLookupPage() {
         setErrorMessage('');
         setInputValue('');
         setSuggestions([]);
+        setDayFilter('all');
+        setListQuery('');
     }
 
     if (!isAssetsReady) {
         return null;
     }
 
+    const hasTable = Boolean(!isLoading && !errorMessage && loadData?.semester && planRows.length > 0);
+
     return (
-        <div className="tl-page">
+        <div className={`tl-page ${hasTable ? 'is-wide' : ''}`}>
             <header className="tl-page-header">
                 <img src="/assets/logo.png" alt="Логотип КАИ" width="72" height="30" />
                 <span className="tl-page-header-title">Учёт нагрузки</span>
@@ -136,7 +191,7 @@ export default function TeacherLookupPage() {
             </div>
 
             <div className="container">
-                <div className="card">
+                <div className={`card ${selectedTeacher ? 'tl-card-results' : ''}`}>
                     {!selectedTeacher ? (
                         <>
                             <h1 className="title">Проверить свои часы</h1>
@@ -195,35 +250,121 @@ export default function TeacherLookupPage() {
                         </>
                     ) : (
                         <div className="tl-results">
-                            <button type="button" className="back-button tl-back" onClick={resetSearch}>
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M10 12L6 8L10 4" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                                Искать другого
-                            </button>
+                            <div className="tl-results-top">
+                                <div className="tl-identity">
+                                    <h1 className="tl-teacher-name">{selectedTeacher.full_name}</h1>
+                                    {loadData?.semester && (
+                                        <span className="tl-semester-label">{loadData.semester.label}</span>
+                                    )}
+                                </div>
+                                <button type="button" className="back-button tl-back" onClick={resetSearch}>
+                                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                        <path d="M10 12L6 8L10 4" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                    Искать другого
+                                </button>
+                            </div>
 
-                            <h1 className="title tl-teacher-name">{selectedTeacher.full_name}</h1>
+                            {isLoading && <p className="tl-note">Загружаем данные...</p>}
 
-                            {isLoading && <p className="subtitle">Загружаем данные...</p>}
-
-                            {!isLoading && errorMessage && <p className="subtitle tl-error">{errorMessage}</p>}
+                            {!isLoading && errorMessage && <p className="tl-note tl-error">{errorMessage}</p>}
 
                             {!isLoading && !errorMessage && loadData && !loadData.semester && (
-                                <p className="subtitle">Активный семестр ещё не назначен — обратитесь к специалисту.</p>
+                                <p className="tl-note">Активный семестр ещё не назначен — обратитесь к специалисту.</p>
                             )}
 
-                            {!isLoading && !errorMessage && loadData?.semester && loadData.plan.length === 0 && (
-                                <p className="subtitle">На {loadData.semester.label} для вас пока не внесён план нагрузки.</p>
+                            {!isLoading && !errorMessage && loadData?.semester && planRows.length === 0 && (
+                                <p className="tl-note">На {loadData.semester.label} для вас пока не внесён план нагрузки.</p>
                             )}
 
-                            {!isLoading && !errorMessage && loadData?.semester && loadData.plan.length > 0 && (
+                            {hasTable && (
                                 <>
-                                    <p className="subtitle tl-semester-label">{loadData.semester.label}</p>
-                                    <div className="tl-card-list">
-                                        {loadData.plan.map((row) => (
-                                            <LoadPlanCard key={row.id} row={row} />
-                                        ))}
+                                    <div className="tl-toolbar">
+                                        <div className="tl-day-tabs" role="tablist" aria-label="Фильтр по дню недели">
+                                            <button
+                                                type="button"
+                                                role="tab"
+                                                aria-selected={dayFilter === 'all'}
+                                                className={`tl-day-tab tl-day-tab-all ${dayFilter === 'all' ? 'is-active' : ''}`}
+                                                onClick={() => setDayFilter('all')}
+                                            >
+                                                ВСЕ
+                                            </button>
+                                            {weekDays.map((day, index) => {
+                                                // Dim the days this teacher has nothing on, so the
+                                                // week's actual teaching days read at a glance
+                                                // instead of after six clicks.
+                                                const isEmpty = !planRows.some(
+                                                    (row) => row.occurrences.some((occurrence) => occurrence.date === day)
+                                                );
+
+                                                return (
+                                                    <button
+                                                        key={day}
+                                                        type="button"
+                                                        role="tab"
+                                                        aria-selected={dayFilter === day}
+                                                        className={`tl-day-tab ${dayFilter === day ? 'is-active' : ''} ${isEmpty ? 'is-empty' : ''}`}
+                                                        onClick={() => setDayFilter(day)}
+                                                    >
+                                                        <span className="tl-day-name">{WEEKDAY_SHORT[index]}</span>
+                                                        <span className="tl-day-date">{formatIsoDate(day)}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+
+                                        <div className="tl-list-search">
+                                            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM19 19l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                            <input
+                                                type="search"
+                                                placeholder="Поиск по списку"
+                                                aria-label="Поиск по списку дисциплин"
+                                                value={listQuery}
+                                                onChange={(event) => setListQuery(event.target.value)}
+                                            />
+                                        </div>
                                     </div>
+
+                                    {visibleRows.length === 0 ? (
+                                        <p className="tl-note tl-note-empty">
+                                            {dayFilter === 'all'
+                                                ? 'По этому запросу ничего не найдено.'
+                                                : 'В этот день занятий нет.'}
+                                        </p>
+                                    ) : (
+                                        <>
+                                            <div className="tl-table-scroll">
+                                                <table className="tl-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th scope="col">Вид занятий</th>
+                                                            <th scope="col">Дисциплина</th>
+                                                            <th scope="col">Группа</th>
+                                                            <th scope="col">Дата посл. занятия</th>
+                                                            <th scope="col">Часов</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {visibleRows.map((row) => (
+                                                            <LoadRow key={row.id} row={row} />
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <div className="tl-totals">
+                                                <span className="tl-totals-caption">
+                                                    Итого{dayFilter === 'all' && !listQuery.trim() ? '' : ' по отфильтрованным'}
+                                                </span>
+                                                <span className="tl-totals-value">
+                                                    {totals.occurred} / {totals.planned} ч
+                                                </span>
+                                            </div>
+                                        </>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -234,32 +375,77 @@ export default function TeacherLookupPage() {
     );
 }
 
-function LoadPlanCard({ row }) {
-    const total = row.planned_hours || 1;
-    const filledPercent = Math.min(100, Math.round((row.occurred_hours / total) * 100));
+function LoadRow({ row }) {
+    const typeMeta = TYPE_META[row.lesson_type] || { short: row.lesson_type.slice(0, 4), tone: 'default' };
+    const lastDate = lastOccurredDate(row.occurrences);
+    const percent = row.planned_hours > 0
+        ? Math.min(100, Math.round((row.occurred_hours / row.planned_hours) * 100))
+        : 0;
     const isComplete = row.occurred_hours >= row.planned_hours;
 
     return (
-        <div className="tl-card">
-            <div className="tl-card-header">
+        <tr>
+            <td data-label="Вид занятий">
+                <span className={`tl-type-badge tone-${typeMeta.tone}`}>{typeMeta.short}</span>
+            </td>
+            <td data-label="Дисциплина">
                 <span className="tl-discipline">{row.discipline_name}</span>
-                <span className="tl-type-tag">{row.lesson_type}</span>
-            </div>
-            <div className="tl-card-meta">
+            </td>
+            <td data-label="Группа">
                 {row.group_name}
-                {row.subgroup ? ` · ${row.subgroup} подгруппа` : ''}
-            </div>
-            <div className="tl-progress-row">
-                <div className="tl-progress-track">
-                    <div
-                        className={`tl-progress-fill ${isComplete ? 'tl-progress-complete' : ''}`}
-                        style={{ width: `${filledPercent}%` }}
-                    />
+                {row.subgroup ? <span className="tl-subgroup"> · {row.subgroup} п/г</span> : null}
+            </td>
+            <td data-label="Дата посл. занятия">
+                {lastDate ? formatIsoDate(lastDate, true) : <span className="tl-muted">—</span>}
+            </td>
+            <td data-label="Часов">
+                <div className="tl-hours-cell">
+                    <span className={`tl-hours-value ${isComplete ? 'is-complete' : ''}`}>
+                        {row.occurred_hours}/{row.planned_hours}
+                    </span>
+                    <span className="tl-progress-track">
+                        <span
+                            className={`tl-progress-fill ${isComplete ? 'is-complete' : ''}`}
+                            style={{ width: `${percent}%` }}
+                        />
+                    </span>
                 </div>
-                <span className="tl-progress-label">
-                    {row.occurred_hours} из {row.planned_hours} ч
-                </span>
-            </div>
-        </div>
+            </td>
+        </tr>
     );
+}
+
+/** Latest occurrence that has already happened — occurrences come back in week order. */
+function lastOccurredDate(occurrences) {
+    for (let index = occurrences.length - 1; index >= 0; index -= 1) {
+        if (occurrences[index].has_occurred) {
+            return occurrences[index].date;
+        }
+    }
+
+    return null;
+}
+
+function buildCurrentWeekDays() {
+    const today = new Date();
+    const mondayOffset = (today.getDay() + 6) % 7;
+    const days = [];
+
+    for (let index = 0; index < 6; index += 1) {
+        const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - mondayOffset + index);
+        days.push(toIsoDate(day));
+    }
+
+    return days;
+}
+
+function toIsoDate(date) {
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function formatIsoDate(isoDate, withYear = false) {
+    const [year, month, day] = isoDate.split('-');
+    return withYear ? `${day}.${month}.${year}` : `${day}.${month}`;
 }

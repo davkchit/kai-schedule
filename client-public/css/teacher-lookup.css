@@ -1,12 +1,15 @@
 /* Extends welcome.css's search card with a results view — same card, same
-   typography and spacing tokens, just a second state instead of a second page. */
+   typography and spacing tokens, just a second state instead of a second page.
+   The results state is a journal-style table (вид занятий / дисциплина /
+   группа / дата посл. занятия / часов), the layout teachers already read in
+   ЗИОС, rendered in this project's own soft-blue language rather than as a
+   dense enterprise grid. Below 760px the same <table> re-lays itself out as
+   stacked cards — one DOM, two shapes. */
 
 /* .tl-page stacks a small header above the same centered card welcome.css
    already lays out — body still does the centering, this just groups the
    header+card as one unit so the pair reads as this page's own identity
-   rather than another step of the group-search wizard. Room to grow: once
-   there's more than one thing to show a teacher, this header is where
-   section switching would go. */
+   rather than another step of the group-search wizard. */
 .tl-page {
     width: 100%;
     display: flex;
@@ -15,6 +18,17 @@
     gap: 20px;
     position: relative;
     z-index: 1;
+}
+
+/* The search state wants welcome.css's narrow 600px card; the table needs
+   room for five columns. Widening the container (rather than the card) keeps
+   the card's own padding/radius rules untouched. */
+.tl-page .container {
+    transition: max-width 0.45s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.tl-page.is-wide .container {
+    max-width: 960px;
 }
 
 .tl-page-header {
@@ -41,14 +55,452 @@
     letter-spacing: -0.01em;
 }
 
-[data-theme="dark"] .tl-page-header {
-    background: rgba(30, 41, 59, 0.75);
-    border-color: rgba(255, 255, 255, 0.08);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+/* ── Results card ─────────────────────────────────────────────────── */
+
+.card.tl-card-results {
+    padding: 32px 34px 28px;
+    text-align: left;
 }
 
-[data-theme="dark"] .tl-page-header-title {
-    color: #f1f5f9;
+.tl-results-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+}
+
+.tl-identity {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.tl-teacher-name {
+    font-family: 'Montserrat', sans-serif;
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    animation: slideDown 0.5s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.tl-semester-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+/* welcome.css pushes .back-button to the left edge of a centred column; here
+   it sits opposite the name instead. */
+.back-button.tl-back {
+    margin: 0;
+    align-self: center;
+    flex-shrink: 0;
+}
+
+.tl-note {
+    font-size: 15px;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.tl-note-empty {
+    padding: 28px 0 8px;
+    text-align: center;
+}
+
+.tl-error {
+    color: #ef4444;
+}
+
+/* ── Toolbar: day tabs + list search ──────────────────────────────── */
+
+.tl-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding-bottom: 14px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.tl-day-tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.tl-day-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+.tl-day-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 7px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 11px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    line-height: 1.25;
+    transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
+                color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
+                transform 0.12s ease-out;
+}
+
+.tl-day-tab-all {
+    padding-inline: 16px;
+}
+
+.tl-day-tab:hover {
+    background: rgba(124, 185, 232, 0.12);
+    color: var(--text-primary);
+}
+
+.tl-day-tab:active {
+    transform: scale(0.96);
+}
+
+.tl-day-tab.is-active {
+    background: rgba(59, 130, 246, 0.12);
+    color: #2563eb;
+}
+
+/* A day with nothing scheduled — still clickable, just visibly not worth it. */
+.tl-day-tab.is-empty:not(.is-active) {
+    opacity: 0.42;
+}
+
+.tl-day-date {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    opacity: 0.75;
+}
+
+.tl-list-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 8px 14px;
+    background: rgba(15, 23, 42, 0.04);
+    border: 1px solid transparent;
+    border-radius: 12px;
+    color: var(--gray-light);
+    transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
+                border-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.tl-list-search:focus-within {
+    background: var(--white);
+    border-color: rgba(59, 130, 246, 0.45);
+}
+
+.tl-list-search input {
+    width: 150px;
+    background: none;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.tl-list-search input::placeholder {
+    color: var(--gray-light);
+}
+
+/* Safari draws its own clear button on type="search" — it collides with our
+   own padding and never matches the rest of the page. */
+.tl-list-search input::-webkit-search-decoration,
+.tl-list-search input::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+
+.tl-table-scroll {
+    overflow-x: auto;
+    margin: 0 -8px;
+    padding: 0 8px;
+}
+
+.tl-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    animation: fadeIn 0.35s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.tl-table th {
+    padding: 14px 12px 10px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--gray-light);
+    white-space: nowrap;
+}
+
+.tl-table th:first-child,
+.tl-table td:first-child {
+    padding-left: 8px;
+}
+
+.tl-table th:last-child,
+.tl-table td:last-child {
+    padding-right: 8px;
+    width: 190px;
+}
+
+.tl-table td {
+    padding: 12px;
+    vertical-align: middle;
+    color: var(--text-secondary);
+    border-top: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.tl-table tbody tr {
+    transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.tl-table tbody tr:hover td {
+    background: rgba(124, 185, 232, 0.07);
+}
+
+.tl-table tbody tr:hover td:first-child {
+    border-start-start-radius: 10px;
+    border-end-start-radius: 10px;
+}
+
+.tl-table tbody tr:hover td:last-child {
+    border-start-end-radius: 10px;
+    border-end-end-radius: 10px;
+}
+
+.tl-discipline {
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.005em;
+}
+
+.tl-subgroup {
+    color: var(--gray-light);
+}
+
+.tl-muted {
+    color: var(--gray-light);
+}
+
+/* Type badge — soft tint plus saturated text, so the six lesson kinds stay
+   colour-coded at a glance without six saturated blocks fighting the card. */
+.tl-type-badge {
+    display: inline-block;
+    min-width: 42px;
+    padding: 4px 9px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    text-align: center;
+    white-space: nowrap;
+    background: rgba(100, 116, 139, 0.12);
+    color: #475569;
+}
+
+.tl-type-badge.tone-lec { background: rgba(16, 185, 129, 0.14); color: #047857; }
+.tl-type-badge.tone-pr { background: rgba(245, 158, 11, 0.16); color: #b45309; }
+.tl-type-badge.tone-lab { background: rgba(139, 92, 246, 0.14); color: #6d28d9; }
+.tl-type-badge.tone-kons { background: rgba(59, 130, 246, 0.14); color: #1d4ed8; }
+.tl-type-badge.tone-zach { background: rgba(20, 184, 166, 0.14); color: #0f766e; }
+.tl-type-badge.tone-exam { background: rgba(239, 68, 68, 0.13); color: #b91c1c; }
+
+/* ── Hours cell ───────────────────────────────────────────────────── */
+
+.tl-hours-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tl-hours-value {
+    flex-shrink: 0;
+    min-width: 48px;
+    text-align: right;
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+.tl-hours-value.is-complete {
+    color: #059669;
+}
+
+.tl-progress-track {
+    flex: 1;
+    min-width: 60px;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(59, 130, 246, 0.13);
+    overflow: hidden;
+}
+
+.tl-progress-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: #3b82f6;
+    transition: width 0.5s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
+.tl-progress-fill.is-complete {
+    background: #10b981;
+}
+
+/* ── Totals ───────────────────────────────────────────────────────── */
+
+.tl-totals {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(15, 23, 42, 0.07);
+}
+
+.tl-totals-caption {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--gray-light);
+}
+
+.tl-totals-value {
+    font-size: 17px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+/* ── Mobile: the same table, re-laid-out as stacked cards ─────────── */
+
+@media (max-width: 760px) {
+    .card.tl-card-results {
+        padding: 26px 20px 22px;
+    }
+
+    .tl-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+    }
+
+    .tl-list-search {
+        order: -1;
+    }
+
+    .tl-list-search input {
+        width: 100%;
+    }
+
+    .tl-table-scroll {
+        overflow-x: visible;
+        margin: 0;
+        padding: 0;
+    }
+
+    .tl-table,
+    .tl-table tbody {
+        display: block;
+    }
+
+    /* Column headers stop making sense once each row is its own card —
+       every cell carries its own label via data-label instead. */
+    .tl-table thead {
+        display: none;
+    }
+
+    .tl-table tbody tr {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-areas:
+            "type discipline"
+            "group date"
+            "hours hours";
+        gap: 8px 10px;
+        align-items: center;
+        margin-top: 12px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: rgba(240, 249, 255, 0.85);
+    }
+
+    .tl-table tbody tr:hover td,
+    .tl-table tbody tr:hover td:first-child,
+    .tl-table tbody tr:hover td:last-child {
+        background: none;
+        border-radius: 0;
+    }
+
+    .tl-table td {
+        display: block;
+        padding: 0;
+        border: none;
+        font-size: 13px;
+    }
+
+    .tl-table td:first-child,
+    .tl-table td:last-child {
+        padding: 0;
+        width: auto;
+    }
+
+    .tl-table td:nth-child(1) { grid-area: type; }
+    .tl-table td:nth-child(2) { grid-area: discipline; }
+    .tl-table td:nth-child(3) { grid-area: group; }
+    .tl-table td:nth-child(4) { grid-area: date; }
+    .tl-table td:nth-child(5) { grid-area: hours; margin-top: 2px; }
+
+    .tl-table td:nth-child(3)::before,
+    .tl-table td:nth-child(4)::before {
+        content: attr(data-label) ': ';
+        color: var(--gray-light);
+    }
+
+    .tl-table td:nth-child(4) {
+        text-align: right;
+    }
+
+    .tl-discipline {
+        font-size: 14px;
+    }
+
+    .tl-totals {
+        justify-content: space-between;
+    }
 }
 
 @media (max-width: 480px) {
@@ -59,142 +511,99 @@
     .tl-page-header-title {
         font-size: 13px;
     }
-}
 
-.tl-back {
-    margin-bottom: 8px;
-}
-
-.tl-teacher-name {
-    font-size: 28px;
-    margin-bottom: 4px;
-}
-
-.tl-semester-label {
-    margin-bottom: 28px;
-}
-
-.tl-error {
-    color: #ef4444;
-}
-
-.tl-card-list {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    text-align: left;
-}
-
-.tl-card {
-    background: #f0f9ff;
-    border-radius: 16px;
-    padding: 16px 18px;
-    transition: transform 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                box-shadow 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
-}
-
-.tl-card:hover {
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
-}
-
-.tl-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 6px;
-}
-
-.tl-discipline {
-    font-weight: 600;
-    font-size: 15px;
-    color: #0f172a;
-    letter-spacing: -0.005em;
-}
-
-.tl-type-tag {
-    flex-shrink: 0;
-    background-color: #dbeafe;
-    color: #2563eb;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.01em;
-    padding: 4px 8px;
-    border-radius: 6px;
-}
-
-.tl-card-meta {
-    font-size: 13px;
-    color: #64748b;
-    margin-bottom: 12px;
-}
-
-.tl-progress-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.tl-progress-track {
-    flex: 1;
-    height: 8px;
-    border-radius: 999px;
-    background: rgba(59, 130, 246, 0.12);
-    overflow: hidden;
-}
-
-.tl-progress-fill {
-    height: 100%;
-    border-radius: 999px;
-    background: #3b82f6;
-    transition: width 0.4s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
-}
-
-.tl-progress-fill.tl-progress-complete {
-    background: #10b981;
-}
-
-.tl-progress-label {
-    flex-shrink: 0;
-    font-size: 13px;
-    font-weight: 600;
-    color: #334155;
-    white-space: nowrap;
-}
-
-@media (max-width: 480px) {
     .tl-teacher-name {
-        font-size: 22px;
+        font-size: 21px;
     }
 
-    .tl-card {
-        padding: 14px 16px;
+    .tl-results-top {
+        margin-bottom: 18px;
     }
 }
 
-/* Dark theme — mirrors the tokens welcome.css already defines for the card */
-[data-theme="dark"] .tl-discipline {
+/* ── Dark theme ───────────────────────────────────────────────────── */
+
+[data-theme="dark"] .tl-page-header {
+    background: rgba(30, 41, 59, 0.75);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .tl-page-header-title,
+[data-theme="dark"] .tl-teacher-name,
+[data-theme="dark"] .tl-discipline,
+[data-theme="dark"] .tl-hours-value,
+[data-theme="dark"] .tl-totals-value,
+[data-theme="dark"] .tl-list-search input {
     color: #f1f5f9;
 }
 
-[data-theme="dark"] .tl-card-meta {
+[data-theme="dark"] .tl-semester-label,
+[data-theme="dark"] .tl-note,
+[data-theme="dark"] .tl-table td {
     color: #94a3b8;
 }
 
-[data-theme="dark"] .tl-progress-label {
-    color: #cbd5e1;
+[data-theme="dark"] .tl-table th,
+[data-theme="dark"] .tl-totals-caption,
+[data-theme="dark"] .tl-subgroup,
+[data-theme="dark"] .tl-muted {
+    color: #64748b;
 }
 
-[data-theme="dark"] .tl-card {
-    background: #1e293b;
+[data-theme="dark"] .tl-table td,
+[data-theme="dark"] .tl-toolbar,
+[data-theme="dark"] .tl-totals {
+    border-color: rgba(148, 163, 184, 0.16);
 }
 
-[data-theme="dark"] .tl-type-tag {
-    background-color: #1e3a5f;
-    color: #60a5fa;
+[data-theme="dark"] .tl-table tbody tr:hover td {
+    background: rgba(148, 163, 184, 0.09);
+}
+
+[data-theme="dark"] .tl-list-search {
+    background: rgba(148, 163, 184, 0.12);
+}
+
+[data-theme="dark"] .tl-list-search:focus-within {
+    background: rgba(15, 23, 42, 0.6);
+}
+
+[data-theme="dark"] .tl-day-tab.is-active {
+    background: rgba(96, 165, 250, 0.18);
+    color: #93c5fd;
 }
 
 [data-theme="dark"] .tl-progress-track {
     background: rgba(96, 165, 250, 0.18);
+}
+
+[data-theme="dark"] .tl-type-badge { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+[data-theme="dark"] .tl-type-badge.tone-lec { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+[data-theme="dark"] .tl-type-badge.tone-pr { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+[data-theme="dark"] .tl-type-badge.tone-lab { background: rgba(139, 92, 246, 0.22); color: #c4b5fd; }
+[data-theme="dark"] .tl-type-badge.tone-kons { background: rgba(59, 130, 246, 0.22); color: #93c5fd; }
+[data-theme="dark"] .tl-type-badge.tone-zach { background: rgba(20, 184, 166, 0.2); color: #5eead4; }
+[data-theme="dark"] .tl-type-badge.tone-exam { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+
+[data-theme="dark"] .tl-hours-value.is-complete {
+    color: #34d399;
+}
+
+@media (max-width: 760px) {
+    [data-theme="dark"] .tl-table tbody tr {
+        background: rgba(30, 41, 59, 0.7);
+    }
+}
+
+/* Respect the system's motion setting — the width/progress transitions are
+   decoration, the numbers are the content. */
+@media (prefers-reduced-motion: reduce) {
+    .tl-page .container,
+    .tl-progress-fill,
+    .tl-table,
+    .tl-teacher-name {
+        transition: none;
+        animation: none;
+    }
 }
