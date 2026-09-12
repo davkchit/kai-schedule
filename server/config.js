@@ -4,6 +4,14 @@ const dotenv = require('dotenv');
 
 dotenv.config({ quiet: true });
 
+// Every "has this pair happened yet?" decision parses a naive local datetime
+// ("2026-09-15T16:30:00") and compares it to now, so the process timezone IS
+// the university's timezone. Hosts default to UTC — on one, a pair ending
+// 16:30 in Naberezhnye Chelny would only count as taught at 19:30 local. Pin
+// it here rather than relying on the platform, so a fresh deploy anywhere is
+// correct out of the box; TZ in the environment still wins if it is set.
+process.env.TZ = process.env.TZ || 'Europe/Moscow';
+
 const isProduction = process.env.NODE_ENV === 'production';
 const jwtSecretFromEnv = process.env.JWT_SECRET;
 const generatedDevSecret = !jwtSecretFromEnv && !isProduction

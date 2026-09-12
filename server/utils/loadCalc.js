@@ -1,4 +1,4 @@
-const { addDaysToIsoDate } = require('./date');
+const { addDaysToIsoDate, getWeekTypeNumber } = require('./date');
 const { resolveTemplateLessons } = require('./templateResolve');
 
 // 1 pair = 2 academic hours (2 × 45 min = 1.5 astronomical hours) — confirmed
@@ -48,41 +48,50 @@ function computeLoadProgress({ semesterStartDate, weeksCount, linkedLessons, exc
     const occurrences = [];
 
     for (let weekNumber = 1; weekNumber <= weeksCount; weekNumber += 1) {
-        const weekType = weekNumber % 2 === 0 ? 2 : 1;
-        let resolvedLesson = null;
+        const weekMonday = addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7);
+        const weekType = getWeekTypeNumber(weekMonday);
+        let resolvedLessons;
 
         if (exceptionWeeks.has(weekNumber)) {
-            // This plan's slot only occurs this week if IT was one of the rows
+            // This plan's slots only occur this week if THEY were among the rows
             // materialized/kept for this specific week — an exception week with
-            // no matching row for this plan means this particular lesson was
-            // removed (or never carried into) that week's override set.
-            resolvedLesson = linkedLessons.find((lesson) => lesson.specific_week === weekNumber) || null;
+            // no matching row for this plan means that lesson was removed (or
+            // never carried into) that week's override set. is_removed is
+            // checked here too: such a row is invisible in the schedule, so
+            // counting it would bill hours for a pair nobody was shown.
+            resolvedLessons = linkedLessons.filter(
+                (lesson) => lesson.specific_week === weekNumber && !lesson.is_removed
+            );
         } else {
             const templateCandidates = linkedLessons.filter(
                 (lesson) => lesson.specific_week == null && (lesson.week_type === 0 || lesson.week_type === weekType)
             );
-            const resolved = resolveTemplateLessons(templateCandidates, weekNumber);
-            resolvedLesson = resolved[0] || null;
+            resolvedLessons = resolveTemplateLessons(templateCandidates, weekNumber);
         }
 
-        if (!resolvedLesson) {
-            continue;
+        // One plan row routinely owns SEVERAL slots in the same week — a lecture
+        // block is two consecutive pairs, and a language practical runs Mon and
+        // Wed. Counting only the first would halve those rows' hours.
+        for (const lesson of resolvedLessons) {
+            const occurrenceDate = addDaysToIsoDate(weekMonday, lesson.day_of_week - 1);
+            const occurrenceEndsAt = new Date(`${occurrenceDate}T${lesson.time_end}:00`);
+
+            occurrences.push({
+                week_number: weekNumber,
+                date: occurrenceDate,
+                lesson_id: lesson.id,
+                time_start: lesson.time_start,
+                time_end: lesson.time_end,
+                has_occurred: occurrenceEndsAt.getTime() <= now.getTime()
+            });
         }
-
-        const weekMonday = addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7);
-        const occurrenceDate = addDaysToIsoDate(weekMonday, resolvedLesson.day_of_week - 1);
-        const occurrenceEndsAt = new Date(`${occurrenceDate}T${resolvedLesson.time_end}:00`);
-        const hasOccurred = occurrenceEndsAt.getTime() <= now.getTime();
-
-        occurrences.push({
-            week_number: weekNumber,
-            date: occurrenceDate,
-            lesson_id: resolvedLesson.id,
-            time_start: resolvedLesson.time_start,
-            time_end: resolvedLesson.time_end,
-            has_occurred: hasOccurred
-        });
     }
+
+    occurrences.sort((left, right) => (
+        left.date === right.date
+            ? left.time_start.localeCompare(right.time_start)
+            : left.date.localeCompare(right.date)
+    ));
 
     const occurredCount = occurrences.filter((occurrence) => occurrence.has_occurred).length;
 

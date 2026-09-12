@@ -229,7 +229,7 @@ router.get('/teachers/:id/load', (req, res) => {
             confirmed: Boolean(row.confirmed),
             planned_hours: row.planned_hours,
             occurred_hours: progress.occurred_hours,
-            remaining_hours: Math.max(0, row.planned_hours - progress.occurred_hours),
+            remaining_hours: row.planned_hours === null ? null : Math.max(0, row.planned_hours - progress.occurred_hours),
             occurrences: progress.occurrences
         };
     });

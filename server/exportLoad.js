@@ -64,8 +64,15 @@ function buildSummarySheet(workbook, semesterLabel, rows) {
     const totalsByTeacher = new Map();
 
     for (const row of rows) {
-        const existing = totalsByTeacher.get(row.teacher_name) || { planned: 0, occurred: 0 };
-        existing.planned += row.planned_hours;
+        // Rows with no plan hours yet ("часы не заданы") don't contribute to
+        // the planned total — otherwise one unset row would turn the whole
+        // teacher's summed total into a meaningless partial number.
+        const existing = totalsByTeacher.get(row.teacher_name) || { planned: 0, occurred: 0, hasUnplanned: false };
+        if (row.planned_hours === null) {
+            existing.hasUnplanned = true;
+        } else {
+            existing.planned += row.planned_hours;
+        }
         existing.occurred += row.occurred_hours;
         totalsByTeacher.set(row.teacher_name, existing);
     }
@@ -74,10 +81,12 @@ function buildSummarySheet(workbook, semesterLabel, rows) {
 
     let rowNum = 4;
     for (const [teacherName, totals] of [...totalsByTeacher.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ru'))) {
+        const plannedLabel = totals.hasUnplanned ? `${totals.planned}+` : totals.planned;
+        const remainingLabel = totals.hasUnplanned ? '—' : Math.max(0, totals.planned - totals.occurred);
         writeDataRow(
             sheet,
             rowNum,
-            [teacherName, totals.planned, totals.occurred, Math.max(0, totals.planned - totals.occurred)],
+            [teacherName, plannedLabel, totals.occurred, remainingLabel],
             { align: ['left', 'center', 'center', 'center'] }
         );
         rowNum += 1;
@@ -118,9 +127,9 @@ function buildDisciplineSheet(workbook, semesterLabel, rows) {
                 row.discipline_name,
                 row.lesson_type,
                 groupLabel,
-                row.planned_hours,
+                row.planned_hours ?? 'не задано',
                 row.occurred_hours,
-                Math.max(0, row.planned_hours - row.occurred_hours)
+                row.planned_hours === null ? '—' : Math.max(0, row.planned_hours - row.occurred_hours)
             ],
             { align: ['left', 'left', 'center', 'center', 'center', 'center', 'center'] }
         );

@@ -445,12 +445,18 @@ export default function AdminDashboardPage() {
             return [];
         }
 
+        // The tabs here are only Нечётная/Чётная, so an "every week" pair
+        // (week_type 0, which bulk JSON upload can create with "all") matched
+        // neither and was invisible in BOTH tabs — the cell looked free while
+        // actually being occupied on every week, and a second pair created on
+        // top of it meant two lessons in one slot for students and doubled
+        // hours for the teacher. It overlaps both parities, so show it in both.
         const candidates = lessons.filter((lesson) =>
             lesson.day_of_week === day &&
             lesson.time_start === timeStart &&
             lesson.time_end === timeEnd &&
             lesson.specific_week == null &&
-            lesson.week_type === builderTemplateWeekType
+            (lesson.week_type === builderTemplateWeekType || lesson.week_type === 0)
         );
 
         return resolveTemplateLessons(candidates, todayWeekNumber);
@@ -628,7 +634,15 @@ export default function AdminDashboardPage() {
                 return false;
             }
 
-            setToastMessage('Занятие удалено');
+            // A template pair that has already run in earlier weeks is retired
+            // from this week forward rather than erased, so those weeks keep
+            // showing it — and the teacher keeps the hours already taught.
+            const data = await response.json();
+            setToastMessage(
+                data.retired_from_week
+                    ? `Занятие убрано с ${data.retired_from_week}-й недели — прошедшие недели не изменились`
+                    : 'Занятие удалено'
+            );
             loadLessons(selectedGroupId);
             return true;
         } catch (error) {

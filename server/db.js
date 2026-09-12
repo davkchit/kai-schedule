@@ -184,6 +184,8 @@ function initTables() {
     }
 
     migrateLessonsDayOfWeekConstraint();
+    migrateLoadPlanPlannedHoursNullable();
+    migrateLessonsLoadPlanFkRepair();
 
     db.exec(`
 
@@ -263,7 +265,11 @@ function initTables() {
             lesson_type   TEXT NOT NULL,
             group_id      INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
             subgroup      INTEGER NOT NULL DEFAULT 0,
-            planned_hours INTEGER NOT NULL CHECK(planned_hours > 0),
+            -- Nullable: a plan row can exist before its hours are known — e.g.
+            -- auto-created the moment a schedule lesson is saved against a
+            -- discipline/teacher/type/group combo that has no plan row yet.
+            -- It shows up as "часы не заданы" until the specialist fills it in.
+            planned_hours INTEGER CHECK(planned_hours IS NULL OR planned_hours > 0),
             entered_by    TEXT NOT NULL DEFAULT 'specialist' CHECK(entered_by IN ('specialist', 'teacher')),
             confirmed     INTEGER NOT NULL DEFAULT 0,
             created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -285,6 +291,18 @@ function initTables() {
     // after load_plan exists so the REFERENCES target is real.
     try {
         db.exec('ALTER TABLE lessons ADD COLUMN load_plan_id INTEGER REFERENCES load_plan(id) ON DELETE SET NULL');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
+    // 'lesson'  — real teaching; must resolve to a load_plan row to count hours.
+    // 'event'   — торжественная линейка, субботник and the like. Carries only a
+    //             title, never a teacher or hours, and is skipped by the hour
+    //             engine for free (it has no load_plan_id). Kept in this table
+    //             rather than its own so it inherits slot collisions, week
+    //             overrides, materialization and drag-and-drop unchanged.
+    try {
+        db.exec("ALTER TABLE lessons ADD COLUMN kind TEXT NOT NULL DEFAULT 'lesson'");
     } catch (err) {
         // Ignored if column already exists
     }
@@ -343,6 +361,160 @@ function migrateLessonsDayOfWeekConstraint() {
         DROP TABLE lessons_legacy;
         COMMIT;
     `);
+}
+
+/**
+ * Older schema had planned_hours NOT NULL CHECK(> 0) — a plan row could not
+ * exist without hours already decided. That blocks auto-creating a plan row
+ * the moment a schedule lesson references a discipline/teacher/type/group
+ * combo that has none yet (hours unknown at that point, filled in later by
+ * the specialist). SQLite can't drop a CHECK constraint in place, so the
+ * table has to be rebuilt.
+ *
+ * Unlike migrateLessonsDayOfWeekConstraint, this table is itself the FK
+ * TARGET of another table (lessons.load_plan_id REFERENCES load_plan(id)) on
+ * any database that already has load tracking installed. Renaming load_plan
+ * out of the way (load_plan -> load_plan_legacy) makes SQLite rewrite that
+ * *other* table's stored REFERENCES clause to point at the new name — so by
+ * the time load_plan_legacy is dropped, lessons is left permanently
+ * referencing a table that no longer exists (confirmed against a real
+ * database: its lessons.sql read `REFERENCES "load_plan_legacy"(id)` after
+ * such a rename-based rebuild, and the corruption survives — every later
+ * write that touches lessons.load_plan_id then fails with "no such table:
+ * main.load_plan_legacy"). Building the replacement under a fresh temporary
+ * name and renaming *that* into "load_plan" avoids ever renaming the
+ * original away, so nothing referencing it by name ever gets rewritten.
+ */
+function migrateLoadPlanPlannedHoursNullable() {
+    const loadPlanTable = db.prepare(`
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'load_plan'
+    `).get();
+
+    if (!loadPlanTable?.sql || !/CHECK\s*\(\s*planned_hours\s*>\s*0\s*\)/i.test(loadPlanTable.sql)) {
+        return;
+    }
+
+    // load_plan is the FK TARGET of lessons.load_plan_id on any database that
+    // already has load tracking installed. With enforcement on, DROP TABLE
+    // fires each child's ON DELETE action against the about-to-vanish parent
+    // rows at the instant of the drop — permanently nulling out working links
+    // even though a same-named, same-keyed replacement table appears a
+    // statement later. (Confirmed directly: rebuilding load_plan this way
+    // with enforcement left on silently zeroed every lessons.load_plan_id
+    // that pointed at it.) PRAGMA foreign_keys can't be toggled inside a
+    // transaction, so it brackets the whole exec rather than living inside it.
+    db.pragma('foreign_keys = OFF');
+
+    db.exec(`
+        BEGIN TRANSACTION;
+
+        CREATE TABLE load_plan_rebuilt (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester_id   INTEGER NOT NULL REFERENCES semesters(id) ON DELETE CASCADE,
+            teacher_id    INTEGER NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+            discipline_id INTEGER NOT NULL REFERENCES disciplines(id) ON DELETE CASCADE,
+            lesson_type   TEXT NOT NULL,
+            group_id      INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+            subgroup      INTEGER NOT NULL DEFAULT 0,
+            planned_hours INTEGER CHECK(planned_hours IS NULL OR planned_hours > 0),
+            entered_by    TEXT NOT NULL DEFAULT 'specialist' CHECK(entered_by IN ('specialist', 'teacher')),
+            confirmed     INTEGER NOT NULL DEFAULT 0,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT INTO load_plan_rebuilt (
+            id, semester_id, teacher_id, discipline_id, lesson_type, group_id,
+            subgroup, planned_hours, entered_by, confirmed, created_at, updated_at
+        )
+        SELECT
+            id, semester_id, teacher_id, discipline_id, lesson_type, group_id,
+            subgroup, planned_hours, entered_by, confirmed, created_at, updated_at
+        FROM load_plan;
+
+        DROP TABLE load_plan;
+        ALTER TABLE load_plan_rebuilt RENAME TO load_plan;
+
+        COMMIT;
+    `);
+
+    db.pragma('foreign_keys = ON');
+}
+
+/**
+ * Repairs a database left in the corrupted state migrateLoadPlanPlannedHoursNullable
+ * used to produce: lessons.load_plan_id pointing at a "load_plan_legacy" table
+ * that no longer exists, because an earlier version of that migration renamed
+ * load_plan out from under it instead of building the replacement under a
+ * fresh name. Detected by inspecting lessons' own stored schema text; a no-op
+ * on any database that never hit the bug.
+ */
+function migrateLessonsLoadPlanFkRepair() {
+    const lessonsTable = db.prepare(`
+        SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'lessons'
+    `).get();
+
+    if (!lessonsTable?.sql || !/REFERENCES\s+"?load_plan_legacy"?\s*\(/i.test(lessonsTable.sql)) {
+        return;
+    }
+
+    // Nothing currently holds a live FK against lessons(id), so this rebuild
+    // doesn't need the pragma toggle migrateLoadPlanPlannedHoursNullable
+    // needs — but bracketing it the same way costs nothing and guards
+    // against that ever becoming false later.
+    db.pragma('foreign_keys = OFF');
+
+    db.exec(`
+        BEGIN TRANSACTION;
+
+        CREATE TABLE lessons_fk_repaired (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id    INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+            subgroup    INTEGER NOT NULL DEFAULT 0,
+            day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 1 AND 7),
+            week_type   INTEGER NOT NULL DEFAULT 0 CHECK(week_type IN (0, 1, 2)),
+            specific_week INTEGER DEFAULT NULL,
+            template_from_week INTEGER NOT NULL DEFAULT 1,
+            is_removed  INTEGER NOT NULL DEFAULT 0,
+            time_start  TEXT    NOT NULL,
+            time_end    TEXT    NOT NULL,
+            subject     TEXT    NOT NULL,
+            room        TEXT,
+            lesson_type TEXT,
+            teacher     TEXT,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            kind        TEXT NOT NULL DEFAULT 'lesson',
+            load_plan_id INTEGER REFERENCES load_plan(id) ON DELETE SET NULL,
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT INTO lessons_fk_repaired (
+            id, group_id, subgroup, day_of_week, week_type, specific_week,
+            template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher,
+            sort_order, kind, load_plan_id, created_at, updated_at
+        )
+        SELECT
+            id, group_id, subgroup, day_of_week, week_type, specific_week,
+            template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher,
+            sort_order, kind, load_plan_id, created_at, updated_at
+        FROM lessons;
+
+        DROP TABLE lessons;
+        ALTER TABLE lessons_fk_repaired RENAME TO lessons;
+
+        CREATE INDEX IF NOT EXISTS idx_lessons_group   ON lessons(group_id);
+        CREATE INDEX IF NOT EXISTS idx_lessons_day     ON lessons(group_id, day_of_week);
+        CREATE INDEX IF NOT EXISTS idx_lessons_load_plan ON lessons(load_plan_id);
+
+        COMMIT;
+    `);
+
+    db.pragma('foreign_keys = ON');
 }
 
 module.exports = {

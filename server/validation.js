@@ -199,6 +199,10 @@ function validateLessonUpdateBody(body) {
         payload.week_type = readInteger(body.week_type, 'Тип недели', { min: 0, max: 2 });
     }
 
+    if (body.kind !== undefined) {
+        payload.kind = readLessonKind(body.kind);
+    }
+
     if (body.specific_week !== undefined) {
         if (body.specific_week === '' || body.specific_week === 'null' || body.specific_week === null) {
             payload.specific_week = null;
@@ -353,8 +357,28 @@ function validateLessonCreateBody(body) {
         room: readOptionalString(body.room, 'Кабинет'),
         lesson_type: readOptionalString(body.lesson_type, 'Тип занятия'),
         teacher: readOptionalString(body.teacher, 'Преподаватель'),
+        kind: readLessonKind(body.kind),
         sort_order: body.sort_order === undefined ? 0 : readInteger(body.sort_order, 'Порядок сортировки', { min: 0 })
     };
+}
+
+const LESSON_KINDS = ['lesson', 'event'];
+
+/**
+ * 'event' covers торжественная линейка, субботник and similar — entries that
+ * occupy a slot and show a title but are not teaching, so they never carry a
+ * teacher or count towards anyone's hours.
+ */
+function readLessonKind(value) {
+    if (value === undefined || value === null || value === '') {
+        return 'lesson';
+    }
+
+    if (!LESSON_KINDS.includes(value)) {
+        throw createValidationError('Тип записи должен быть «lesson» или «event»');
+    }
+
+    return value;
 }
 
 function validateSettingsBody(body) {
@@ -515,9 +539,21 @@ function validateLoadPlanCreateBody(body) {
         lesson_type: lessonType,
         group_id: readInteger(body.group_id, 'group_id', { min: 1 }),
         subgroup: body.subgroup === undefined ? 0 : readInteger(body.subgroup, 'Подгруппа', { min: 0, max: 2 }),
-        planned_hours: readInteger(body.planned_hours, 'Плановые часы', { min: 1, max: 2000 }),
+        // Optional: a plan row can be auto-created (e.g. the moment a schedule
+        // lesson references a teacher/discipline/type/group combo with no plan
+        // row yet) before its hours are known — it then shows as "часы не
+        // заданы" until the specialist fills them in.
+        planned_hours: readOptionalPositiveInteger(body.planned_hours, 'Плановые часы'),
         entered_by: body.entered_by === 'teacher' ? 'teacher' : 'specialist'
     };
+}
+
+function readOptionalPositiveInteger(value, label) {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+
+    return readInteger(value, label, { min: 1, max: 2000 });
 }
 
 function validateLoadPlanUpdateBody(body) {
@@ -526,11 +562,39 @@ function validateLoadPlanUpdateBody(body) {
     const result = {};
 
     if (body.planned_hours !== undefined) {
-        result.planned_hours = readInteger(body.planned_hours, 'Плановые часы', { min: 1, max: 2000 });
+        result.planned_hours = readOptionalPositiveInteger(body.planned_hours, 'Плановые часы');
     }
 
     if (body.confirmed !== undefined) {
         result.confirmed = Boolean(body.confirmed);
+    }
+
+    // Full-row edit — fixing a plan row entered against the wrong teacher,
+    // discipline, type or group, rather than deleting and recreating it.
+    if (body.teacher_id !== undefined) {
+        result.teacher_id = readInteger(body.teacher_id, 'teacher_id', { min: 1 });
+    }
+
+    if (body.discipline_id !== undefined) {
+        result.discipline_id = readInteger(body.discipline_id, 'discipline_id', { min: 1 });
+    }
+
+    if (body.group_id !== undefined) {
+        result.group_id = readInteger(body.group_id, 'group_id', { min: 1 });
+    }
+
+    if (body.subgroup !== undefined) {
+        result.subgroup = readInteger(body.subgroup, 'Подгруппа', { min: 0, max: 2 });
+    }
+
+    if (body.lesson_type !== undefined) {
+        const lessonType = readRequiredString(body.lesson_type, 'Вид занятия', 50);
+
+        if (!LOAD_PLAN_LESSON_TYPES.includes(lessonType)) {
+            throw createValidationError(`Вид занятия должен быть одним из: ${LOAD_PLAN_LESSON_TYPES.join(', ')}`);
+        }
+
+        result.lesson_type = lessonType;
     }
 
     return result;

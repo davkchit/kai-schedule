@@ -152,6 +152,32 @@ test('a tombstoned template version removes future occurrences without touching 
     assert.equal(result.occurred_count, 2);
 });
 
+test('a plan row with two slots in the same week (lecture block, or Mon+Wed practicals) counts both, not just the first', () => {
+    // Real timetables routinely put one load_plan row on two slots a week —
+    // a double lecture block, or a language practical that meets Mon and Wed.
+    // The engine used to take resolved[0] and silently drop the second slot,
+    // halving that row's hours.
+    const linkedLessons = [
+        lesson({ id: 1, day_of_week: 1, time_start: '09:40', time_end: '11:10', week_type: 0 }),
+        lesson({ id: 2, day_of_week: 3, time_start: '09:40', time_end: '11:10', week_type: 0 })
+    ];
+
+    const now = new Date('2026-12-31T00:00:00');
+
+    const result = computeLoadProgress({
+        semesterStartDate: SEMESTER_START,
+        weeksCount: 4,
+        linkedLessons,
+        exceptionWeeks: new Set(),
+        now
+    });
+
+    // 4 weeks × 2 slots per week = 8 occurrences = 16 hours.
+    assert.equal(result.occurred_count, 8);
+    assert.equal(result.occurred_hours, 16);
+    assert.deepEqual(result.occurrences.map((o) => o.week_number), [1, 1, 2, 2, 3, 3, 4, 4]);
+});
+
 test('computeExceptionWeeks collects specific_week values within range and ignores out-of-range ones', () => {
     const groupLessons = [
         lesson({ id: 1, day_of_week: 1, time_start: '09:40', time_end: '11:10' }),

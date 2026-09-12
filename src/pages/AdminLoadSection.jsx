@@ -1,6 +1,11 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
+const REF_PREVIEW_COUNT = 5;
+// Stable reference for rows that aren't the one currently open for linking —
+// a fresh [] literal every render would defeat PlanRow's memo() comparison
+// for all 130+ other rows every time any single row's state changes.
+const EMPTY_ARRAY = [];
 
 // The teaching-load admin window — kept as its own component (rather than
 // folded into AdminDashboardPage.jsx) since that file is already the
@@ -19,6 +24,20 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     const [planForm, setPlanForm] = useState(emptyPlanForm());
     const [linkingPlanId, setLinkingPlanId] = useState(null);
     const [linkGroupLessons, setLinkGroupLessons] = useState([]);
+    // Only tracks WHICH row is being edited — the field values themselves live
+    // as local state inside that row's PlanRow instance (see the comment on
+    // PlanRow) so that typing in the edit form never re-renders every other row.
+    const [editingPlanId, setEditingPlanId] = useState(null);
+
+    const [isEditingSemester, setIsEditingSemester] = useState(false);
+    const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18 });
+
+    const [showAllTeachers, setShowAllTeachers] = useState(false);
+    const [showAllDisciplines, setShowAllDisciplines] = useState(false);
+    const [filterQuery, setFilterQuery] = useState('');
+    const [filterGroupId, setFilterGroupId] = useState('');
+    const [openMenuId, setOpenMenuId] = useState(null);
+    const menuCloseTimeout = useRef(null);
 
     const activeSemester = semesters.find((semester) => semester.is_active) || null;
 
@@ -69,11 +88,14 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
         }
     }
 
-    async function refreshPlan() {
+    const refreshPlan = useCallback(async () => {
         if (activeSemester) {
             await loadPlanForSemester(activeSemester.id);
         }
-    }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- loadPlanForSemester
+        // closes over api/setToastMessage/setLoadPlan, none of which change
+        // for the interactions this is memoized against (see PlanRow).
+    }, [activeSemester]);
 
     async function addTeacher(event) {
         event.preventDefault();
@@ -127,6 +149,181 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
         }
     }
 
+    // Fixing a one-letter typo without deleting and recreating (which would
+    // detach every load_plan row already entered against the old name).
+    async function renameTeacher(teacher) {
+        const nextName = window.prompt('Новое ФИО преподавателя', teacher.full_name);
+        if (!nextName || !nextName.trim() || nextName.trim() === teacher.full_name) return;
+
+        try {
+            const response = await api(`/api/admin/teachers/${teacher.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ full_name: nextName.trim() })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось переименовать преподавателя');
+                return;
+            }
+
+            setTeachers((previous) =>
+                previous.map((t) => (t.id === teacher.id ? data : t)).sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru'))
+            );
+            await refreshPlan();
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
+    async function deleteTeacher(teacher) {
+        if (!window.confirm(`Удалить преподавателя «${teacher.full_name}» из справочника?`)) return;
+
+        try {
+            const response = await api(`/api/admin/teachers/${teacher.id}`, { method: 'DELETE' });
+
+            if (!response.ok) {
+                const data = await response.json();
+                // 409 here means load_plan rows still reference this teacher —
+                // the message explains what to clear first.
+                setToastMessage(data.error || 'Не удалось удалить преподавателя');
+                return;
+            }
+
+            setTeachers((previous) => previous.filter((t) => t.id !== teacher.id));
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
+    async function renameDiscipline(discipline) {
+        const nextName = window.prompt('Новое название дисциплины', discipline.name);
+        if (!nextName || !nextName.trim() || nextName.trim() === discipline.name) return;
+
+        try {
+            const response = await api(`/api/admin/disciplines/${discipline.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ name: nextName.trim() })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось переименовать дисциплину');
+                return;
+            }
+
+            setDisciplines((previous) =>
+                previous.map((d) => (d.id === discipline.id ? data : d)).sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+            );
+            await refreshPlan();
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
+    async function deleteDiscipline(discipline) {
+        if (!window.confirm(`Удалить дисциплину «${discipline.name}» из справочника?`)) return;
+
+        try {
+            const response = await api(`/api/admin/disciplines/${discipline.id}`, { method: 'DELETE' });
+
+            if (!response.ok) {
+                const data = await response.json();
+                setToastMessage(data.error || 'Не удалось удалить дисциплину');
+                return;
+            }
+
+            setDisciplines((previous) => previous.filter((d) => d.id !== discipline.id));
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
+    function startEditSemester() {
+        setSemesterEdit({
+            start_date: activeSemester.start_date,
+            weeks_count: String(activeSemester.weeks_count)
+        });
+        setIsEditingSemester(true);
+    }
+
+    // Both of these settings silently re-derive every teacher's hours — the
+    // start date moves every lesson's date, the week count is the ceiling the
+    // counter stops at. So ask the server what the change would do and make
+    // the specialist confirm the actual numbers before writing it.
+    async function saveSemesterEdit(event) {
+        event.preventDefault();
+
+        const weeksCount = Number(semesterEdit.weeks_count);
+
+        if (!semesterEdit.start_date || !Number.isInteger(weeksCount) || weeksCount < 1) {
+            setToastMessage('Укажите дату начала и число недель');
+            return;
+        }
+
+        if (semesterEdit.start_date === activeSemester.start_date && weeksCount === activeSemester.weeks_count) {
+            setIsEditingSemester(false);
+            return;
+        }
+
+        try {
+            const impactRes = await api(
+                `/api/admin/semesters/${activeSemester.id}/impact?start_date=${semesterEdit.start_date}&weeks_count=${weeksCount}`
+            );
+            const impact = await impactRes.json();
+
+            if (!impactRes.ok) {
+                setToastMessage(impact.error || 'Не удалось посчитать последствия');
+                return;
+            }
+
+            if (impact.teachers_changed > 0) {
+                const names = impact.teacher_names.join(', ');
+                const more = impact.teachers_changed > impact.teacher_names.length ? ' и др.' : '';
+                const delta = impact.hours_after - impact.hours_before;
+                const confirmed = window.confirm(
+                    `Это пересчитает уже проведённые часы.\n\n` +
+                    `Затронуто преподавателей: ${impact.teachers_changed}\n` +
+                    `Строк плана: ${impact.plan_rows_changed} из ${impact.plan_rows_total}\n` +
+                    `Суммарно часов: ${impact.hours_before} → ${impact.hours_after} (${delta > 0 ? '+' : ''}${delta})\n\n` +
+                    `Кого затронет: ${names}${more}\n\n` +
+                    `Последняя учебная неделя: ${impact.last_week.current} → ${impact.last_week.proposed}\n\n` +
+                    `Применить?`
+                );
+
+                if (!confirmed) return;
+            }
+
+            const response = await api(`/api/admin/semesters/${activeSemester.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ start_date: semesterEdit.start_date, weeks_count: weeksCount })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось сохранить семестр');
+                return;
+            }
+
+            setSemesters((previous) => previous.map((s) => (s.id === activeSemester.id ? data : s)));
+            setIsEditingSemester(false);
+            await refreshPlan();
+            setToastMessage('Семестр изменён');
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
     async function addSemester(event) {
         event.preventDefault();
 
@@ -162,6 +359,10 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     }
 
     async function activateSemester(semesterId) {
+        if (!semesterId || semesterId === String(activeSemester?.id)) {
+            return;
+        }
+
         try {
             const response = await api(`/api/admin/semesters/${semesterId}`, {
                 method: 'PUT',
@@ -174,8 +375,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 return;
             }
 
-            setSemesters((previous) => previous.map((semester) => ({ ...semester, is_active: semester.id === semesterId })));
-            setToastMessage('Семестр активирован');
+            setSemesters((previous) => previous.map((semester) => ({ ...semester, is_active: semester.id === Number(semesterId) })));
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Ошибка сети');
@@ -193,8 +393,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
 
         const { teacher_id, discipline_id, lesson_type, group_id, planned_hours } = planForm;
 
-        if (!teacher_id || !discipline_id || !group_id || !planned_hours) {
-            setToastMessage('Заполните все поля плана');
+        if (!teacher_id || !discipline_id || !group_id) {
+            setToastMessage('Заполните преподавателя, дисциплину и группу');
             return;
         }
 
@@ -208,7 +408,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                     lesson_type,
                     group_id: Number(group_id),
                     subgroup: Number(planForm.subgroup) || 0,
-                    planned_hours: Number(planned_hours)
+                    planned_hours: planned_hours ? Number(planned_hours) : undefined
                 })
             });
             const data = await response.json();
@@ -228,7 +428,83 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
         }
     }
 
-    async function deletePlanRow(planId) {
+    const updatePlannedHours = useCallback(async (planId, hoursText) => {
+        const trimmed = hoursText.trim();
+        const hours = Number(trimmed);
+
+        if (!trimmed || !Number.isInteger(hours) || hours < 1) {
+            setToastMessage('Часы должны быть целым числом больше нуля');
+            return;
+        }
+
+        try {
+            const response = await api(`/api/admin/load-plan/${planId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ planned_hours: hours })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                setToastMessage(data.error || 'Не удалось сохранить часы');
+                return;
+            }
+
+            await refreshPlan();
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }, [api, setToastMessage, refreshPlan]);
+
+    const startEditRow = useCallback((row) => {
+        setOpenMenuId(null);
+        setLinkingPlanId(null);
+        setEditingPlanId(row.id);
+    }, []);
+
+    const cancelEditRow = useCallback(() => setEditingPlanId(null), []);
+
+    // Returns whether the save succeeded — PlanRow keeps the user's in-progress
+    // edit (rather than discarding it) if the server refuses, e.g. the 409
+    // from changing group while lessons are still linked to this row.
+    const saveEditRow = useCallback(async (planId, form) => {
+        try {
+            const response = await api(`/api/admin/load-plan/${planId}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    teacher_id: Number(form.teacher_id),
+                    discipline_id: Number(form.discipline_id),
+                    lesson_type: form.lesson_type,
+                    group_id: Number(form.group_id),
+                    subgroup: Number(form.subgroup),
+                    planned_hours: form.planned_hours ? Number(form.planned_hours) : null
+                })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                // 409 here means the row is still linked to schedule lessons in
+                // its current group — the server explains what to do first.
+                setToastMessage(data.error || 'Не удалось сохранить строку');
+                return false;
+            }
+
+            setLoadPlan((previous) => previous.map((row) => (row.id === planId ? data : row)));
+            setEditingPlanId(null);
+            setToastMessage('Строка плана изменена');
+            return true;
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+            return false;
+        }
+    }, [api, setToastMessage]);
+
+    const deletePlanRow = useCallback(async (planId) => {
+        setOpenMenuId(null);
+
         if (!window.confirm('Удалить эту строку плана? Связанная пара из расписания при этом не удаляется, просто отвяжется.')) {
             return;
         }
@@ -248,15 +524,24 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 setToastMessage('Ошибка сети');
             }
         }
-    }
+    }, [api, setToastMessage]);
 
-    async function openLinkPicker(planRow) {
-        if (linkingPlanId === planRow.id) {
-            setLinkingPlanId(null);
+    const openLinkPicker = useCallback(async (planRow) => {
+        setOpenMenuId(null);
+        setEditingPlanId(null);
+
+        // Functional form so this callback never needs linkingPlanId in its
+        // closure — reading it directly would change this function's identity
+        // on every open/close, re-rendering every other row in the table.
+        let alreadyOpenForThisRow = false;
+        setLinkingPlanId((previous) => {
+            alreadyOpenForThisRow = previous === planRow.id;
+            return alreadyOpenForThisRow ? null : planRow.id;
+        });
+
+        if (alreadyOpenForThisRow) {
             return;
         }
-
-        setLinkingPlanId(planRow.id);
 
         try {
             const response = await api(`/api/admin/lessons?group_id=${planRow.group_id}`);
@@ -269,9 +554,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 setToastMessage('Не удалось загрузить пары группы');
             }
         }
-    }
+    }, [api, setToastMessage]);
 
-    async function toggleLessonLink(planId, lesson) {
+    const toggleLessonLink = useCallback(async (planId, lesson) => {
         // Clicking an already-linked lesson unlinks it; clicking any other
         // lesson links it to this plan row (a lesson can only count toward
         // one plan row at a time).
@@ -299,62 +584,129 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 setToastMessage('Ошибка сети');
             }
         }
-    }
+    }, [api, setToastMessage, refreshPlan]);
+
+    const toggleRowMenu = useCallback((planId) => {
+        if (menuCloseTimeout.current) {
+            window.clearTimeout(menuCloseTimeout.current);
+        }
+        setOpenMenuId((previous) => (previous === planId ? null : planId));
+    }, []);
+
+    const scheduleMenuClose = useCallback(() => {
+        menuCloseTimeout.current = window.setTimeout(() => setOpenMenuId(null), 150);
+    }, []);
+
+    const visibleTeachers = showAllTeachers ? teachers : teachers.slice(0, REF_PREVIEW_COUNT);
+    const visibleDisciplines = showAllDisciplines ? disciplines : disciplines.slice(0, REF_PREVIEW_COUNT);
+
+    const planStats = useMemo(() => {
+        const total = loadPlan.length;
+        const withHours = loadPlan.filter((row) => row.planned_hours !== null);
+        const totalHours = withHours.reduce((sum, row) => sum + row.planned_hours, 0);
+        const percentFilled = total > 0 ? Math.round((withHours.length / total) * 100) : 0;
+        return { total, totalHours, percentFilled, hasUnfilled: withHours.length < total };
+    }, [loadPlan]);
+
+    const visibleRows = useMemo(() => {
+        const query = filterQuery.trim().toLowerCase();
+
+        return loadPlan.filter((row) => {
+            if (filterGroupId && String(row.group_id) !== filterGroupId) {
+                return false;
+            }
+            if (!query) {
+                return true;
+            }
+            const haystack = `${row.teacher_name} ${row.discipline_name} ${row.lesson_type} ${row.group_name}`.toLowerCase();
+            return haystack.includes(query);
+        });
+    }, [loadPlan, filterQuery, filterGroupId]);
 
     return (
         <div className="load-section">
             <h2 className="section-title">Учёт нагрузки</h2>
             <p className="section-desc">
-                План вбивается один раз на семестр, дальше система сама считает часы по проведённым парам —
+                План формируется один раз на семестр, дальше система сама считает часы по проведённым парам —
                 преподавателям заходить никуда не нужно, они смотрят свои часы на отдельной странице по поиску.
             </p>
 
-            <h3 className="subsection-title">Семестры</h3>
-            <div className="load-semester-list">
-                {semesters.map((semester) => (
-                    <div key={semester.id} className={`load-semester-chip ${semester.is_active ? 'active' : ''}`}>
-                        <span>{semester.label}</span>
-                        <span className="load-semester-meta">{semester.start_date} · {semester.weeks_count} нед.</span>
-                        {!semester.is_active && (
-                            <button type="button" className="btn-link" onClick={() => activateSemester(semester.id)}>
-                                Сделать активным
-                            </button>
-                        )}
-                    </div>
-                ))}
-                {semesters.length === 0 && !isLoading && (
-                    <p className="empty-message">Семестров пока нет — создайте первый ниже.</p>
-                )}
+            <h3 className="subsection-title">Семестр</h3>
+            <div className="load-semester-bar">
+                <div className="load-semester-select-wrap">
+                    <select
+                        className="form-input load-semester-select"
+                        value={activeSemester ? String(activeSemester.id) : ''}
+                        onChange={(event) => activateSemester(event.target.value)}
+                    >
+                        {semesters.length === 0 && <option value="">Семестров пока нет</option>}
+                        {semesters.map((semester) => (
+                            <option key={semester.id} value={semester.id}>{semester.label}</option>
+                        ))}
+                    </select>
+                    {activeSemester && !isEditingSemester && (
+                        <>
+                            <span className="load-semester-meta">
+                                {activeSemester.start_date} · {activeSemester.weeks_count} нед. ·
+                                {' '}последняя неделя {formatWeekRange(activeSemester.start_date, activeSemester.weeks_count)}
+                            </span>
+                            <button type="button" className="btn-link" onClick={startEditSemester}>изменить</button>
+                        </>
+                    )}
+                    {activeSemester && isEditingSemester && (
+                        <form className="load-semester-edit" onSubmit={saveSemesterEdit}>
+                            <input
+                                type="date"
+                                className="form-input"
+                                value={semesterEdit.start_date}
+                                onChange={(event) => setSemesterEdit((previous) => ({ ...previous, start_date: event.target.value }))}
+                            />
+                            <input
+                                type="number"
+                                min="1"
+                                max="52"
+                                className="form-input load-weeks-input"
+                                value={semesterEdit.weeks_count}
+                                onChange={(event) => setSemesterEdit((previous) => ({ ...previous, weeks_count: event.target.value }))}
+                            />
+                            <span className="load-semester-meta">
+                                → последняя неделя {formatWeekRange(semesterEdit.start_date, Number(semesterEdit.weeks_count))}
+                            </span>
+                            <button type="submit" className="btn btn-primary load-edit-save">Сохранить</button>
+                            <button type="button" className="btn-link" onClick={() => setIsEditingSemester(false)}>Отмена</button>
+                        </form>
+                    )}
+                </div>
+                <form className="load-semester-add" onSubmit={addSemester}>
+                    <input
+                        type="text"
+                        className="form-input"
+                        placeholder="Например Осень 2026-2027"
+                        value={newSemester.label}
+                        onChange={(event) => setNewSemester((previous) => ({ ...previous, label: event.target.value }))}
+                    />
+                    <input
+                        type="date"
+                        className="form-input"
+                        value={newSemester.start_date}
+                        onChange={(event) => setNewSemester((previous) => ({ ...previous, start_date: event.target.value }))}
+                    />
+                    <input
+                        type="number"
+                        min="1"
+                        max="52"
+                        className="form-input load-weeks-input"
+                        value={newSemester.weeks_count}
+                        onChange={(event) => setNewSemester((previous) => ({ ...previous, weeks_count: event.target.value }))}
+                    />
+                    <button type="submit" className="btn btn-secondary">Добавить семестр</button>
+                </form>
             </div>
-            <form className="add-group-row" onSubmit={addSemester}>
-                <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Например Осень 2026-2027"
-                    value={newSemester.label}
-                    onChange={(event) => setNewSemester((previous) => ({ ...previous, label: event.target.value }))}
-                />
-                <input
-                    type="date"
-                    className="form-input"
-                    value={newSemester.start_date}
-                    onChange={(event) => setNewSemester((previous) => ({ ...previous, start_date: event.target.value }))}
-                />
-                <input
-                    type="number"
-                    min="1"
-                    max="52"
-                    className="form-input load-weeks-input"
-                    value={newSemester.weeks_count}
-                    onChange={(event) => setNewSemester((previous) => ({ ...previous, weeks_count: event.target.value }))}
-                />
-                <button type="submit" className="btn btn-secondary">Добавить семестр</button>
-            </form>
 
             <h3 className="subsection-title">Преподаватели и дисциплины</h3>
             <div className="load-refs-row">
-                <div className="load-ref-column">
-                    <form className="add-group-row" onSubmit={addTeacher}>
+                <div className="load-ref-card">
+                    <form className="load-ref-add-row" onSubmit={addTeacher}>
                         <input
                             type="text"
                             className="form-input"
@@ -364,12 +716,31 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                         />
                         <button type="submit" className="btn btn-secondary">Добавить</button>
                     </form>
+                    <div className="load-ref-card-header">
+                        <span>Преподаватели</span>
+                        <span className="load-ref-count">{teachers.length}</span>
+                    </div>
                     <ul className="load-ref-list">
-                        {teachers.map((teacher) => <li key={teacher.id}>{teacher.full_name}</li>)}
+                        {visibleTeachers.map((teacher) => (
+                            <li key={teacher.id} className="load-ref-row">
+                                <span>{teacher.full_name}</span>
+                                <span className="load-ref-row-actions">
+                                    <button type="button" onClick={() => renameTeacher(teacher)} title="Переименовать">✎</button>
+                                    <button type="button" onClick={() => deleteTeacher(teacher)} title="Удалить">✕</button>
+                                </span>
+                            </li>
+                        ))}
+                        {teachers.length === 0 && <li className="load-ref-empty">Преподавателей пока нет</li>}
                     </ul>
+                    {teachers.length > REF_PREVIEW_COUNT && (
+                        <button type="button" className="btn-link load-ref-all" onClick={() => setShowAllTeachers((v) => !v)}>
+                            {showAllTeachers ? 'Свернуть' : 'Все'}
+                        </button>
+                    )}
                 </div>
-                <div className="load-ref-column">
-                    <form className="add-group-row" onSubmit={addDiscipline}>
+
+                <div className="load-ref-card">
+                    <form className="load-ref-add-row" onSubmit={addDiscipline}>
                         <input
                             type="text"
                             className="form-input"
@@ -379,9 +750,27 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                         />
                         <button type="submit" className="btn btn-secondary">Добавить</button>
                     </form>
+                    <div className="load-ref-card-header">
+                        <span>Дисциплины</span>
+                        <span className="load-ref-count">{disciplines.length}</span>
+                    </div>
                     <ul className="load-ref-list">
-                        {disciplines.map((discipline) => <li key={discipline.id}>{discipline.name}</li>)}
+                        {visibleDisciplines.map((discipline) => (
+                            <li key={discipline.id} className="load-ref-row">
+                                <span>{discipline.name}</span>
+                                <span className="load-ref-row-actions">
+                                    <button type="button" onClick={() => renameDiscipline(discipline)} title="Переименовать">✎</button>
+                                    <button type="button" onClick={() => deleteDiscipline(discipline)} title="Удалить">✕</button>
+                                </span>
+                            </li>
+                        ))}
+                        {disciplines.length === 0 && <li className="load-ref-empty">Дисциплин пока нет</li>}
                     </ul>
+                    {disciplines.length > REF_PREVIEW_COUNT && (
+                        <button type="button" className="btn-link load-ref-all" onClick={() => setShowAllDisciplines((v) => !v)}>
+                            {showAllDisciplines ? 'Свернуть' : 'Все'}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -398,9 +787,21 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
             </div>
 
             {!activeSemester ? (
-                <p className="empty-message">Активируйте семестр выше, чтобы вести план.</p>
+                <p className="empty-message">
+                    {isLoading ? 'Загрузка...' : (semesters.length === 0 ? 'Создайте семестр выше, чтобы вести план.' : 'Выберите семестр выше, чтобы вести план.')}
+                </p>
             ) : (
                 <>
+                    <div className="load-plan-stats">
+                        <span>{planStats.total} {pluralizeRecords(planStats.total)}</span>
+                        <span className="load-plan-stats-dot">·</span>
+                        <span>{planStats.totalHours}{planStats.hasUnfilled ? '+' : ''} часов</span>
+                        <div className="load-plan-stats-progress">
+                            <div className="load-plan-stats-progress-fill" style={{ width: `${planStats.percentFilled}%` }} />
+                        </div>
+                        <span>{planStats.percentFilled}% заполнено</span>
+                    </div>
+
                     <form className="load-plan-form" onSubmit={submitPlanForm}>
                         <select
                             className="form-input"
@@ -453,8 +854,40 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                         <button type="submit" className="btn btn-primary">Добавить в план</button>
                     </form>
 
+                    <div className="load-plan-toolbar">
+                        <div className="load-plan-search">
+                            <SearchIcon />
+                            <input
+                                type="search"
+                                placeholder="Поиск по преподавателю или дисциплине"
+                                value={filterQuery}
+                                onChange={(event) => setFilterQuery(event.target.value)}
+                            />
+                        </div>
+                        <select
+                            className="form-input load-plan-group-filter"
+                            value={filterGroupId}
+                            onChange={(event) => setFilterGroupId(event.target.value)}
+                        >
+                            <option value="">Все группы</option>
+                            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                        </select>
+                        {(filterQuery || filterGroupId) && (
+                            <span className="load-plan-filter-active">
+                                показано {visibleRows.length} из {loadPlan.length}
+                                <button
+                                    type="button"
+                                    className="btn-link load-plan-filter-clear"
+                                    onClick={() => { setFilterQuery(''); setFilterGroupId(''); }}
+                                >
+                                    ✕ показать все
+                                </button>
+                            </span>
+                        )}
+                    </div>
+
                     <div className="lessons-table-wrapper">
-                        <table className="lessons-table">
+                        <table className="lessons-table load-plan-table">
                             <thead>
                                 <tr>
                                     <th>Преподаватель</th>
@@ -467,62 +900,35 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                                 </tr>
                             </thead>
                             <tbody>
-                                {loadPlan.map((row) => (
-                                    <Fragment key={row.id}>
-                                        <tr>
-                                            <td>{row.teacher_name}</td>
-                                            <td>{row.discipline_name}</td>
-                                            <td>{row.lesson_type}</td>
-                                            <td>{row.group_name}{row.subgroup ? ` (${row.subgroup} п/г)` : ''}</td>
-                                            <td>
-                                                <div className="load-progress-cell">
-                                                    <div className="load-progress-track">
-                                                        <div
-                                                            className="load-progress-fill"
-                                                            style={{ width: `${Math.min(100, Math.round((row.progress?.occurred_hours || 0) / row.planned_hours * 100))}%` }}
-                                                        />
-                                                    </div>
-                                                    <span>{row.progress?.occurred_hours ?? 0} / {row.planned_hours}</span>
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <button type="button" className="btn-link" onClick={() => openLinkPicker(row)}>
-                                                    {linkingPlanId === row.id ? 'Закрыть' : 'Привязать пару'}
-                                                </button>
-                                            </td>
-                                            <td>
-                                                <button type="button" className="btn-danger" onClick={() => deletePlanRow(row.id)}>Удалить</button>
-                                            </td>
-                                        </tr>
-                                        {linkingPlanId === row.id && (
-                                            <tr className="load-link-row">
-                                                <td colSpan={7}>
-                                                    {linkGroupLessons.length === 0 ? (
-                                                        <span className="empty-message">У этой группы нет пар в шаблоне расписания.</span>
-                                                    ) : (
-                                                        <div className="load-link-options">
-                                                            {linkGroupLessons.map((lesson) => (
-                                                                <button
-                                                                    type="button"
-                                                                    key={lesson.id}
-                                                                    className={`load-link-option ${lesson.load_plan_id === row.id ? 'selected' : ''}`}
-                                                                    onClick={() => toggleLessonLink(row.id, lesson)}
-                                                                >
-                                                                    {DAY_NAMES[lesson.day_of_week] || lesson.day_of_week}, {lesson.time_start}–{lesson.time_end} · {lesson.subject}
-                                                                    {lesson.load_plan_id === row.id ? ' ✓' : ''}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </Fragment>
+                                {visibleRows.map((row) => (
+                                    <PlanRow
+                                        key={row.id}
+                                        row={row}
+                                        teachers={teachers}
+                                        disciplines={disciplines}
+                                        groups={groups}
+                                        isEditing={editingPlanId === row.id}
+                                        onSaveEdit={saveEditRow}
+                                        onCancelEdit={cancelEditRow}
+                                        onStartEdit={startEditRow}
+                                        onUpdateHours={updatePlannedHours}
+                                        isLinking={linkingPlanId === row.id}
+                                        linkGroupLessons={linkingPlanId === row.id ? linkGroupLessons : EMPTY_ARRAY}
+                                        onOpenLinkPicker={openLinkPicker}
+                                        onToggleLessonLink={toggleLessonLink}
+                                        isMenuOpen={openMenuId === row.id}
+                                        onToggleMenu={toggleRowMenu}
+                                        onScheduleMenuClose={scheduleMenuClose}
+                                        onDelete={deletePlanRow}
+                                    />
                                 ))}
                             </tbody>
                         </table>
                         {loadPlan.length === 0 && (
                             <p className="empty-message">План на этот семестр пока пуст.</p>
+                        )}
+                        {loadPlan.length > 0 && visibleRows.length === 0 && (
+                            <p className="empty-message">По этому запросу ничего не найдено.</p>
                         )}
                     </div>
                 </>
@@ -532,6 +938,260 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
 }
 
 const DAY_NAMES = { 1: 'Пн', 2: 'Вт', 3: 'Ср', 4: 'Чт', 5: 'Пт', 6: 'Сб', 7: 'Вс' };
+
+// Memoized so opening/closing one row's kebab menu, edit form, or link picker
+// doesn't re-render the other 100+ rows in the table — before this, every
+// click on any row's "⋯" re-rendered the entire plan (132 rows on a real
+// semester), which is exactly the visible lag that prompted this split.
+function buildEditFormFromRow(row) {
+    return {
+        teacher_id: String(row.teacher_id),
+        discipline_id: String(row.discipline_id),
+        lesson_type: row.lesson_type,
+        group_id: String(row.group_id),
+        subgroup: String(row.subgroup),
+        planned_hours: row.planned_hours === null ? '' : String(row.planned_hours)
+    };
+}
+
+const PlanRow = memo(function PlanRow({
+    row, teachers, disciplines, groups,
+    isEditing, onSaveEdit, onCancelEdit, onStartEdit, onUpdateHours,
+    isLinking, linkGroupLessons, onOpenLinkPicker, onToggleLessonLink,
+    isMenuOpen, onToggleMenu, onScheduleMenuClose, onDelete
+}) {
+    // Lives here, not in the parent — otherwise every keystroke while editing
+    // one row would change that row's callback identities and, without care,
+    // ripple into a re-render of the other 100+ rows too.
+    const [draft, setDraft] = useState(null);
+    const form = draft ?? buildEditFormFromRow(row);
+
+    // Covers leaving edit mode any other way than the Cancel button — e.g.
+    // opening "Изменить" on a different row while this one was mid-edit —
+    // so a later re-open of this row starts from the real row, not a stale
+    // abandoned draft.
+    useEffect(() => {
+        if (!isEditing) setDraft(null);
+    }, [isEditing]);
+
+    async function handleSave() {
+        const ok = await onSaveEdit(row.id, form);
+        if (ok) setDraft(null);
+    }
+
+    function handleCancel() {
+        setDraft(null);
+        onCancelEdit();
+    }
+
+    return (
+        <Fragment>
+            {isEditing ? (
+                <tr className="load-edit-row">
+                    <td>
+                        <select
+                            className="form-input"
+                            value={form.teacher_id}
+                            onChange={(event) => setDraft({ ...form, teacher_id: event.target.value })}
+                        >
+                            {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.full_name}</option>)}
+                        </select>
+                    </td>
+                    <td>
+                        <select
+                            className="form-input"
+                            value={form.discipline_id}
+                            onChange={(event) => setDraft({ ...form, discipline_id: event.target.value })}
+                        >
+                            {disciplines.map((discipline) => <option key={discipline.id} value={discipline.id}>{discipline.name}</option>)}
+                        </select>
+                    </td>
+                    <td>
+                        <select
+                            className="form-input"
+                            value={form.lesson_type}
+                            onChange={(event) => setDraft({ ...form, lesson_type: event.target.value })}
+                        >
+                            {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                        </select>
+                    </td>
+                    <td>
+                        <div className="load-edit-group-cell">
+                            <select
+                                className="form-input"
+                                value={form.group_id}
+                                onChange={(event) => setDraft({ ...form, group_id: event.target.value })}
+                            >
+                                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                            </select>
+                            <select
+                                className="form-input load-edit-subgroup"
+                                value={form.subgroup}
+                                onChange={(event) => setDraft({ ...form, subgroup: event.target.value })}
+                            >
+                                <option value="0">Вся группа</option>
+                                <option value="1">1 п/г</option>
+                                <option value="2">2 п/г</option>
+                            </select>
+                        </div>
+                    </td>
+                    <td>
+                        <input
+                            type="number"
+                            min="1"
+                            className="form-input load-edit-hours"
+                            placeholder="часы"
+                            value={form.planned_hours}
+                            onChange={(event) => setDraft({ ...form, planned_hours: event.target.value })}
+                        />
+                    </td>
+                    <td colSpan={2} className="load-edit-actions">
+                        <button type="button" className="btn btn-primary load-edit-save" onClick={handleSave}>
+                            Сохранить
+                        </button>
+                        <button type="button" className="btn-link" onClick={handleCancel}>
+                            Отмена
+                        </button>
+                    </td>
+                </tr>
+            ) : (
+                <tr>
+                    <td>{row.teacher_name}</td>
+                    <td>{row.discipline_name}</td>
+                    <td><span className="load-type-badge">{row.lesson_type}</span></td>
+                    <td>{row.group_name}{row.subgroup ? ` (${row.subgroup} п/г)` : ''}</td>
+                    <td>
+                        {row.planned_hours === null ? (
+                            <HoursEditor onSave={(hours) => onUpdateHours(row.id, hours)} />
+                        ) : (
+                            <div className="load-progress-cell">
+                                <span className="load-hours-figure">{row.planned_hours} ч</span>
+                                <div className="load-progress-track">
+                                    <div
+                                        className="load-progress-fill"
+                                        style={{ width: `${Math.min(100, Math.round((row.progress?.occurred_hours || 0) / row.planned_hours * 100))}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
+                    </td>
+                    <td>
+                        <button type="button" className="btn-link" onClick={() => onOpenLinkPicker(row)}>
+                            {isLinking ? 'Закрыть' : 'Привязать пару'}
+                        </button>
+                    </td>
+                    <td className="load-row-menu-cell">
+                        <div className="load-row-menu" onBlur={onScheduleMenuClose}>
+                            <button
+                                type="button"
+                                className="load-row-menu-trigger"
+                                aria-label="Действия"
+                                onClick={() => onToggleMenu(row.id)}
+                            >
+                                ⋯
+                            </button>
+                            {isMenuOpen && (
+                                <div className="load-row-menu-dropdown">
+                                    <button type="button" className="load-row-menu-item" onClick={() => onStartEdit(row)}>
+                                        Изменить
+                                    </button>
+                                    <button type="button" className="load-row-menu-item danger" onClick={() => onDelete(row.id)}>
+                                        Удалить
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </td>
+                </tr>
+            )}
+            {isLinking && (
+                <tr className="load-link-row">
+                    <td colSpan={7}>
+                        {linkGroupLessons.length === 0 ? (
+                            <span className="empty-message">У этой группы нет пар в шаблоне расписания.</span>
+                        ) : (
+                            <div className="load-link-options">
+                                {linkGroupLessons.map((lesson) => (
+                                    <button
+                                        type="button"
+                                        key={lesson.id}
+                                        className={`load-link-option ${lesson.load_plan_id === row.id ? 'selected' : ''}`}
+                                        onClick={() => onToggleLessonLink(row.id, lesson)}
+                                    >
+                                        {DAY_NAMES[lesson.day_of_week] || lesson.day_of_week}, {lesson.time_start}–{lesson.time_end} · {lesson.subject}
+                                        {lesson.load_plan_id === row.id ? ' ✓' : ''}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </td>
+                </tr>
+            )}
+        </Fragment>
+    );
+});
+
+/**
+ * Turns "18 недель" into the dates it actually means, shown right next to the
+ * number: a count that runs the last teaching week through New Year is obvious
+ * on sight, while the bare "18" is not.
+ */
+function formatWeekRange(startDate, weeksCount) {
+    if (!startDate || !Number.isInteger(weeksCount) || weeksCount < 1) {
+        return '—';
+    }
+
+    const [year, month, day] = startDate.split('-').map(Number);
+    const monday = new Date(Date.UTC(year, month - 1, day + (weeksCount - 1) * 7));
+    const saturday = new Date(monday.getTime() + 5 * 86400000);
+    const short = (d) => `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+
+    return `${short(monday)}–${short(saturday)}.${saturday.getUTCFullYear()}`;
+}
+
+function pluralizeRecords(count) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'запись';
+    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'записи';
+    return 'записей';
+}
+
+function SearchIcon() {
+    return (
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM19 19l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+    );
+}
+
+// Shown instead of a progress bar for a plan row that has no hours yet — e.g.
+// one auto-created from an imported schedule, before the specialist has
+// entered what the department actually assigned.
+function HoursEditor({ onSave }) {
+    const [value, setValue] = useState('');
+
+    return (
+        <form
+            className="load-hours-editor"
+            onSubmit={(event) => {
+                event.preventDefault();
+                onSave(value);
+            }}
+        >
+            <span className="load-hours-editor-label">часы не заданы</span>
+            <input
+                type="number"
+                min="1"
+                max="2000"
+                placeholder="часы"
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+            />
+            <button type="submit" className="btn-link">задать</button>
+        </form>
+    );
+}
 
 function emptyPlanForm() {
     return {

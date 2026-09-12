@@ -21,9 +21,16 @@ const {
     getRateLimitInfo,
     registerFailedLogin
 } = require('../login-rate-limit');
-const { addDaysToIsoDate, formatLocalDate, getWeekMeta, isValidIsoDate } = require('../utils/date');
+const {
+    addDaysToIsoDate,
+    formatLocalDate,
+    getWeekMeta,
+    getWeekTypeForWeekNumber,
+    isValidIsoDate
+} = require('../utils/date');
 const { getCourseFromGroupName, getSemesterLabel } = require('../utils/course');
 const { resolveTemplateLessons } = require('../utils/templateResolve');
+const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../utils/slots');
 const { computeExceptionWeeks, computeLoadProgress } = require('../utils/loadCalc');
 const {
     validateAccountUpdateBody,
@@ -264,6 +271,54 @@ router.put('/groups/:id', (req, res) => {
     `).get(groupId);
 
     res.json(updated);
+});
+
+/**
+ * Refuses while the group still holds anything. Both foreign keys pointing at
+ * groups_ cascade, so an unguarded delete would take the group's whole
+ * timetable AND every load_plan row built on it — including hours already
+ * counted — with no way back short of a backup. Clear the group first and the
+ * delete becomes the harmless thing it looks like.
+ */
+router.delete('/groups/:id', (req, res) => {
+    const groupId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(groupId) || groupId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID группы' });
+    }
+
+    const db = getDb();
+    const group = db.prepare('SELECT id, name FROM groups_ WHERE id = ?').get(groupId);
+
+    if (!group) {
+        return res.status(404).json({ error: 'Группа не найдена' });
+    }
+
+    const lessonCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ?').get(groupId).c;
+    const planCount = db.prepare('SELECT COUNT(*) c FROM load_plan WHERE group_id = ?').get(groupId).c;
+
+    if (lessonCount > 0 || planCount > 0) {
+        const parts = [];
+        if (lessonCount > 0) parts.push(`пар в расписании: ${lessonCount}`);
+        if (planCount > 0) parts.push(`строк в плане нагрузки: ${planCount}`);
+
+        return res.status(409).json({
+            error: `Группу «${group.name}» нельзя удалить — ${parts.join(', ')}. Сначала очистите её, иначе вместе с группой пропадут и эти записи.`
+        });
+    }
+
+    db.prepare('DELETE FROM groups_ WHERE id = ?').run(groupId);
+
+    writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'group.delete',
+        entityType: 'group',
+        entityId: groupId,
+        ipAddress: getClientAddress(req),
+        details: { name: group.name }
+    });
+
+    res.json({ success: true, deleted: groupId });
 });
 
 router.post('/schedule/upload', (req, res) => {
@@ -679,41 +734,46 @@ router.post('/schedule/move-lesson', (req, res) => {
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week,
             template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, sort_order, load_plan_id
+            time_start, time_end, subject, room, lesson_type, teacher, sort_order,
+            kind, load_plan_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     try {
         if (payload.mode === 'template') {
-            const occupied = db.prepare(`
-                SELECT id FROM lessons
-                WHERE group_id = ? AND specific_week IS NULL AND day_of_week = ?
-                  AND time_start = ? AND time_end = ? AND subgroup = ?
-                  AND (week_type = 0 OR week_type = ?) AND is_removed = 0
-                LIMIT 1
-            `).get(
-                lesson.group_id,
-                payload.day_of_week,
-                payload.time_start,
-                payload.time_end,
-                lesson.subgroup,
-                lesson.week_type
-            );
+            // Shared with POST /lessons: resolves through tombstones (so an
+            // emptied cell reads as free) and treats "every week" as
+            // overlapping both parities (the raw query this replaced did not,
+            // so an "every week" pair could be dropped onto a чётная one).
+            const occupied = findTemplateSlotOccupant(db, {
+                groupId: lesson.group_id,
+                dayOfWeek: payload.day_of_week,
+                timeStart: payload.time_start,
+                timeEnd: payload.time_end,
+                subgroup: lesson.subgroup,
+                weekType: lesson.week_type,
+                targetWeek: currentWeek,
+                ignoreLessonId: lesson.id
+            });
 
             if (occupied) {
-                return res.status(409).json({ error: 'В этой ячейке уже есть занятие' });
+                return res.status(409).json({ error: `В этой ячейке уже есть занятие: ${occupied.subject}` });
             }
 
             const transaction = db.transaction(() => {
                 const statement = insertLesson();
 
                 // Tombstone at the old slot, effective from this week forward.
+                // It MUST carry the same load_plan_id: the hour counter selects a
+                // plan's rows by that column, so a tombstone written with NULL is
+                // invisible to it and the old slot keeps counting forever.
                 statement.run(
                     lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type, null,
                     currentWeek, 1,
                     lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
-                    lesson.lesson_type, lesson.teacher, lesson.sort_order, null
+                    lesson.lesson_type, lesson.teacher, lesson.sort_order,
+                    lesson.kind, lesson.load_plan_id
                 );
 
                 // Same lesson, new slot, same effective week.
@@ -721,7 +781,8 @@ router.post('/schedule/move-lesson', (req, res) => {
                     lesson.group_id, lesson.subgroup, payload.day_of_week, lesson.week_type, null,
                     currentWeek, 0,
                     payload.time_start, payload.time_end, lesson.subject, lesson.room,
-                    lesson.lesson_type, lesson.teacher, lesson.sort_order, lesson.load_plan_id
+                    lesson.lesson_type, lesson.teacher, lesson.sort_order,
+                    lesson.kind, lesson.load_plan_id
                 );
             });
 
@@ -731,22 +792,18 @@ router.post('/schedule/move-lesson', (req, res) => {
                 'SELECT 1 FROM lessons WHERE group_id = ? AND specific_week = ? LIMIT 1'
             ).get(lesson.group_id, payload.week_number);
 
-            const occupied = db.prepare(`
-                SELECT id FROM lessons
-                WHERE group_id = ? AND specific_week = ? AND day_of_week = ?
-                  AND time_start = ? AND time_end = ? AND subgroup = ?
-                LIMIT 1
-            `).get(
-                lesson.group_id,
-                payload.week_number,
-                payload.day_of_week,
-                payload.time_start,
-                payload.time_end,
-                lesson.subgroup
-            );
+            const occupied = findWeekSlotOccupant(db, {
+                groupId: lesson.group_id,
+                weekNumber: payload.week_number,
+                dayOfWeek: payload.day_of_week,
+                timeStart: payload.time_start,
+                timeEnd: payload.time_end,
+                subgroup: lesson.subgroup,
+                ignoreLessonId: lesson.id
+            });
 
             if (occupied) {
-                return res.status(409).json({ error: 'В этой ячейке уже есть занятие' });
+                return res.status(409).json({ error: `В этой ячейке уже есть занятие: ${occupied.subject}` });
             }
 
             if (alreadyMaterialized) {
@@ -756,10 +813,11 @@ router.post('/schedule/move-lesson', (req, res) => {
                     WHERE id = ?
                 `).run(payload.day_of_week, payload.time_start, payload.time_end, lesson.id);
             } else {
-                const weekTypeNumber = payload.week_number % 2 === 0 ? 2 : 1;
+                const weekTypeNumber = getWeekTypeForWeekNumber(semesterStart, payload.week_number);
                 const templateRows = db.prepare(`
                     SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
-                           time_start, time_end, subject, room, lesson_type, teacher, sort_order, load_plan_id
+                           time_start, time_end, subject, room, lesson_type, teacher, sort_order,
+                           kind, load_plan_id
                     FROM lessons
                     WHERE group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
                 `).all(lesson.group_id, weekTypeNumber);
@@ -786,7 +844,7 @@ router.post('/schedule/move-lesson', (req, res) => {
                             isMoved ? payload.time_start : row.time_start,
                             isMoved ? payload.time_end : row.time_end,
                             row.subject, row.room, row.lesson_type, row.teacher,
-                            sortOrder, row.load_plan_id
+                            sortOrder, row.kind, row.load_plan_id
                         );
                         sortOrder += 1;
                     }
@@ -843,10 +901,12 @@ router.post('/schedule/materialize-week', (req, res) => {
         return res.status(409).json({ error: 'Эта неделя уже содержит собственные записи' });
     }
 
-    const weekTypeNumber = payload.week_number % 2 === 0 ? 2 : 1;
+    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
+    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
+    const weekTypeNumber = getWeekTypeForWeekNumber(semesterStart, payload.week_number);
     const templateRows = db.prepare(`
         SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
-               time_start, time_end, subject, room, lesson_type, teacher
+               time_start, time_end, subject, room, lesson_type, teacher, kind, load_plan_id
         FROM lessons
         WHERE group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
     `).all(payload.group_id, weekTypeNumber);
@@ -871,7 +931,12 @@ router.post('/schedule/materialize-week', (req, res) => {
                     subject: payload.subject,
                     room: payload.room,
                     lesson_type: payload.lesson_type,
-                    teacher: payload.teacher
+                    teacher: payload.teacher,
+                    // Editing a slot in place keeps whatever the template row was
+                    // linked to — otherwise the first week edit would silently
+                    // detach the lesson from its load plan and drop its hours.
+                    kind: lesson.kind,
+                    load_plan_id: lesson.load_plan_id
                 });
             }
             // action === 'remove' — simply not carried into finalLessons
@@ -884,7 +949,9 @@ router.post('/schedule/materialize-week', (req, res) => {
                 subject: lesson.subject,
                 room: lesson.room,
                 lesson_type: lesson.lesson_type,
-                teacher: lesson.teacher
+                teacher: lesson.teacher,
+                kind: lesson.kind,
+                load_plan_id: lesson.load_plan_id
             });
         }
     }
@@ -898,7 +965,9 @@ router.post('/schedule/materialize-week', (req, res) => {
             subject: payload.subject,
             room: payload.room,
             lesson_type: payload.lesson_type,
-            teacher: payload.teacher
+            teacher: payload.teacher,
+            kind: 'lesson',
+            load_plan_id: null
         });
     }
 
@@ -907,9 +976,10 @@ router.post('/schedule/materialize-week', (req, res) => {
             INSERT INTO lessons (
                 group_id, subgroup, day_of_week, week_type, specific_week,
                 template_from_week, is_removed,
-                time_start, time_end, subject, room, lesson_type, teacher, sort_order
+                time_start, time_end, subject, room, lesson_type, teacher, sort_order,
+                kind, load_plan_id
             )
-            VALUES (?, ?, ?, 0, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 0, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         let count = 0;
@@ -926,7 +996,9 @@ router.post('/schedule/materialize-week', (req, res) => {
                 lesson.room,
                 lesson.lesson_type,
                 lesson.teacher,
-                count
+                count,
+                lesson.kind || 'lesson',
+                lesson.load_plan_id ?? null
             );
             count += 1;
         }
@@ -1025,6 +1097,36 @@ router.post('/lessons', (req, res) => {
     const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
     const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
     const templateFromWeek = getWeekMeta(semesterStart, formatLocalDate()).weekNumber;
+
+    // Without this, an "every week" pair could be created into a cell that
+    // already holds a чётная/нечётная one (the constructor's template view
+    // filters by exact parity, so such a cell looks empty). The result was two
+    // lessons rendered in one slot for students and double-counted hours for
+    // the teacher — see the slot-collision tests.
+    const occupant = payload.specific_week === null
+        ? findTemplateSlotOccupant(db, {
+            groupId: payload.group_id,
+            dayOfWeek: payload.day_of_week,
+            timeStart: payload.time_start,
+            timeEnd: payload.time_end,
+            subgroup: payload.subgroup,
+            weekType: payload.week_type,
+            targetWeek: templateFromWeek
+        })
+        : findWeekSlotOccupant(db, {
+            groupId: payload.group_id,
+            weekNumber: payload.specific_week,
+            dayOfWeek: payload.day_of_week,
+            timeStart: payload.time_start,
+            timeEnd: payload.time_end,
+            subgroup: payload.subgroup
+        });
+
+    if (occupant && !payload.is_removed) {
+        return res.status(409).json({
+            error: `В этой ячейке уже есть занятие: ${occupant.subject}. Откройте его, чтобы изменить, или сначала уберите.`
+        });
+    }
 
     const result = db.prepare(`
         INSERT INTO lessons (
@@ -1185,10 +1287,44 @@ router.delete('/lessons/:id', (req, res) => {
         return res.status(404).json({ error: 'Занятие не найдено' });
     }
 
-    db.prepare('DELETE FROM lessons WHERE id = ?').run(lessonId);
+    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
+    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
+    const currentWeek = getWeekMeta(semesterStart, formatLocalDate()).weekNumber;
+
+    // A template row that has already been live in earlier weeks is retired
+    // with a tombstone from this week forward, never erased: hard-deleting it
+    // would remove it from the PAST too, wiping hours a teacher had already
+    // taught. That is the same rule move-lesson uses; delete used to be the
+    // one edit path that still rewrote history.
+    const isLiveTemplateRow = lesson.specific_week === null
+        && lesson.is_removed === 0
+        && lesson.template_from_week < currentWeek;
+
+    if (isLiveTemplateRow) {
+        db.prepare(`
+            INSERT INTO lessons (
+                group_id, subgroup, day_of_week, week_type, specific_week,
+                template_from_week, is_removed,
+                time_start, time_end, subject, room, lesson_type, teacher, sort_order,
+                kind, load_plan_id
+            )
+            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type,
+            currentWeek,
+            lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
+            lesson.lesson_type, lesson.teacher, lesson.sort_order,
+            lesson.kind, lesson.load_plan_id
+        );
+    } else {
+        // Never been live in a past week (created this week or later), or it is
+        // a single week's own row — nothing in the past depends on it.
+        db.prepare('DELETE FROM lessons WHERE id = ?').run(lessonId);
+    }
+
     writeAuditLog(db, {
         adminId: req.admin.id,
-        action: 'lesson.delete',
+        action: isLiveTemplateRow ? 'lesson.retire' : 'lesson.delete',
         entityType: 'lesson',
         entityId: lessonId,
         ipAddress: getClientAddress(req),
@@ -1198,10 +1334,12 @@ router.delete('/lessons/:id', (req, res) => {
             day_of_week: lesson.day_of_week,
             time_start: lesson.time_start,
             time_end: lesson.time_end,
-            specific_week: lesson.specific_week
+            specific_week: lesson.specific_week,
+            retired_from_week: isLiveTemplateRow ? currentWeek : null
         }
     });
-    res.json({ success: true, deleted: lessonId });
+
+    res.json({ success: true, deleted: lessonId, retired_from_week: isLiveTemplateRow ? currentWeek : null });
 });
 
 router.get('/settings', (req, res) => {
@@ -1233,7 +1371,9 @@ router.put('/settings', (req, res) => {
     `);
 
     const updatedKeys = { semester_start_date: settingsPayload.semester_start_date };
-    upsert.run('semester_start_date', settingsPayload.semester_start_date);
+    // Writes both places at once — the schedule's week numbering and the
+    // active semester the hour counter walks must never disagree.
+    syncSemesterStartDate(db, settingsPayload.semester_start_date);
 
     for (const key of ['director_name', 'director_title', 'academic_year', 'study_form', 'term_parity']) {
         if (settingsPayload[key] !== null && settingsPayload[key] !== undefined) {
@@ -1377,6 +1517,93 @@ router.post('/teachers', (req, res) => {
     }
 });
 
+// Rename — the fix for "one letter wrong", so a typo doesn't force a
+// delete-and-recreate that would also detach every load_plan row already
+// entered against the old (mistyped) name.
+router.put('/teachers/:id', (req, res) => {
+    const teacherId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID преподавателя' });
+    }
+
+    let payload;
+
+    try {
+        payload = validateTeacherCreateBody(req.body);
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
+    const db = getDb();
+    const existing = db.prepare('SELECT * FROM teachers WHERE id = ?').get(teacherId);
+
+    if (!existing) {
+        return res.status(404).json({ error: 'Преподаватель не найден' });
+    }
+
+    try {
+        db.prepare('UPDATE teachers SET full_name = ? WHERE id = ?').run(payload.full_name, teacherId);
+
+        writeAuditLog(db, {
+            adminId: req.admin.id,
+            action: 'teacher.update',
+            entityType: 'teacher',
+            entityId: teacherId,
+            ipAddress: getClientAddress(req),
+            details: { before: existing.full_name, after: payload.full_name }
+        });
+
+        res.json(db.prepare('SELECT * FROM teachers WHERE id = ?').get(teacherId));
+    } catch (error) {
+        if (String(error.message).includes('UNIQUE')) {
+            return res.status(409).json({ error: 'Такой преподаватель уже есть в справочнике' });
+        }
+
+        console.error('Teacher update error:', error);
+        res.status(500).json({ error: 'Не удалось переименовать преподавателя' });
+    }
+});
+
+// Blocked while any load_plan row still references this teacher — deleting
+// through that would silently cascade-delete those rows (and whatever hours
+// were already tracked in them). Reassign or remove those rows first.
+router.delete('/teachers/:id', (req, res) => {
+    const teacherId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID преподавателя' });
+    }
+
+    const db = getDb();
+    const existing = db.prepare('SELECT * FROM teachers WHERE id = ?').get(teacherId);
+
+    if (!existing) {
+        return res.status(404).json({ error: 'Преподаватель не найден' });
+    }
+
+    const planCount = db.prepare('SELECT COUNT(*) c FROM load_plan WHERE teacher_id = ?').get(teacherId).c;
+
+    if (planCount > 0) {
+        return res.status(409).json({
+            error: `У этого преподавателя ${planCount} ${pluralizePlanRows(planCount)} в плане нагрузки. Удалите или измените их, затем удаляйте преподавателя.`
+        });
+    }
+
+    db.prepare('DELETE FROM teachers WHERE id = ?').run(teacherId);
+
+    writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'teacher.delete',
+        entityType: 'teacher',
+        entityId: teacherId,
+        ipAddress: getClientAddress(req),
+        details: { full_name: existing.full_name }
+    });
+
+    res.json({ success: true });
+});
+
 router.get('/disciplines', (req, res) => {
     const db = getDb();
     const rows = db.prepare('SELECT * FROM disciplines ORDER BY name').all();
@@ -1416,6 +1643,184 @@ router.post('/disciplines', (req, res) => {
         console.error('Discipline create error:', error);
         res.status(500).json({ error: 'Не удалось добавить дисциплину' });
     }
+});
+
+router.put('/disciplines/:id', (req, res) => {
+    const disciplineId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(disciplineId) || disciplineId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID дисциплины' });
+    }
+
+    let payload;
+
+    try {
+        payload = validateDisciplineCreateBody(req.body);
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
+    const db = getDb();
+    const existing = db.prepare('SELECT * FROM disciplines WHERE id = ?').get(disciplineId);
+
+    if (!existing) {
+        return res.status(404).json({ error: 'Дисциплина не найдена' });
+    }
+
+    try {
+        db.prepare('UPDATE disciplines SET name = ? WHERE id = ?').run(payload.name, disciplineId);
+
+        writeAuditLog(db, {
+            adminId: req.admin.id,
+            action: 'discipline.update',
+            entityType: 'discipline',
+            entityId: disciplineId,
+            ipAddress: getClientAddress(req),
+            details: { before: existing.name, after: payload.name }
+        });
+
+        res.json(db.prepare('SELECT * FROM disciplines WHERE id = ?').get(disciplineId));
+    } catch (error) {
+        if (String(error.message).includes('UNIQUE')) {
+            return res.status(409).json({ error: 'Такая дисциплина уже есть в справочнике' });
+        }
+
+        console.error('Discipline update error:', error);
+        res.status(500).json({ error: 'Не удалось переименовать дисциплину' });
+    }
+});
+
+router.delete('/disciplines/:id', (req, res) => {
+    const disciplineId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(disciplineId) || disciplineId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID дисциплины' });
+    }
+
+    const db = getDb();
+    const existing = db.prepare('SELECT * FROM disciplines WHERE id = ?').get(disciplineId);
+
+    if (!existing) {
+        return res.status(404).json({ error: 'Дисциплина не найдена' });
+    }
+
+    const planCount = db.prepare('SELECT COUNT(*) c FROM load_plan WHERE discipline_id = ?').get(disciplineId).c;
+
+    if (planCount > 0) {
+        return res.status(409).json({
+            error: `Эта дисциплина используется в ${planCount} ${pluralizePlanRows(planCount)} плана нагрузки. Удалите или измените их, затем удаляйте дисциплину.`
+        });
+    }
+
+    db.prepare('DELETE FROM disciplines WHERE id = ?').run(disciplineId);
+
+    writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'discipline.delete',
+        entityType: 'discipline',
+        entityId: disciplineId,
+        ipAddress: getClientAddress(req),
+        details: { name: existing.name }
+    });
+
+    res.json({ success: true });
+});
+
+/**
+ * Dry run for "what happens to everyone's hours if I change the semester's
+ * start date or length". Both settings silently re-derive every teacher's
+ * total — start_date moves every lesson date, weeks_count is the ceiling the
+ * counter stops at — so the UI asks this first and shows the damage before
+ * writing anything. Computes only, never writes.
+ */
+router.get('/semesters/:id/impact', (req, res) => {
+    const semesterId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(semesterId) || semesterId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID семестра' });
+    }
+
+    const db = getDb();
+    const semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+
+    if (!semester) {
+        return res.status(404).json({ error: 'Семестр не найден' });
+    }
+
+    const nextStartDate = typeof req.query.start_date === 'string' && req.query.start_date
+        ? req.query.start_date
+        : semester.start_date;
+    const nextWeeksCount = req.query.weeks_count ? Number.parseInt(req.query.weeks_count, 10) : semester.weeks_count;
+
+    if (!isValidIsoDate(nextStartDate)) {
+        return res.status(400).json({ error: 'Некорректная дата начала' });
+    }
+
+    if (!Number.isInteger(nextWeeksCount) || nextWeeksCount < 1 || nextWeeksCount > 52) {
+        return res.status(400).json({ error: 'Некорректное число недель' });
+    }
+
+    const planRows = db.prepare(`
+        SELECT lp.id, lp.group_id, lp.teacher_id, t.full_name AS teacher_name
+        FROM load_plan lp JOIN teachers t ON t.id = lp.teacher_id
+        WHERE lp.semester_id = ?
+    `).all(semesterId);
+
+    const exceptionCache = new Map();
+    const exceptionWeeksFor = (groupId, weeksCount) => {
+        const key = `${groupId}:${weeksCount}`;
+        if (!exceptionCache.has(key)) {
+            const overrides = db.prepare(
+                'SELECT specific_week FROM lessons WHERE group_id = ? AND specific_week IS NOT NULL'
+            ).all(groupId);
+            exceptionCache.set(key, computeExceptionWeeks(overrides, weeksCount));
+        }
+        return exceptionCache.get(key);
+    };
+
+    const changedTeachers = new Set();
+    let hoursBefore = 0;
+    let hoursAfter = 0;
+    let changedRows = 0;
+
+    for (const row of planRows) {
+        const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ?').all(row.id);
+        const before = computeLoadProgress({
+            semesterStartDate: semester.start_date,
+            weeksCount: semester.weeks_count,
+            linkedLessons,
+            exceptionWeeks: exceptionWeeksFor(row.group_id, semester.weeks_count)
+        }).occurred_hours;
+        const after = computeLoadProgress({
+            semesterStartDate: nextStartDate,
+            weeksCount: nextWeeksCount,
+            linkedLessons,
+            exceptionWeeks: exceptionWeeksFor(row.group_id, nextWeeksCount)
+        }).occurred_hours;
+
+        hoursBefore += before;
+        hoursAfter += after;
+
+        if (before !== after) {
+            changedRows += 1;
+            changedTeachers.add(row.teacher_name);
+        }
+    }
+
+    res.json({
+        current: { start_date: semester.start_date, weeks_count: semester.weeks_count },
+        proposed: { start_date: nextStartDate, weeks_count: nextWeeksCount },
+        last_week: {
+            current: addDaysToIsoDate(semester.start_date, (semester.weeks_count - 1) * 7),
+            proposed: addDaysToIsoDate(nextStartDate, (nextWeeksCount - 1) * 7)
+        },
+        plan_rows_total: planRows.length,
+        plan_rows_changed: changedRows,
+        teachers_changed: changedTeachers.size,
+        teacher_names: [...changedTeachers].sort((a, b) => a.localeCompare(b, 'ru')).slice(0, 10),
+        hours_before: hoursBefore,
+        hours_after: hoursAfter
+    });
 });
 
 router.get('/semesters', (req, res) => {
@@ -1488,6 +1893,13 @@ router.put('/semesters/:id', (req, res) => {
             SET label = ?, start_date = ?, weeks_count = ?, is_active = ?
             WHERE id = ?
         `).run(next.label, next.start_date, next.weeks_count, next.is_active ? 1 : 0, semesterId);
+
+        // Whichever semester is now the active one dictates the date the
+        // schedule numbers its weeks from — see syncSemesterStartDate.
+        const active = db.prepare('SELECT start_date FROM semesters WHERE is_active = 1').get();
+        if (active) {
+            syncSemesterStartDate(db, active.start_date);
+        }
     });
 
     transaction();
@@ -1725,13 +2137,41 @@ router.put('/load-plan/:id', (req, res) => {
         return res.status(404).json({ error: 'Строка плана не найдена' });
     }
 
+    if (payload.teacher_id !== undefined && !db.prepare('SELECT id FROM teachers WHERE id = ?').get(payload.teacher_id)) {
+        return res.status(404).json({ error: 'Преподаватель не найден' });
+    }
+
+    if (payload.discipline_id !== undefined && !db.prepare('SELECT id FROM disciplines WHERE id = ?').get(payload.discipline_id)) {
+        return res.status(404).json({ error: 'Дисциплина не найдена' });
+    }
+
+    if (payload.group_id !== undefined && !db.prepare('SELECT id FROM groups_ WHERE id = ?').get(payload.group_id)) {
+        return res.status(404).json({ error: 'Группа не найдена' });
+    }
+
+    // Changing the group out from under linked lessons would leave them
+    // pointing at a plan row whose group no longer matches where they
+    // actually live — unlink first, then the group is free to change.
+    if (payload.group_id !== undefined && payload.group_id !== existing.group_id) {
+        const linkedCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE load_plan_id = ?').get(planId).c;
+        if (linkedCount > 0) {
+            return res.status(409).json({
+                error: `К этой строке привязано пар: ${linkedCount}. Сначала отвяжите их («Привязать пару» → снять привязку), потом меняйте группу.`
+            });
+        }
+    }
+
     const next = { ...existing, ...payload };
 
     db.prepare(`
         UPDATE load_plan
-        SET planned_hours = ?, confirmed = ?, updated_at = CURRENT_TIMESTAMP
+        SET teacher_id = ?, discipline_id = ?, lesson_type = ?, group_id = ?, subgroup = ?,
+            planned_hours = ?, confirmed = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-    `).run(next.planned_hours, next.confirmed ? 1 : 0, planId);
+    `).run(
+        next.teacher_id, next.discipline_id, next.lesson_type, next.group_id, next.subgroup,
+        next.planned_hours, next.confirmed ? 1 : 0, planId
+    );
 
     const updated = db.prepare(`
         SELECT lp.*, t.full_name AS teacher_name, d.name AS discipline_name, g.name AS group_name
@@ -1799,17 +2239,25 @@ router.put('/lessons/:id/load-plan', (req, res) => {
     }
 
     const db = getDb();
-    const lesson = db.prepare('SELECT id FROM lessons WHERE id = ?').get(lessonId);
+    const lesson = db.prepare('SELECT id, group_id FROM lessons WHERE id = ?').get(lessonId);
 
     if (!lesson) {
         return res.status(404).json({ error: 'Занятие не найдено' });
     }
 
     if (payload.load_plan_id !== null) {
-        const plan = db.prepare('SELECT id FROM load_plan WHERE id = ?').get(payload.load_plan_id);
+        const plan = db.prepare('SELECT id, group_id FROM load_plan WHERE id = ?').get(payload.load_plan_id);
 
         if (!plan) {
             return res.status(404).json({ error: 'Строка плана не найдена' });
+        }
+
+        // Otherwise a pair from one group could feed hours into another
+        // group's plan row — the hours would be real, just billed to the
+        // wrong line. The UI only ever offers same-group pairs; this closes
+        // the same hole at the API.
+        if (plan.group_id !== lesson.group_id) {
+            return res.status(409).json({ error: 'Пара и строка плана относятся к разным группам' });
         }
     }
 
@@ -1829,6 +2277,32 @@ router.put('/lessons/:id/load-plan', (req, res) => {
 
 function mapSemesterRow(row) {
     return { ...row, is_active: Boolean(row.is_active) };
+}
+
+/**
+ * "When does the semester start" is asked by two different parts of the app:
+ * settings.semester_start_date numbers the weeks the schedule is built on,
+ * and semesters.start_date anchors the dates the hour counter walks. They are
+ * the same real-world fact, so letting them drift apart means the schedule and
+ * the hours silently count by different week numbering — a teacher's total
+ * would stop matching the timetable it was derived from. Every write to either
+ * one goes through here so they move together.
+ */
+function syncSemesterStartDate(db, startDate) {
+    db.prepare(`
+        INSERT INTO settings (key, value) VALUES ('semester_start_date', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(startDate);
+
+    db.prepare('UPDATE semesters SET start_date = ? WHERE is_active = 1').run(startDate);
+}
+
+function pluralizePlanRows(count) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'строка';
+    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'строки';
+    return 'строк';
 }
 
 // One request can list many load_plan rows that share a group+semester —
@@ -1871,7 +2345,7 @@ function attachLoadProgress(db, planRow, exceptionWeeksCache = new Map()) {
             occurred_hours: progress.occurred_hours,
             occurred_count: progress.occurred_count,
             planned_hours: planRow.planned_hours,
-            remaining_hours: Math.max(0, planRow.planned_hours - progress.occurred_hours)
+            remaining_hours: planRow.planned_hours === null ? null : Math.max(0, planRow.planned_hours - progress.occurred_hours)
         }
     };
 }

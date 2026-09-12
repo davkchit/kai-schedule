@@ -56,9 +56,42 @@ function getSemesterWeekNumber(semesterStartDate, targetDate) {
     return Math.max(1, rawWeekNumber);
 }
 
+/**
+ * ISO-8601 week number of the calendar year (weeks start Monday; week 1 is the
+ * one containing the first Thursday).
+ */
+function getIsoWeekNumber(isoDate) {
+    const date = new Date(toUtcMsFromIsoDate(isoDate));
+    const dayOfWeek = date.getUTCDay() || 7; // Sunday is 7, not 0
+
+    date.setUTCDate(date.getUTCDate() + 4 - dayOfWeek); // move to that week's Thursday
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+
+    return Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+}
+
+/**
+ * Odd/even parity is NOT the semester week number's parity — the department
+ * labels its "чётная/нечётная" sheets by the ISO calendar week of the year.
+ * Verified against both published week files for autumn 2026: 1–5 Sept is ISO
+ * week 36 and is labelled ЧЁТНАЯ, 7–12 Sept is ISO 37 and НЕЧЁТНАЯ.
+ *
+ * So the two concepts come from two different sources and must stay separate:
+ *   week NUMBER ← semester start date (drives template versions and overrides)
+ *   week PARITY ← ISO calendar week  (drives which template rows apply)
+ */
+function getWeekTypeNumber(isoDate) {
+    return getIsoWeekNumber(isoDate) % 2 === 0 ? 2 : 1;
+}
+
+/** Parity of a semester week identified by its number rather than by a date. */
+function getWeekTypeForWeekNumber(semesterStartDate, weekNumber) {
+    return getWeekTypeNumber(addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7));
+}
+
 function getWeekMeta(semesterStartDate, targetDate) {
     const weekNumber = getSemesterWeekNumber(semesterStartDate, targetDate);
-    const weekTypeNumber = weekNumber % 2 === 0 ? 2 : 1;
+    const weekTypeNumber = getWeekTypeNumber(targetDate);
 
     return {
         weekNumber,
@@ -71,8 +104,11 @@ function getWeekMeta(semesterStartDate, targetDate) {
 module.exports = {
     addDaysToIsoDate,
     formatLocalDate,
+    getIsoWeekNumber,
     getSemesterWeekNumber,
     getWeekMeta,
+    getWeekTypeForWeekNumber,
+    getWeekTypeNumber,
     isValidIsoDate,
     isValidTime
 };

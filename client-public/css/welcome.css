@@ -357,28 +357,38 @@ body {
 }
 
 .teacher-link {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     width: fit-content;
     margin: 20px auto 0;
-    padding: 12px 26px;
-    background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(16px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    padding: 11px 20px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.16);
     border-radius: 999px;
-    color: var(--text-primary);
+    color: #2563eb;
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
-    box-shadow: 0 6px 20px rgba(124, 185, 232, 0.16);
     animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
     transition: transform 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
                 box-shadow 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
                 background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
+.teacher-link svg {
+    flex-shrink: 0;
+    transition: transform 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+}
+
 .teacher-link:hover {
+    background: rgba(59, 130, 246, 0.16);
     transform: translateY(-2px);
-    box-shadow: 0 10px 28px rgba(124, 185, 232, 0.22);
+    box-shadow: 0 8px 20px rgba(59, 130, 246, 0.18);
+}
+
+.teacher-link:hover svg:last-child {
+    transform: translateX(3px);
 }
 
 .teacher-link:active {
@@ -387,14 +397,14 @@ body {
 }
 
 [data-theme="dark"] .teacher-link {
-    background: rgba(30, 41, 59, 0.75);
-    border-color: rgba(255, 255, 255, 0.08);
-    color: #f1f5f9;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+    background: rgba(59, 130, 246, 0.16);
+    border-color: rgba(96, 165, 250, 0.25);
+    color: #93c5fd;
 }
 
 [data-theme="dark"] .teacher-link:hover {
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+    background: rgba(59, 130, 246, 0.24);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
 .back-button.hidden {

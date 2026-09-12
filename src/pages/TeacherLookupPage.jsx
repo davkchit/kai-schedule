@@ -98,9 +98,14 @@ export default function TeacherLookupPage() {
     const totals = useMemo(() => visibleRows.reduce(
         (accumulator, row) => ({
             occurred: accumulator.occurred + row.occurred_hours,
-            planned: accumulator.planned + row.planned_hours
+            // A row with no plan hours yet doesn't contribute to the planned
+            // total — otherwise one unset row (auto-created from an imported
+            // schedule, awaiting the specialist) would make the whole totals
+            // line a meaningless partial number instead of just excluding it.
+            planned: accumulator.planned + (row.planned_hours ?? 0),
+            hasUnplanned: accumulator.hasUnplanned || row.planned_hours === null
         }),
-        { occurred: 0, planned: 0 }
+        { occurred: 0, planned: 0, hasUnplanned: false }
     ), [visibleRows]);
 
     function flashValidationError() {
@@ -359,7 +364,7 @@ export default function TeacherLookupPage() {
                                                     Итого{dayFilter === 'all' && !listQuery.trim() ? '' : ' по отфильтрованным'}
                                                 </span>
                                                 <span className="tl-totals-value">
-                                                    {totals.occurred} / {totals.planned} ч
+                                                    {totals.occurred} / {totals.planned}{totals.hasUnplanned ? '+' : ''} ч
                                                 </span>
                                             </div>
                                         </>
@@ -377,10 +382,11 @@ export default function TeacherLookupPage() {
 function LoadRow({ row }) {
     const typeMeta = TYPE_META[row.lesson_type] || { short: row.lesson_type.slice(0, 4), tone: 'default' };
     const lastDate = lastOccurredDate(row.occurrences);
-    const percent = row.planned_hours > 0
+    const hasPlan = row.planned_hours !== null;
+    const percent = hasPlan && row.planned_hours > 0
         ? Math.min(100, Math.round((row.occurred_hours / row.planned_hours) * 100))
         : 0;
-    const isComplete = row.occurred_hours >= row.planned_hours;
+    const isComplete = hasPlan && row.occurred_hours >= row.planned_hours;
 
     return (
         <tr>
@@ -400,7 +406,7 @@ function LoadRow({ row }) {
             <td data-label="Часов">
                 <div className="tl-hours-cell">
                     <span className={`tl-hours-value ${isComplete ? 'is-complete' : ''}`}>
-                        {row.occurred_hours}/{row.planned_hours}
+                        {hasPlan ? `${row.occurred_hours}/${row.planned_hours}` : `${row.occurred_hours}/—`}
                     </span>
                     <span className="tl-progress-track">
                         <span
