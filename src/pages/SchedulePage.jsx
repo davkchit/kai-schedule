@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
-import { capitalize, formatLocalDateForApi, getSemesterWeekNumber, normalizeDate } from '../lib/date';
+import { capitalize, formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeNumber, normalizeDate } from '../lib/date';
 import { clearSelection, getSavedSelection, getSavedTheme, saveTheme } from '../lib/storage';
 import { resolveTemplateLessons } from '../lib/templateResolve';
 
@@ -681,7 +681,9 @@ function buildScheduleDays(scheduleData, currentDate) {
         const dayOfWeek = iterDate.getDay();
         const isoDayOfWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
         const weekNumber = getSemesterWeekNumber(scheduleData.semester_start, iterDate);
-        const currentWeekType = weekNumber % 2 === 0 ? 2 : 1;
+        // Must be the same parity the server counts hours with — see
+        // tests/weekParity.parity.test.js for what happens when it isn't.
+        const currentWeekType = getWeekTypeNumber(iterDate);
         const hasExceptionWeek = exceptionWeeks.has(weekNumber);
 
         const lessonsForDay = byDay[isoDayOfWeek] || [];

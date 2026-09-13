@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
-import { formatLocalDateForApi, getSemesterWeekNumber } from '../lib/date';
+import { formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeNumber } from '../lib/date';
 import { resolveTemplateLessons } from '../lib/templateResolve';
 import AdminLoadSection from './AdminLoadSection';
 
@@ -428,7 +428,8 @@ export default function AdminDashboardPage() {
             );
         }
 
-        const weekTypeNumber = builderWeekNumber % 2 === 0 ? 2 : 1;
+        // Same parity the server and the student schedule use.
+        const weekTypeNumber = getWeekTypeNumber(builderWeekStart);
         const candidates = lessons.filter((lesson) =>
             lesson.day_of_week === day &&
             lesson.time_start === timeStart &&
