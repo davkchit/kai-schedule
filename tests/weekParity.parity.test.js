@@ -73,3 +73,48 @@ test('week parity: no page computes parity inline instead of calling the shared 
 
     assert.deepEqual(offenders, [], 'parity must come from getWeekTypeNumber in src/lib/date.js');
 });
+
+test('semester week parity: the browser and the server resolve week N identically for both first-week parities', async () => {
+    // Since parity is stored per semester, THIS is the rule that picks the
+    // template a week shows; the calendar parity above is only its default.
+    const { getWeekTypeForSemesterWeek: client } = await loadClientDateLib();
+    const { getWeekTypeForSemesterWeek: server } = require('../server/utils/date');
+
+    for (const first of [1, 2]) {
+        for (let week = 1; week <= 53; week += 1) {
+            assert.equal(client(first, week), server(first, week), `first=${first} week=${week}`);
+        }
+    }
+});
+
+test('semester week parity: strictly alternates across a 53-week year, unlike the calendar', () => {
+    // 2026 has 53 ISO weeks: 28.12.2026 (week 53) and 04.01.2027 (week 1) are
+    // both нечётная by the calendar. A semester running through New Year must
+    // still alternate — the department's timetable never repeats a parity.
+    const { getSemesterWeekMeta } = require('../server/utils/date');
+    const semester = { start_date: '2026-09-07', first_week_parity: 1 };
+    const types = [];
+
+    for (let week = 0; week < 20; week += 1) {
+        const monday = new Date(Date.UTC(2026, 8, 7 + week * 7));
+        types.push(getSemesterWeekMeta(semester, isoFromUtc(monday.getTime())).weekTypeNumber);
+    }
+
+    types.forEach((type, index) => {
+        if (index > 0) assert.notEqual(type, types[index - 1], `weeks ${index} and ${index + 1} have the same parity`);
+    });
+    assert.equal(serverParity('2026-12-28'), serverParity('2027-01-04'), 'calendar parity really does repeat here');
+});
+
+test('semester weeks run Monday–Sunday even when the start date is not a Monday', async () => {
+    // A start date entered as the first teaching day (Tuesday 9 Feb 2027) must
+    // not make weeks run Tuesday–Monday: Monday 15 Feb is week 2, not week 1.
+    const { getSemesterWeekNumber: client } = await loadClientDateLib();
+    const { getSemesterWeekNumber: server } = require('../server/utils/date');
+
+    for (const [day, expected] of [['2027-02-08', 1], ['2027-02-14', 1], ['2027-02-15', 2], ['2027-02-22', 3]]) {
+        const [y, m, d] = day.split('-').map(Number);
+        assert.equal(server('2027-02-09', day), expected, `server ${day}`);
+        assert.equal(client('2027-02-09', new Date(y, m - 1, d)), expected, `client ${day}`);
+    }
+});

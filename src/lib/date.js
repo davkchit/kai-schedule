@@ -22,7 +22,10 @@ export function capitalize(text) {
 
 export function getSemesterWeekNumber(semesterStartDate, targetDate) {
     const [startYear, startMonth, startDay] = semesterStartDate.split('-').map(Number);
-    const semesterStartUtc = Date.UTC(startYear, startMonth - 1, startDay);
+    // Weeks run Monday–Sunday whatever weekday the start date falls on —
+    // mirrors mondayOfWeek in server/utils/date.js.
+    const startWeekday = new Date(Date.UTC(startYear, startMonth - 1, startDay)).getUTCDay() || 7;
+    const semesterStartUtc = Date.UTC(startYear, startMonth - 1, startDay - (startWeekday - 1));
     const targetUtc = Date.UTC(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
     const rawWeekNumber = Math.floor((targetUtc - semesterStartUtc) / (7 * 24 * 60 * 60 * 1000)) + 1;
 
@@ -41,10 +44,25 @@ export function getIsoWeekNumber(targetDate) {
 }
 
 /**
- * Odd/even parity follows the ISO calendar week, not the semester week number —
- * that is how the department labels its published чётная/нечётная sheets.
+ * Calendar (ISO week) parity — only the default for a semester's first week.
  * Kept in parity with getWeekTypeNumber in server/utils/date.js.
  */
 export function getWeekTypeNumber(targetDate) {
     return getIsoWeekNumber(targetDate) % 2 === 0 ? 2 : 1;
+}
+
+/**
+ * Parity of week N of a semester from its stored week-1 parity, strictly
+ * alternating. This — not the calendar — is what decides which template a
+ * week shows. Mirrors getWeekTypeForSemesterWeek in server/utils/date.js; see
+ * there for why parity is stored per semester instead of derived.
+ */
+export function getWeekTypeForSemesterWeek(firstWeekParity, weekNumber) {
+    const first = firstWeekParity === 1 ? 1 : 2;
+    return weekNumber % 2 === 1 ? first : (first === 1 ? 2 : 1);
+}
+
+/** ISO date string (YYYY-MM-DD) for a local calendar date. */
+export function toIsoDate(date) {
+    return formatLocalDateForApi(date);
 }

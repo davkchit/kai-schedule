@@ -83,6 +83,21 @@
     color: var(--text-secondary);
 }
 
+.tl-semester-select {
+    align-self: flex-start;
+    font-family: inherit;
+    background: transparent;
+    border: 1px solid rgba(107, 114, 128, 0.35);
+    border-radius: 8px;
+    padding: 4px 8px;
+    cursor: pointer;
+    max-width: 100%;
+}
+
+[data-theme="dark"] .tl-semester-select option {
+    background: #1e293b;
+}
+
 /* welcome.css pushes .back-button to the left edge of a centred column; here
    it sits opposite the name instead. */
 .back-button.tl-back {

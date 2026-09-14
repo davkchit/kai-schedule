@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { defaultFirstWeekParity, formatLocalDate, isValidIsoDate, mondayOfWeek } = require('./utils/date');
 
 const DEFAULT_DB_PATH = path.join(__dirname, '..', 'data', 'schedule.db');
 
@@ -308,6 +309,127 @@ function initTables() {
     }
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_load_plan ON lessons(load_plan_id)');
+
+    migrateSemesterScoping();
+}
+
+/**
+ * Scopes every lesson to a semester.
+ *
+ * Before this, lessons had no semester at all, while their week numbers
+ * (specific_week, template_from_week) were relative to whichever semester
+ * happened to be current. The moment a new semester started, every stored
+ * week number was silently re-read against the new start date — autumn's
+ * "week 1" rows showed up as spring's week 1 for students, and editing the
+ * template for spring wrote week numbers that autumn's hour counter read as
+ * its own, erasing hours already taught. Owning the semester on the row makes
+ * each semester's week numbers mean one thing forever.
+ *
+ * Also records each semester's first-week parity (see
+ * getWeekTypeForSemesterWeek in utils/date.js for why it is stored rather
+ * than derived).
+ */
+function migrateSemesterScoping() {
+    try {
+        db.exec('ALTER TABLE semesters ADD COLUMN first_week_parity INTEGER NOT NULL DEFAULT 0');
+        // 0 marks "not yet decided" for rows that existed before this column —
+        // filled below from the calendar rule, which is what they used until now.
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
+    // At most one working semester, enforced by the database itself. Several
+    // things read "the active semester" and assume a single answer — with two,
+    // a date sync would overwrite both and read back an arbitrary one. The API
+    // already deactivates the others on activation; this makes any other path
+    // (a script, raw SQL) unable to create the ambiguous state at all.
+    const activeRows = db.prepare('SELECT id FROM semesters WHERE is_active = 1 ORDER BY start_date DESC, id DESC').all();
+    if (activeRows.length > 1) {
+        db.prepare(`UPDATE semesters SET is_active = 0 WHERE is_active = 1 AND id != ?`).run(activeRows[0].id);
+    }
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_semesters_single_active ON semesters(is_active) WHERE is_active = 1');
+
+    // Semester weeks run Monday–Sunday; a start date entered as the first
+    // teaching day (e.g. a Tuesday) is moved to that week's Monday. Week
+    // numbers of every existing row stay the same — it is the same week.
+    const setStart = db.prepare('UPDATE semesters SET start_date = ? WHERE id = ?');
+    for (const semester of db.prepare('SELECT id, start_date FROM semesters').all()) {
+        const monday = mondayOfWeek(semester.start_date);
+        if (monday !== semester.start_date) setStart.run(monday, semester.id);
+    }
+    const startSetting = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
+    if (startSetting && isValidIsoDate(startSetting.value) && mondayOfWeek(startSetting.value) !== startSetting.value) {
+        db.prepare("UPDATE settings SET value = ? WHERE key = 'semester_start_date'").run(mondayOfWeek(startSetting.value));
+    }
+
+    const undecided = db.prepare('SELECT id, start_date FROM semesters WHERE first_week_parity NOT IN (1, 2)').all();
+    const setParity = db.prepare('UPDATE semesters SET first_week_parity = ? WHERE id = ?');
+    for (const semester of undecided) {
+        setParity.run(defaultFirstWeekParity(semester.start_date), semester.id);
+    }
+
+    try {
+        db.exec('ALTER TABLE lessons ADD COLUMN semester_id INTEGER REFERENCES semesters(id) ON DELETE CASCADE');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
+    db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_semester_group ON lessons(semester_id, group_id)');
+
+    const unscopedCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE semester_id IS NULL').get().c;
+
+    if (unscopedCount > 0) {
+        // Lessons that predate scoping all belong to the one semester the app
+        // was operating in — the active one, else the most recent, else one
+        // created from the schedule's own start-date setting.
+        const owner = ensureWorkingSemester();
+        db.prepare('UPDATE lessons SET semester_id = ? WHERE semester_id IS NULL').run(owner.id);
+    }
+
+    // Safety net for any insert path that does not pass a semester (seed
+    // scripts, raw SQL, future code): it lands in the working semester rather
+    // than staying unscoped and leaking into every semester at once. Every
+    // route sets semester_id explicitly; this only catches omissions.
+    db.exec(`
+        CREATE TRIGGER IF NOT EXISTS lessons_default_semester
+        AFTER INSERT ON lessons
+        WHEN NEW.semester_id IS NULL
+        BEGIN
+            UPDATE lessons
+            SET semester_id = (
+                SELECT id FROM semesters
+                ORDER BY is_active DESC, start_date DESC, id DESC
+                LIMIT 1
+            )
+            WHERE id = NEW.id;
+        END;
+    `);
+}
+
+/**
+ * The semester admin edits go into: the active one; else the most recent,
+ * promoted to active; else a new one created from settings.semester_start_date
+ * so a database that only ever had the old single-semester setting keeps
+ * working unchanged.
+ */
+function ensureWorkingSemester() {
+    const active = db.prepare('SELECT * FROM semesters WHERE is_active = 1 ORDER BY start_date DESC LIMIT 1').get();
+    if (active) return active;
+
+    const latest = db.prepare('SELECT * FROM semesters ORDER BY start_date DESC, id DESC LIMIT 1').get();
+    if (latest) {
+        db.prepare('UPDATE semesters SET is_active = 1 WHERE id = ?').run(latest.id);
+        return { ...latest, is_active: 1 };
+    }
+
+    const setting = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
+    const startDate = setting ? setting.value : formatLocalDate();
+    const result = db.prepare(`
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES ('Текущий семестр', ?, 18, 1, ?)
+    `).run(startDate, defaultFirstWeekParity(startDate));
+
+    return db.prepare('SELECT * FROM semesters WHERE id = ?').get(result.lastInsertRowid);
 }
 
 function migrateLessonsDayOfWeekConstraint() {

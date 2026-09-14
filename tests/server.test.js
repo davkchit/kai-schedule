@@ -867,9 +867,10 @@ test('deleting a template pair mid-semester retires it forward instead of erasin
     const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Историк И.И.')").run().lastInsertRowid;
     const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('История часов')").run().lastInsertRowid;
     // A semester entirely in the past, so every week has already elapsed.
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES ('Прошлый', '2026-02-09', 6, 1)
-    `).run().lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 6 WHERE id = ?').run(semesterId);
     const planId = db.prepare(`
         INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
         VALUES (?, ?, ?, 'Лекция', ?, 40)
@@ -943,9 +944,10 @@ test('a lesson cannot be linked to a load_plan row belonging to a different grou
 
     const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Чужой Ч.Ч.')").run().lastInsertRowid;
     const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Чужая дисциплина')").run().lastInsertRowid;
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES ('Ч', '2026-02-09', 4, 1)
-    `).run().lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(semesterId);
     const foreignPlanId = db.prepare(`
         INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
         VALUES (?, ?, ?, 'Лекция', ?, 10)
@@ -1031,9 +1033,10 @@ test('move in template mode carries load_plan_id onto the tombstone, so the hour
 
     const teacherId = db.prepare('INSERT INTO teachers (full_name) VALUES (?)').run('Тестов Т.Т.').lastInsertRowid;
     const disciplineId = db.prepare('INSERT INTO disciplines (name) VALUES (?)').run('Тестовая дисциплина').lastInsertRowid;
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES (?, ?, ?, 1)
-    `).run('Тест', '2026-02-09', 18).lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 18 WHERE id = ?').run(semesterId);
     const planId = db.prepare(`
         INSERT INTO load_plan (teacher_id, discipline_id, lesson_type, group_id, semester_id, planned_hours)
         VALUES (?, ?, 'Лекция', ?, ?, 36)
@@ -1299,9 +1302,10 @@ test('teachers and disciplines: rename fixes a typo, delete is blocked while a l
         body: JSON.stringify({ full_name: 'Второй В.В.' })
     })).json()).id;
 
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES ('Т', '2026-02-09', 4, 1)
-    `).run().lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(semesterId);
     db.prepare(`
         INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
         VALUES (?, ?, ?, 'Лекция', ?, 10)
@@ -1475,9 +1479,10 @@ test('the schedule\'s semester start and the load semester\'s start move togethe
     const context = await createTestContext();
     const db = getDb();
 
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES ('С', '2026-02-09', 18, 1)
-    `).run().lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 18 WHERE id = ?').run(semesterId);
 
     const settingsDate = () => db.prepare("SELECT value v FROM settings WHERE key = 'semester_start_date'").get()?.v;
     const semesterDate = () => db.prepare('SELECT start_date FROM semesters WHERE id = ?').get(semesterId).start_date;
@@ -1511,9 +1516,10 @@ test('the impact preview reports how many teachers a semester date/length change
 
     const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Затронутый З.З.')").run().lastInsertRowid;
     const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Предмет')").run().lastInsertRowid;
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES ('И', '2026-02-09', 8, 1)
-    `).run().lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 8 WHERE id = ?').run(semesterId);
     const planId = db.prepare(`
         INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
         VALUES (?, ?, ?, 'Лекция', ?, 40)
@@ -1629,11 +1635,14 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     // A semester safely in the past relative to "now" — every one of its
     // weeks should already have happened, so the expected total is exact
     // and never flaky.
-    const semester = await (await fetch(`${context.baseUrl}/api/admin/semesters`, {
-        method: 'POST',
+    // The plan must live in the same semester as the lesson it counts — the
+    // seeded working semester, shortened to 4 weeks for an exact total.
+    const semester = { id: context.semesterId };
+    await fetch(`${context.baseUrl}/api/admin/semesters/${semester.id}`, {
+        method: 'PUT',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: 'Test semester', start_date: '2026-02-09', weeks_count: 4 })
-    })).json();
+        body: JSON.stringify({ weeks_count: 4 })
+    });
 
     const planResponse = await fetch(`${context.baseUrl}/api/admin/load-plan`, {
         method: 'POST',
@@ -1697,9 +1706,10 @@ test('load plan full-row edit: fixing a wrongly entered teacher/discipline/type/
     const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Тестовая дисциплина')").run().lastInsertRowid;
     const otherGroupId = db.prepare('SELECT id FROM groups_ WHERE id != ? LIMIT 1').get(context.primaryGroupId)?.id
         ?? db.prepare("INSERT INTO groups_ (university_id, name) VALUES (1, 'ДругаяГруппа')").run().lastInsertRowid;
-    const semesterId = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active) VALUES ('Т', '2026-02-09', 4, 1)
-    `).run().lastInsertRowid;
+    // The seeded working semester (start 2026-02-09) — the database allows
+    // only one active semester, so fixtures reuse it rather than adding one.
+    const semesterId = context.semesterId;
+    db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(semesterId);
 
     const planId = db.prepare(`
         INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
@@ -1776,10 +1786,9 @@ test('public teacher search finds by partial name, and the load endpoint returns
 
     const teacher = db.prepare('INSERT INTO teachers (full_name) VALUES (?)').run('Хамидуллин М. Р.');
     const discipline = db.prepare('INSERT INTO disciplines (name) VALUES (?)').run('Информационная безопасность');
-    const semester = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active)
-        VALUES (?, ?, ?, 1)
-    `).run('Осень 2026-2027', '2026-02-09', 4);
+    // The seeded working semester, renamed and shortened for this scenario.
+    db.prepare("UPDATE semesters SET label = 'Осень 2026-2027', weeks_count = 4 WHERE id = ?").run(context.semesterId);
+    const semester = { lastInsertRowid: context.semesterId };
     db.prepare(`
         INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours, entered_by, confirmed)
         VALUES (?, ?, ?, 'Лекция', ?, 36, 'specialist', 1)
@@ -1813,6 +1822,7 @@ async function createTestContext() {
     return {
         ...serverContext,
         primaryGroupId: getPrimaryGroupId(),
+        semesterId: getDb().prepare('SELECT id FROM semesters WHERE is_active = 1').get().id,
         authHeaders: {
             Authorization: `Bearer ${createToken({ id: 1, username: 'admin' })}`
         }
@@ -1853,11 +1863,22 @@ function seedTestDatabase() {
         DELETE FROM audit_logs;
         DELETE FROM login_attempts;
         DELETE FROM lessons;
+        DELETE FROM load_plan;
+        DELETE FROM semesters;
         DELETE FROM admins;
         DELETE FROM groups_;
         DELETE FROM universities;
         DELETE FROM settings;
     `);
+
+    // One working semester, starting on the date every test's week arithmetic
+    // assumes. Lessons inserted below (and by tests via raw SQL) land in it.
+    // 2026-02-09 is ISO week 7, so week 1 is нечётная — week N parity equals
+    // N's own parity, the rule these fixtures were originally written against.
+    db.prepare(`
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES ('Тестовый семестр', '2026-02-09', 18, 1, 1)
+    `).run();
 
     const adminHash = bcrypt.hashSync('admin123', 10);
     const insertUniversity = db.prepare('INSERT INTO universities (name, short_name) VALUES (?, ?)');

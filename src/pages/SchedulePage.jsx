@@ -1,11 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
-import { capitalize, formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeNumber, normalizeDate } from '../lib/date';
+import { capitalize, formatLocalDateForApi, normalizeDate } from '../lib/date';
 import { clearSelection, getSavedSelection, getSavedTheme, saveTheme } from '../lib/storage';
-import { resolveTemplateLessons } from '../lib/templateResolve';
+import { resolveLessonsForDay } from '../lib/scheduleResolve';
 
-const MAX_DATE = new Date(2026, 11, 31);
+// How far ahead the calendar lets you browse: the end of the month one year
+// from today. It used to be a fixed date (31.12.2026), which would have left
+// students with an empty schedule for the whole spring semester — a limit tied
+// to the calendar has to move with it.
+function getMaxDate() {
+    const today = new Date();
+    return new Date(today.getFullYear() + 1, today.getMonth() + 1, 0);
+}
+
+const MAX_DATE = getMaxDate();
 const SCHEDULE_WINDOW_DAYS = 28;
 const CALENDAR_HEADERS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const BRAND_LOGO_SRC = '/assets/logo.png';
@@ -661,14 +670,6 @@ function buildScheduleDays(scheduleData, currentDate) {
     }
 
     const today = normalizeDate(new Date());
-    const byDay = scheduleData.by_day || {};
-    const exceptionWeeks = new Set(
-        Array.isArray(scheduleData.exception_weeks)
-            ? scheduleData.exception_weeks
-            : (scheduleData.lessons || [])
-                .filter((lesson) => lesson.specific_week !== null && lesson.specific_week !== undefined)
-                .map((lesson) => lesson.specific_week)
-    );
     const result = [];
     const visibleDaysCount = scheduleData.range_days || SCHEDULE_WINDOW_DAYS;
 
@@ -679,26 +680,10 @@ function buildScheduleDays(scheduleData, currentDate) {
         dayOffset += 1;
 
         const dayOfWeek = iterDate.getDay();
-        const isoDayOfWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
-        const weekNumber = getSemesterWeekNumber(scheduleData.semester_start, iterDate);
-        // Must be the same parity the server counts hours with — see
-        // tests/weekParity.parity.test.js for what happens when it isn't.
-        const currentWeekType = getWeekTypeNumber(iterDate);
-        const hasExceptionWeek = exceptionWeeks.has(weekNumber);
-
-        const lessonsForDay = byDay[isoDayOfWeek] || [];
-        let lessons = [];
-
-        if (hasExceptionWeek) {
-            lessons = lessonsForDay.filter((lesson) => lesson.specific_week === weekNumber);
-        } else {
-            const templateCandidates = lessonsForDay.filter(
-                (lesson) =>
-                    lesson.specific_week == null &&
-                    (lesson.week_type === 0 || lesson.week_type === currentWeekType)
-            );
-            lessons = resolveTemplateLessons(templateCandidates, weekNumber);
-        }
+        // Semester, week number, parity and "week with its own rows" are all
+        // decided in src/lib/scheduleResolve.js — the same code the year
+        // lifecycle test runs.
+        const lessons = resolveLessonsForDay(scheduleData, iterDate);
 
         const isRestDay = (dayOfWeek === 0 || dayOfWeek === 6) && lessons.length === 0;
         const timeRange = lessons.length

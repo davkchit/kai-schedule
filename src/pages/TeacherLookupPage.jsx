@@ -37,6 +37,7 @@ export default function TeacherLookupPage() {
     const [errorMessage, setErrorMessage] = useState('');
     const [dayFilter, setDayFilter] = useState('all');
     const [listQuery, setListQuery] = useState('');
+    const [semesters, setSemesters] = useState([]);
 
     useEffect(() => {
         if (selectedTeacher) {
@@ -113,7 +114,24 @@ export default function TeacherLookupPage() {
         window.setTimeout(() => setIsInvalid(false), 500);
     }
 
-    async function selectTeacher(teacher) {
+    useEffect(() => {
+        let ignore = false;
+
+        // Only for the switcher: without an explicit choice the server already
+        // shows the semester in effect today.
+        fetch('/api/semesters')
+            .then((response) => (response.ok ? response.json() : []))
+            .then((rows) => {
+                if (!ignore && Array.isArray(rows)) setSemesters(rows);
+            })
+            .catch(() => {});
+
+        return () => {
+            ignore = true;
+        };
+    }, []);
+
+    async function selectTeacher(teacher, semesterId = null) {
         setInputValue(teacher.full_name);
         setShowSuggestions(false);
         setSelectedTeacher(teacher);
@@ -123,7 +141,8 @@ export default function TeacherLookupPage() {
         setListQuery('');
 
         try {
-            const response = await fetch(`/api/teachers/${teacher.id}/load`);
+            const query = semesterId ? `?semester_id=${semesterId}` : '';
+            const response = await fetch(`/api/teachers/${teacher.id}/load${query}`);
 
             if (!response.ok) {
                 throw new Error('load-fetch-failed');
@@ -257,7 +276,21 @@ export default function TeacherLookupPage() {
                             <div className="tl-results-top">
                                 <div className="tl-identity">
                                     <h1 className="tl-teacher-name">{selectedTeacher.full_name}</h1>
-                                    {loadData?.semester && (
+                                    {loadData?.semester && semesters.length > 1 ? (
+                                        // A finished semester's totals stay reachable after the
+                                        // next one starts — that is when they get reported.
+                                        <select
+                                            className="tl-semester-label tl-semester-select"
+                                            aria-label="Семестр"
+                                            value={String(loadData.semester.id)}
+                                            disabled={isLoading}
+                                            onChange={(event) => selectTeacher(selectedTeacher, Number(event.target.value))}
+                                        >
+                                            {semesters.map((semester) => (
+                                                <option key={semester.id} value={semester.id}>{semester.label}</option>
+                                            ))}
+                                        </select>
+                                    ) : loadData?.semester && (
                                         <span className="tl-semester-label">{loadData.semester.label}</span>
                                     )}
                                 </div>
@@ -274,7 +307,7 @@ export default function TeacherLookupPage() {
                             {!isLoading && errorMessage && <p className="tl-note tl-error">{errorMessage}</p>}
 
                             {!isLoading && !errorMessage && loadData && !loadData.semester && (
-                                <p className="tl-note">Активный семестр ещё не назначен — обратитесь к специалисту.</p>
+                                <p className="tl-note">Семестр ещё не создан — обратитесь к специалисту.</p>
                             )}
 
                             {!isLoading && !errorMessage && loadData?.semester && planRows.length === 0 && (

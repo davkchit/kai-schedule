@@ -1,7 +1,8 @@
 const express = require('express');
 const { getDb } = require('../db');
-const { addDaysToIsoDate, formatLocalDate, getWeekMeta } = require('../utils/date');
-const { computeExceptionWeeks, computeLoadProgress } = require('../utils/loadCalc');
+const { addDaysToIsoDate, formatLocalDate, getSemesterWeekMeta, resolveFirstWeekParity } = require('../utils/date');
+const { computePlanRowProgress } = require('../utils/planProgress');
+const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
 
 const router = express.Router();
 const DEFAULT_SCHEDULE_RANGE_DAYS = 28;
@@ -65,65 +66,89 @@ router.get('/schedule/:groupId', (req, res) => {
     }
 
     const dateStr = typeof req.query.date === 'string' ? req.query.date : formatLocalDate();
-    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-    let weekMeta;
     let rangeEndDate;
-    let rangeEndWeekMeta;
 
     try {
-        weekMeta = getWeekMeta(semesterStart, dateStr);
         rangeEndDate = addDaysToIsoDate(dateStr, rangeDays - 1);
-        rangeEndWeekMeta = getWeekMeta(semesterStart, rangeEndDate);
     } catch {
         return res.status(400).json({ error: 'Некорректная дата. Ожидается формат YYYY-MM-DD' });
     }
 
+    // Every day is resolved against the semester in effect ON THAT DAY, not
+    // against whichever semester the admin has open. A view that crosses the
+    // February rollover gets both semesters, and each lesson is tagged with its
+    // own, so the page never reads an autumn row's "week 1" as spring's week 1.
+    const semesters = getSemestersOverlapping(db, dateStr, rangeEndDate);
+    const primary = semesters.find((semester) => semester.start_date <= dateStr) || semesters[0] || null;
+
     let sql = `
-        SELECT id, subgroup, day_of_week, week_type, specific_week,
+        SELECT id, semester_id, subgroup, day_of_week, week_type, specific_week,
                template_from_week, is_removed,
-               time_start, time_end, subject, room, lesson_type, teacher, sort_order
+               time_start, time_end, subject, room, lesson_type, teacher, sort_order, kind
         FROM lessons
-        WHERE group_id = ?
+        WHERE group_id = ? AND semester_id = ?
+          AND (specific_week IS NULL OR specific_week BETWEEN ? AND ?)
     `;
-    const params = [groupId];
 
     if (subgroup === 1 || subgroup === 2) {
         sql += ' AND (subgroup = 0 OR subgroup = ?)';
-        params.push(subgroup);
     }
-
-    sql += ' AND (specific_week IS NULL OR (specific_week BETWEEN ? AND ?))';
-    params.push(weekMeta.weekNumber, rangeEndWeekMeta.weekNumber);
 
     sql += ' ORDER BY day_of_week, sort_order, time_start';
+    const statement = db.prepare(sql);
 
-    const lessons = db.prepare(sql).all(...params);
+    const lessons = [];
+    semesters.forEach((semester, index) => {
+        // Only the part of the requested range this semester actually covers:
+        // from the later of (range start, semester start) to the day before the
+        // next semester begins, or the range end. Its per-week rows outside
+        // that window are someone else's calendar weeks and are left out.
+        const portionStart = semester.start_date > dateStr ? semester.start_date : dateStr;
+        const next = semesters[index + 1];
+        const portionEnd = next && addDaysToIsoDate(next.start_date, -1) < rangeEndDate
+            ? addDaysToIsoDate(next.start_date, -1)
+            : rangeEndDate;
+        const weekFrom = getSemesterWeekMeta(semester, portionStart).weekNumber;
+        const weekTo = getSemesterWeekMeta(semester, portionEnd).weekNumber;
+
+        const params = [groupId, semester.id, weekFrom, weekTo];
+        if (subgroup === 1 || subgroup === 2) {
+            params.push(subgroup);
+        }
+        lessons.push(...statement.all(...params));
+    });
+
     const byDay = {};
-    const exceptionWeeks = new Set();
-
     for (const lesson of lessons) {
-        if (!byDay[lesson.day_of_week]) {
-            byDay[lesson.day_of_week] = [];
-        }
-
-        if (lesson.specific_week !== null && lesson.specific_week !== undefined) {
-            exceptionWeeks.add(lesson.specific_week);
-        }
-
-        byDay[lesson.day_of_week].push(lesson);
+        (byDay[lesson.day_of_week] ||= []).push(lesson);
     }
+
+    // Legacy fields, describing the requested date within its own semester —
+    // kept so an already-cached older copy of the page still renders.
+    const primaryMeta = primary && primary.start_date <= dateStr ? getSemesterWeekMeta(primary, dateStr) : null;
+    const primaryExceptionWeeks = primary
+        ? [...new Set(lessons
+            .filter((lesson) => lesson.semester_id === primary.id && lesson.specific_week != null)
+            .map((lesson) => lesson.specific_week))].sort((left, right) => left - right)
+        : [];
 
     res.json({
         group: { id: group.id, name: group.name },
-        week_number: weekMeta.weekNumber,
-        week_type: weekMeta.weekType,
-        week_type_label: weekMeta.weekTypeLabel,
-        semester_start: semesterStart,
+        semesters: semesters.map((semester) => ({
+            id: semester.id,
+            label: semester.label,
+            start_date: semester.start_date,
+            weeks_count: semester.weeks_count,
+            first_week_parity: resolveFirstWeekParity(semester)
+        })),
+        week_number: primaryMeta ? primaryMeta.weekNumber : null,
+        week_type: primaryMeta ? primaryMeta.weekType : null,
+        week_type_label: primaryMeta ? primaryMeta.weekTypeLabel : null,
+        semester_start: primary ? primary.start_date : null,
         requested_date: dateStr,
         range_days: rangeDays,
         range_end: rangeEndDate,
-        exception_weeks: Array.from(exceptionWeeks).sort((left, right) => left - right),
+        exception_weeks: primaryExceptionWeeks,
         lessons,
         by_day: byDay
     });
@@ -153,8 +178,16 @@ router.get('/teachers/search', (req, res) => {
     res.json(rows);
 });
 
-// Public, read-only. Returns the given teacher's load plan for the active
-// semester (or a specific one via ?semester_id=), each row with computed
+// Public, read-only list of semesters, newest first — lets a teacher switch
+// back to a finished semester and still show its totals.
+router.get('/semesters', (req, res) => {
+    const db = getDb();
+    const rows = db.prepare('SELECT id, label, start_date, weeks_count FROM semesters ORDER BY start_date DESC').all();
+    res.json(rows);
+});
+
+// Public, read-only. Returns the given teacher's load plan for the semester in
+// effect today (or a specific one via ?semester_id=), each row with computed
 // progress — this is the "4/36" view a teacher checks themselves.
 router.get('/teachers/:id/load', (req, res) => {
     const db = getDb();
@@ -179,9 +212,16 @@ router.get('/teachers/:id/load', (req, res) => {
             return res.status(400).json({ error: 'Некорректный semester_id' });
         }
 
-        semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+        semester = getSemesterById(db, semesterId);
+
+        if (!semester) {
+            return res.status(404).json({ error: 'Семестр не найден' });
+        }
     } else {
-        semester = db.prepare('SELECT * FROM semesters WHERE is_active = 1 ORDER BY start_date DESC LIMIT 1').get();
+        // The semester in effect today — never the one the specialist happens to
+        // have open. Building spring's plan in January must not make a teacher's
+        // autumn totals vanish from this page while autumn is still running.
+        semester = getSemesterForDate(db, formatLocalDate()) || getActiveSemester(db);
     }
 
     if (!semester) {
@@ -197,28 +237,10 @@ router.get('/teachers/:id/load', (req, res) => {
         ORDER BY d.name, lp.lesson_type, g.name
     `).all(teacherId, semester.id);
 
-    const exceptionWeeksCache = new Map();
+    const progressCache = new Map();
 
     const plan = planRows.map((row) => {
-        const cacheKey = `${row.group_id}:${semester.id}`;
-        let exceptionWeeks = exceptionWeeksCache.get(cacheKey);
-
-        if (!exceptionWeeks) {
-            const overrideRows = db.prepare(`
-                SELECT specific_week FROM lessons
-                WHERE group_id = ? AND specific_week IS NOT NULL
-            `).all(row.group_id);
-            exceptionWeeks = computeExceptionWeeks(overrideRows, semester.weeks_count);
-            exceptionWeeksCache.set(cacheKey, exceptionWeeks);
-        }
-
-        const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ?').all(row.id);
-        const progress = computeLoadProgress({
-            semesterStartDate: semester.start_date,
-            weeksCount: semester.weeks_count,
-            linkedLessons,
-            exceptionWeeks
-        });
+        const progress = computePlanRowProgress(db, row, semester, { cache: progressCache });
 
         return {
             id: row.id,

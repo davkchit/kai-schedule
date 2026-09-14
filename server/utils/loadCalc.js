@@ -1,4 +1,5 @@
-const { addDaysToIsoDate, getWeekTypeNumber } = require('./date');
+const { addDaysToIsoDate, defaultFirstWeekParity, getWeekTypeForSemesterWeek } = require('./date');
+const clock = require('./clock');
 const { resolveTemplateLessons } = require('./templateResolve');
 
 // 1 pair = 2 academic hours (2 × 45 min = 1.5 astronomical hours) — confirmed
@@ -42,14 +43,22 @@ function computeExceptionWeeks(groupLessons, weeksCount) {
  * @param {Array} linkedLessons - all lessons rows with load_plan_id === this plan's id
  *   (any mix of template versions and specific-week rows for this exact slot)
  * @param {Set<number>} exceptionWeeks - from computeExceptionWeeks, scoped to the group
- * @param {Date} [now] - injectable for tests; defaults to the real current time
+ * @param {number} [firstWeekParity] - the semester's week-1 parity (1 нечётная, 2 чётная);
+ *   defaults to the calendar rule for semesterStartDate
+ * @param {Date} [now] - injectable for tests; defaults to the server clock
  */
-function computeLoadProgress({ semesterStartDate, weeksCount, linkedLessons, exceptionWeeks, now = new Date() }) {
+function computeLoadProgress({
+    semesterStartDate, weeksCount, linkedLessons, exceptionWeeks,
+    firstWeekParity = defaultFirstWeekParity(semesterStartDate),
+    now = clock.now()
+}) {
     const occurrences = [];
 
     for (let weekNumber = 1; weekNumber <= weeksCount; weekNumber += 1) {
         const weekMonday = addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7);
-        const weekType = getWeekTypeNumber(weekMonday);
+        // The semester's own stored first-week parity, alternating — the same
+        // rule the student schedule resolves with (see getWeekTypeForSemesterWeek).
+        const weekType = getWeekTypeForSemesterWeek(firstWeekParity, weekNumber);
         let resolvedLessons;
 
         if (exceptionWeeks.has(weekNumber)) {

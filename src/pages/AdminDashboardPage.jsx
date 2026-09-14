@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
-import { formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeNumber } from '../lib/date';
+import { formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeForSemesterWeek } from '../lib/date';
 import { resolveTemplateLessons } from '../lib/templateResolve';
 import AdminLoadSection from './AdminLoadSection';
 
@@ -84,6 +84,9 @@ export default function AdminDashboardPage() {
     const [selectedGroupId, setSelectedGroupId] = useState('');
     const [lessons, setLessons] = useState([]);
     const [semesterStartDate, setSemesterStartDate] = useState('');
+    // The semester the constructor edits. Week numbers and parity are always
+    // measured in it — never in another semester's calendar.
+    const [workingSemester, setWorkingSemester] = useState(null);
     const [directorName, setDirectorName] = useState('');
     const [directorTitle, setDirectorTitle] = useState('Директор филиала');
     const [academicYear, setAcademicYear] = useState('');
@@ -259,6 +262,16 @@ export default function AdminDashboardPage() {
         }
     }
 
+    // Switching the working semester changes which lessons the constructor
+    // shows and how it numbers weeks — reload both, or the grid would keep
+    // editing the previous semester's rows under the new semester's dates.
+    async function reloadWorkingSemester() {
+        await loadSettings();
+        if (selectedGroupId) {
+            await loadLessons(selectedGroupId);
+        }
+    }
+
     async function loadSettings() {
         try {
             const response = await api('/api/admin/settings');
@@ -267,6 +280,8 @@ export default function AdminDashboardPage() {
             if (data.semester_start_date) {
                 setSemesterStartDate(data.semester_start_date);
             }
+
+            setWorkingSemester(data.active_semester || null);
 
             if (data.director_name) setDirectorName(data.director_name);
             if (data.director_title) setDirectorTitle(data.director_title);
@@ -371,12 +386,20 @@ export default function AdminDashboardPage() {
     const builderWeekEnd = new Date(builderWeekStart);
     builderWeekEnd.setDate(builderWeekEnd.getDate() + 6);
 
-    const builderWeekNumber = semesterStartDate
-        ? getSemesterWeekNumber(semesterStartDate, builderWeekStart)
+    // A browsed week that ends before the working semester starts has no
+    // number in it: clamping it to week 1 would let an edit of "December" in
+    // the spring constructor silently land in spring's first week.
+    const isBuilderWeekBeforeSemester = Boolean(workingSemester)
+        && formatLocalDateForApi(builderWeekEnd) < workingSemester.start_date;
+
+    const builderWeekNumber = workingSemester && !isBuilderWeekBeforeSemester
+        ? getSemesterWeekNumber(workingSemester.start_date, builderWeekStart)
         : null;
 
-    const todayWeekNumber = semesterStartDate
-        ? getSemesterWeekNumber(semesterStartDate, new Date())
+    // Before the semester starts (building it ahead of time) this is week 1 —
+    // the initial version of the template, which is exactly what is edited.
+    const todayWeekNumber = workingSemester
+        ? getSemesterWeekNumber(workingSemester.start_date, new Date())
         : null;
 
     const builderWeekMaterialized = builderWeekNumber !== null
@@ -424,12 +447,21 @@ export default function AdminDashboardPage() {
                 lesson.day_of_week === day &&
                 lesson.time_start === timeStart &&
                 lesson.time_end === timeEnd &&
-                lesson.specific_week === builderWeekNumber
+                lesson.specific_week === builderWeekNumber &&
+                // A removed marker only keeps the week "its own"; the cell is free.
+                !lesson.is_removed
             );
         }
 
-        // Same parity the server and the student schedule use.
-        const weekTypeNumber = getWeekTypeNumber(builderWeekStart);
+        if (builderWeekNumber > workingSemester.weeks_count) {
+            // After the last teaching week the template stops, as it does for
+            // students and for the hour counter.
+            return [];
+        }
+
+        // The working semester's stored parity — the same rule the server and
+        // the student schedule resolve with.
+        const weekTypeNumber = getWeekTypeForSemesterWeek(workingSemester.first_week_parity, builderWeekNumber);
         const candidates = lessons.filter((lesson) =>
             lesson.day_of_week === day &&
             lesson.time_start === timeStart &&
@@ -1089,7 +1121,15 @@ export default function AdminDashboardPage() {
             <main className="main-content">
                 <section className={`content-section ${activeSection === 'builder' ? 'active' : ''}`} id="sectionBuilder">
                     <h2 className="section-title">Конструктор расписания</h2>
-                    <p className="section-desc">Добавляйте и редактируйте занятия прямо на сетке недели — так они лягут и в само расписание.</p>
+                    <p className="section-desc">
+                        Добавляйте и редактируйте занятия прямо на сетке недели — так они лягут и в само расписание.
+                        {workingSemester && (
+                            <>
+                                {' '}Сейчас редактируется семестр <strong>{workingSemester.label}</strong>
+                                {' '}(с {workingSemester.start_date}); сменить — в разделе «Нагрузка».
+                            </>
+                        )}
+                    </p>
 
                     <div className="builder-toolbar">
                         <select
@@ -1177,6 +1217,10 @@ export default function AdminDashboardPage() {
 
                     {!selectedGroupId ? (
                         <p className="empty-message">Выберите группу, чтобы начать редактирование</p>
+                    ) : !workingSemester ? (
+                        <p className="empty-message">Создайте семестр в разделе «Нагрузка» — расписание ведётся внутри семестра</p>
+                    ) : builderMode === 'week' && isBuilderWeekBeforeSemester ? (
+                        <p className="empty-message">Эта неделя раньше начала семестра «{workingSemester.label}» ({workingSemester.start_date}). Прошлые семестры правятся, если сделать их рабочими в разделе «Нагрузка».</p>
                     ) : builderMode === 'week' && builderWeekNumber === null ? (
                         <p className="empty-message">Задайте дату начала семестра в разделе «Настройки», чтобы редактировать расписание по неделям</p>
                     ) : builderMode === 'template' && todayWeekNumber === null ? (
@@ -1237,7 +1281,12 @@ export default function AdminDashboardPage() {
 
                 <section className={`content-section ${activeSection === 'load' ? 'active' : ''}`} id="sectionLoad">
                     {activeSection === 'load' && (
-                        <AdminLoadSection api={api} groups={groups} setToastMessage={setToastMessage} />
+                        <AdminLoadSection
+                            api={api}
+                            groups={groups}
+                            setToastMessage={setToastMessage}
+                            onWorkingSemesterChange={reloadWorkingSemester}
+                        />
                     )}
                 </section>
 

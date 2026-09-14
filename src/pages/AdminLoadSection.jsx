@@ -1,4 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getWeekTypeNumber } from '../lib/date';
 
 const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
 const REF_PREVIEW_COUNT = 5;
@@ -10,7 +11,7 @@ const EMPTY_ARRAY = [];
 // The teaching-load admin window — kept as its own component (rather than
 // folded into AdminDashboardPage.jsx) since that file is already the
 // biggest one in the app; this is a natural place to stop adding to it.
-export default function AdminLoadSection({ api, groups, setToastMessage }) {
+export default function AdminLoadSection({ api, groups, setToastMessage, onWorkingSemesterChange }) {
     const [teachers, setTeachers] = useState([]);
     const [disciplines, setDisciplines] = useState([]);
     const [semesters, setSemesters] = useState([]);
@@ -19,7 +20,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
 
     const [newTeacherName, setNewTeacherName] = useState('');
     const [newDisciplineName, setNewDisciplineName] = useState('');
-    const [newSemester, setNewSemester] = useState({ label: '', start_date: '', weeks_count: 18 });
+    // first_week_parity '' = "take the calendar default for the start date" until picked.
+    const [newSemester, setNewSemester] = useState({ label: '', start_date: '', weeks_count: 18, first_week_parity: '' });
 
     const [planForm, setPlanForm] = useState(emptyPlanForm());
     const [linkingPlanId, setLinkingPlanId] = useState(null);
@@ -30,7 +32,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     const [editingPlanId, setEditingPlanId] = useState(null);
 
     const [isEditingSemester, setIsEditingSemester] = useState(false);
-    const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18 });
+    const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18, first_week_parity: 1 });
 
     const [showAllTeachers, setShowAllTeachers] = useState(false);
     const [showAllDisciplines, setShowAllDisciplines] = useState(false);
@@ -39,7 +41,13 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     const [openMenuId, setOpenMenuId] = useState(null);
     const menuCloseTimeout = useRef(null);
 
+    // Two different things that used to be one dropdown: the WORKING semester
+    // (server-side, the one the constructor edits and bulk upload writes into)
+    // and the semester merely being LOOKED AT here. Picking last autumn's plan
+    // to check a number must not switch what everyone else is working in.
     const activeSemester = semesters.find((semester) => semester.is_active) || null;
+    const [viewedSemesterId, setViewedSemesterId] = useState(null);
+    const viewedSemester = semesters.find((semester) => semester.id === viewedSemesterId) || activeSemester;
 
     useEffect(() => {
         loadAll();
@@ -47,13 +55,17 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     }, []);
 
     useEffect(() => {
-        if (activeSemester) {
-            loadPlanForSemester(activeSemester.id);
+        setIsEditingSemester(false);
+        setEditingPlanId(null);
+        setLinkingPlanId(null);
+
+        if (viewedSemester) {
+            loadPlanForSemester(viewedSemester.id);
         } else {
             setLoadPlan([]);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [activeSemester?.id]);
+    }, [viewedSemester?.id]);
 
     async function loadAll() {
         setIsLoading(true);
@@ -89,13 +101,13 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     }
 
     const refreshPlan = useCallback(async () => {
-        if (activeSemester) {
-            await loadPlanForSemester(activeSemester.id);
+        if (viewedSemester) {
+            await loadPlanForSemester(viewedSemester.id);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps -- loadPlanForSemester
         // closes over api/setToastMessage/setLoadPlan, none of which change
         // for the interactions this is memoized against (see PlanRow).
-    }, [activeSemester]);
+    }, [viewedSemester?.id]);
 
     async function addTeacher(event) {
         event.preventDefault();
@@ -249,8 +261,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
 
     function startEditSemester() {
         setSemesterEdit({
-            start_date: activeSemester.start_date,
-            weeks_count: String(activeSemester.weeks_count)
+            start_date: viewedSemester.start_date,
+            weeks_count: String(viewedSemester.weeks_count),
+            first_week_parity: viewedSemester.first_week_parity
         });
         setIsEditingSemester(true);
     }
@@ -269,14 +282,21 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
             return;
         }
 
-        if (semesterEdit.start_date === activeSemester.start_date && weeksCount === activeSemester.weeks_count) {
+        const parity = Number(semesterEdit.first_week_parity);
+        const semester = viewedSemester;
+
+        if (
+            semesterEdit.start_date === semester.start_date
+            && weeksCount === semester.weeks_count
+            && parity === semester.first_week_parity
+        ) {
             setIsEditingSemester(false);
             return;
         }
 
         try {
             const impactRes = await api(
-                `/api/admin/semesters/${activeSemester.id}/impact?start_date=${semesterEdit.start_date}&weeks_count=${weeksCount}`
+                `/api/admin/semesters/${semester.id}/impact?start_date=${semesterEdit.start_date}&weeks_count=${weeksCount}&first_week_parity=${parity}`
             );
             const impact = await impactRes.json();
 
@@ -302,9 +322,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 if (!confirmed) return;
             }
 
-            const response = await api(`/api/admin/semesters/${activeSemester.id}`, {
+            const response = await api(`/api/admin/semesters/${semester.id}`, {
                 method: 'PUT',
-                body: JSON.stringify({ start_date: semesterEdit.start_date, weeks_count: weeksCount })
+                body: JSON.stringify({ start_date: semesterEdit.start_date, weeks_count: weeksCount, first_week_parity: parity })
             });
             const data = await response.json();
 
@@ -313,9 +333,13 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 return;
             }
 
-            setSemesters((previous) => previous.map((s) => (s.id === activeSemester.id ? data : s)));
+            setSemesters((previous) => previous.map((s) => (s.id === semester.id ? data : s)));
             setIsEditingSemester(false);
             await refreshPlan();
+            if (semester.is_active) {
+                // The constructor numbers weeks from this semester's dates.
+                onWorkingSemesterChange?.();
+            }
             setToastMessage('Семестр изменён');
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
@@ -338,7 +362,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 body: JSON.stringify({
                     label: newSemester.label.trim(),
                     start_date: newSemester.start_date,
-                    weeks_count: Number(newSemester.weeks_count) || 18
+                    weeks_count: Number(newSemester.weeks_count) || 18,
+                    first_week_parity: resolveNewSemesterParity(newSemester)
                 })
             });
             const data = await response.json();
@@ -349,8 +374,10 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
             }
 
             setSemesters((previous) => [data, ...previous]);
-            setNewSemester({ label: '', start_date: '', weeks_count: 18 });
-            setToastMessage('Семестр создан');
+            setNewSemester({ label: '', start_date: '', weeks_count: 18, first_week_parity: '' });
+            setToastMessage(activeSemester
+                ? `Семестр создан. Рабочим остаётся «${activeSemester.label}» — переключите, когда начнёте вносить новое расписание`
+                : 'Семестр создан');
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Ошибка сети');
@@ -358,10 +385,22 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
         }
     }
 
-    async function activateSemester(semesterId) {
-        if (!semesterId || semesterId === String(activeSemester?.id)) {
+    async function activateSemester(semester) {
+        if (!semester || semester.is_active) {
             return;
         }
+
+        const confirmed = window.confirm(
+            `Сделать рабочим семестр «${semester.label}»?\n\n` +
+            `Конструктор расписания и загрузка из Excel будут записывать пары в него` +
+            (activeSemester ? ` вместо «${activeSemester.label}»` : '') + `.\n\n` +
+            `Студенты и преподаватели это не заметят: каждый видит тот семестр, который идёт по календарю. ` +
+            `Пары и часы других семестров не меняются.`
+        );
+
+        if (!confirmed) return;
+
+        const semesterId = semester.id;
 
         try {
             const response = await api(`/api/admin/semesters/${semesterId}`, {
@@ -375,7 +414,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 return;
             }
 
-            setSemesters((previous) => previous.map((semester) => ({ ...semester, is_active: semester.id === Number(semesterId) })));
+            setSemesters((previous) => previous.map((candidate) => ({ ...candidate, is_active: candidate.id === semesterId })));
+            onWorkingSemesterChange?.();
+            setToastMessage(`Рабочий семестр: «${semester.label}»`);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Ошибка сети');
@@ -386,8 +427,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
     async function submitPlanForm(event) {
         event.preventDefault();
 
-        if (!activeSemester) {
-            setToastMessage('Сначала активируйте семестр');
+        if (!viewedSemester) {
+            setToastMessage('Сначала создайте семестр');
             return;
         }
 
@@ -402,7 +443,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
             const response = await api('/api/admin/load-plan', {
                 method: 'POST',
                 body: JSON.stringify({
-                    semester_id: activeSemester.id,
+                    semester_id: viewedSemester.id,
                     teacher_id: Number(teacher_id),
                     discipline_id: Number(discipline_id),
                     lesson_type,
@@ -544,7 +585,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
         }
 
         try {
-            const response = await api(`/api/admin/lessons?group_id=${planRow.group_id}`);
+            const response = await api(`/api/admin/lessons?group_id=${planRow.group_id}&semester_id=${planRow.semester_id}`);
             const lessons = await response.json();
             // Only template rows make sense to link — a one-off specific-week
             // override wouldn't recur for the whole semester.
@@ -636,24 +677,34 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                 <div className="load-semester-select-wrap">
                     <select
                         className="form-input load-semester-select"
-                        value={activeSemester ? String(activeSemester.id) : ''}
-                        onChange={(event) => activateSemester(event.target.value)}
+                        value={viewedSemester ? String(viewedSemester.id) : ''}
+                        onChange={(event) => setViewedSemesterId(Number(event.target.value) || null)}
                     >
                         {semesters.length === 0 && <option value="">Семестров пока нет</option>}
                         {semesters.map((semester) => (
-                            <option key={semester.id} value={semester.id}>{semester.label}</option>
+                            <option key={semester.id} value={semester.id}>
+                                {semester.label}{semester.is_active ? ' (рабочий)' : ''}
+                            </option>
                         ))}
                     </select>
-                    {activeSemester && !isEditingSemester && (
+                    {viewedSemester && !isEditingSemester && (
                         <>
                             <span className="load-semester-meta">
-                                {activeSemester.start_date} · {activeSemester.weeks_count} нед. ·
-                                {' '}последняя неделя {formatWeekRange(activeSemester.start_date, activeSemester.weeks_count)}
+                                {viewedSemester.start_date} · {viewedSemester.weeks_count} нед. ·
+                                {' '}1-я неделя {parityLabel(viewedSemester.first_week_parity)} ·
+                                {' '}последняя неделя {formatWeekRange(viewedSemester.start_date, viewedSemester.weeks_count)}
                             </span>
                             <button type="button" className="btn-link" onClick={startEditSemester}>изменить</button>
+                            {viewedSemester.is_active ? (
+                                <span className="load-semester-meta"><strong>рабочий</strong></span>
+                            ) : (
+                                <button type="button" className="btn-link" onClick={() => activateSemester(viewedSemester)}>
+                                    сделать рабочим
+                                </button>
+                            )}
                         </>
                     )}
-                    {activeSemester && isEditingSemester && (
+                    {viewedSemester && isEditingSemester && (
                         <form className="load-semester-edit" onSubmit={saveSemesterEdit}>
                             <input
                                 type="date"
@@ -669,6 +720,15 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                                 value={semesterEdit.weeks_count}
                                 onChange={(event) => setSemesterEdit((previous) => ({ ...previous, weeks_count: event.target.value }))}
                             />
+                            <select
+                                className="form-input"
+                                title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
+                                value={String(semesterEdit.first_week_parity)}
+                                onChange={(event) => setSemesterEdit((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
+                            >
+                                <option value="1">1-я неделя нечётная</option>
+                                <option value="2">1-я неделя чётная</option>
+                            </select>
                             <span className="load-semester-meta">
                                 → последняя неделя {formatWeekRange(semesterEdit.start_date, Number(semesterEdit.weeks_count))}
                             </span>
@@ -699,6 +759,16 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
                         value={newSemester.weeks_count}
                         onChange={(event) => setNewSemester((previous) => ({ ...previous, weeks_count: event.target.value }))}
                     />
+                    <select
+                        className="form-input"
+                        title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
+                        value={String(resolveNewSemesterParity(newSemester) || '')}
+                        onChange={(event) => setNewSemester((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
+                    >
+                        {!resolveNewSemesterParity(newSemester) && <option value="">Чётность 1-й недели</option>}
+                        <option value="1">1-я неделя нечётная</option>
+                        <option value="2">1-я неделя чётная</option>
+                    </select>
                     <button type="submit" className="btn btn-secondary">Добавить семестр</button>
                 </form>
             </div>
@@ -775,18 +845,18 @@ export default function AdminLoadSection({ api, groups, setToastMessage }) {
             </div>
 
             <div className="load-plan-heading-row">
-                <h3 className="subsection-title">План нагрузки {activeSemester ? `— ${activeSemester.label}` : ''}</h3>
-                {activeSemester && (
+                <h3 className="subsection-title">План нагрузки {viewedSemester ? `— ${viewedSemester.label}` : ''}</h3>
+                {viewedSemester && (
                     <a
                         className="btn btn-secondary"
-                        href={`/api/admin/load-plan/export?semester_id=${activeSemester.id}`}
+                        href={`/api/admin/load-plan/export?semester_id=${viewedSemester.id}`}
                     >
                         Выгрузить в Excel
                     </a>
                 )}
             </div>
 
-            {!activeSemester ? (
+            {!viewedSemester ? (
                 <p className="empty-message">
                     {isLoading ? 'Загрузка...' : (semesters.length === 0 ? 'Создайте семестр выше, чтобы вести план.' : 'Выберите семестр выше, чтобы вести план.')}
                 </p>
@@ -1147,6 +1217,24 @@ function formatWeekRange(startDate, weeksCount) {
     const short = (d) => `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 
     return `${short(monday)}–${short(saturday)}.${saturday.getUTCFullYear()}`;
+}
+
+function parityLabel(parity) {
+    return parity === 1 ? 'нечётная' : 'чётная';
+}
+
+/** The picked parity, else the calendar default for the chosen start date. */
+function resolveNewSemesterParity(form) {
+    if (form.first_week_parity === 1 || form.first_week_parity === 2) {
+        return form.first_week_parity;
+    }
+
+    if (!form.start_date) {
+        return undefined;
+    }
+
+    const [year, month, day] = form.start_date.split('-').map(Number);
+    return getWeekTypeNumber(new Date(year, month - 1, day));
 }
 
 function pluralizeRecords(count) {

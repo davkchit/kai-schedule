@@ -24,13 +24,15 @@ function weekTypesOverlap(left, right) {
  * a newer tombstone) would still read as taken and block ever refilling it.
  */
 function findTemplateSlotOccupant(db, {
-    groupId, dayOfWeek, timeStart, timeEnd, subgroup, weekType, targetWeek, ignoreLessonId = null
+    semesterId, groupId, dayOfWeek, timeStart, timeEnd, subgroup, weekType, targetWeek, ignoreLessonId = null
 }) {
+    // Scoped to one semester: autumn's template occupying Tuesday 09:40 says
+    // nothing about whether spring's Tuesday 09:40 is free.
     const candidates = db.prepare(`
         SELECT * FROM lessons
-        WHERE group_id = ? AND specific_week IS NULL
+        WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL
           AND day_of_week = ? AND time_start = ? AND time_end = ? AND subgroup = ?
-    `).all(groupId, dayOfWeek, timeStart, timeEnd, subgroup);
+    `).all(semesterId, groupId, dayOfWeek, timeStart, timeEnd, subgroup);
 
     const overlapping = candidates.filter((lesson) => weekTypesOverlap(lesson.week_type, weekType));
     const live = resolveTemplateLessons(overlapping, targetWeek);
@@ -40,14 +42,14 @@ function findTemplateSlotOccupant(db, {
 
 /** Same question for one concrete week's own rows, where versioning doesn't apply. */
 function findWeekSlotOccupant(db, {
-    groupId, weekNumber, dayOfWeek, timeStart, timeEnd, subgroup, ignoreLessonId = null
+    semesterId, groupId, weekNumber, dayOfWeek, timeStart, timeEnd, subgroup, ignoreLessonId = null
 }) {
     const rows = db.prepare(`
         SELECT * FROM lessons
-        WHERE group_id = ? AND specific_week = ?
+        WHERE semester_id = ? AND group_id = ? AND specific_week = ?
           AND day_of_week = ? AND time_start = ? AND time_end = ? AND subgroup = ?
           AND is_removed = 0
-    `).all(groupId, weekNumber, dayOfWeek, timeStart, timeEnd, subgroup);
+    `).all(semesterId, groupId, weekNumber, dayOfWeek, timeStart, timeEnd, subgroup);
 
     return rows.find((lesson) => lesson.id !== ignoreLessonId) || null;
 }

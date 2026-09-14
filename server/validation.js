@@ -1,4 +1,4 @@
-const { isValidIsoDate, isValidTime } = require('./utils/date');
+const { isValidIsoDate, isValidTime, mondayOfWeek } = require('./utils/date');
 
 function createValidationError(message) {
     const error = new Error(message);
@@ -404,7 +404,7 @@ function validateSettingsBody(body) {
     }
 
     return {
-        semester_start_date: semesterStartDate,
+        semester_start_date: mondayOfWeek(semesterStartDate),
         director_name: readOptionalString(body.director_name, 'ФИО директора', 200),
         director_title: readOptionalString(body.director_title, 'Должность', 200),
         academic_year: readOptionalString(body.academic_year, 'Учебный год', 20),
@@ -486,9 +486,21 @@ function validateSemesterCreateBody(body) {
 
     return {
         label: readRequiredString(body.label, 'Название семестра', 100),
-        start_date: startDate,
-        weeks_count: body.weeks_count === undefined ? 18 : readInteger(body.weeks_count, 'Количество недель', { min: 1, max: 52 })
+        // Stored as the Monday of its week — see mondayOfWeek.
+        start_date: mondayOfWeek(startDate),
+        weeks_count: body.weeks_count === undefined ? 18 : readInteger(body.weeks_count, 'Количество недель', { min: 1, max: 52 }),
+        first_week_parity: readOptionalWeekParity(body.first_week_parity)
     };
+}
+
+/** 1 — первая неделя нечётная, 2 — чётная; absent means "use the calendar default". */
+function readOptionalWeekParity(value) {
+    if (value === undefined || value === null || value === '') {
+        return undefined;
+    }
+
+    const parity = readInteger(value, 'Чётность первой недели', { min: 1, max: 2 });
+    return parity;
 }
 
 function validateSemesterUpdateBody(body) {
@@ -507,7 +519,7 @@ function validateSemesterUpdateBody(body) {
             throw createValidationError('Дата начала семестра должна быть в формате YYYY-MM-DD');
         }
 
-        result.start_date = startDate;
+        result.start_date = mondayOfWeek(startDate);
     }
 
     if (body.weeks_count !== undefined) {
@@ -516,6 +528,10 @@ function validateSemesterUpdateBody(body) {
 
     if (body.is_active !== undefined) {
         result.is_active = Boolean(body.is_active);
+    }
+
+    if (body.first_week_parity !== undefined) {
+        result.first_week_parity = readOptionalWeekParity(body.first_week_parity);
     }
 
     return result;

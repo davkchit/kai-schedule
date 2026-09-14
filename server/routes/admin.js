@@ -23,15 +23,18 @@ const {
 } = require('../login-rate-limit');
 const {
     addDaysToIsoDate,
+    defaultFirstWeekParity,
     formatLocalDate,
-    getWeekMeta,
-    getWeekTypeForWeekNumber,
-    isValidIsoDate
+    getSemesterWeekMeta,
+    getSemesterWeekType,
+    isValidIsoDate,
+    resolveFirstWeekParity
 } = require('../utils/date');
 const { getCourseFromGroupName, getSemesterLabel } = require('../utils/course');
 const { resolveTemplateLessons } = require('../utils/templateResolve');
 const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../utils/slots');
-const { computeExceptionWeeks, computeLoadProgress } = require('../utils/loadCalc');
+const { computePlanRowProgress } = require('../utils/planProgress');
+const { getActiveSemester, getSemesterById, getSemesterForDate } = require('../utils/semesters');
 const {
     validateAccountUpdateBody,
     validateBulkScheduleUploadBody,
@@ -366,33 +369,48 @@ router.post('/schedule/upload', (req, res) => {
     const weekTypeMap = { all: 0, odd: 1, even: 2 };
     let specificWeek = null;
 
+    const semester = getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
     if (targetWeek === 'current') {
-        const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-        const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-        specificWeek = getWeekMeta(semesterStart, referenceDate || formatLocalDate()).weekNumber;
+        specificWeek = getSemesterWeekMeta(semester, referenceDate || formatLocalDate()).weekNumber;
     } else if (typeof targetWeek === 'number') {
         specificWeek = targetWeek;
     }
 
+    const linkedToReplace = countLinkedLessonsToReplace(db, semester.id, groupRow.id, specificWeek);
+
+    if (linkedToReplace > 0) {
+        return res.status(409).json({ error: replacingLinkedLessonsError(linkedToReplace) });
+    }
+
     const transaction = db.transaction(() => {
+        // Only this semester's rows are replaced — the same group's schedule
+        // in any other semester (and the hours counted from it) is untouched.
         if (specificWeek === null) {
-            db.prepare('DELETE FROM lessons WHERE group_id = ? AND specific_week IS NULL').run(groupRow.id);
+            db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL')
+                .run(semester.id, groupRow.id);
         } else {
-            db.prepare('DELETE FROM lessons WHERE group_id = ? AND specific_week = ?').run(groupRow.id, specificWeek);
+            db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?')
+                .run(semester.id, groupRow.id, specificWeek);
         }
 
         const insert = db.prepare(`
             INSERT INTO lessons (
-                group_id, subgroup, day_of_week, week_type, specific_week,
+                semester_id, group_id, subgroup, day_of_week, week_type, specific_week,
                 time_start, time_end, subject, room, lesson_type, teacher, sort_order
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         let count = 0;
 
         for (const lesson of lessons) {
             insert.run(
+                semester.id,
                 groupRow.id,
                 lesson.subgroup,
                 lesson.day,
@@ -458,10 +476,14 @@ router.post('/schedule/upload-bulk', (req, res) => {
 
     let specificWeek = null;
 
+    const semester = getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
     if (targetWeek === 'current') {
-        const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-        const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-        specificWeek = getWeekMeta(semesterStart, referenceDate || formatLocalDate()).weekNumber;
+        specificWeek = getSemesterWeekMeta(semester, referenceDate || formatLocalDate()).weekNumber;
     } else if (typeof targetWeek === 'number') {
         specificWeek = targetWeek;
     }
@@ -504,28 +526,42 @@ router.post('/schedule/upload-bulk', (req, res) => {
         resolvedGroups.push({ groupRow, group, lessons });
     }
 
+    // Checked for every group before writing any of them — the upload is
+    // all-or-nothing, so one refused group must refuse the whole file.
+    for (const { groupRow, group } of resolvedGroups) {
+        const linkedToReplace = countLinkedLessonsToReplace(db, semester.id, groupRow.id, specificWeek);
+
+        if (linkedToReplace > 0) {
+            return res.status(409).json({ error: `Группа «${group}»: ${replacingLinkedLessonsError(linkedToReplace)}` });
+        }
+    }
+
     const transaction = db.transaction(() => {
         const insert = db.prepare(`
             INSERT INTO lessons (
-                group_id, subgroup, day_of_week, week_type, specific_week,
+                semester_id, group_id, subgroup, day_of_week, week_type, specific_week,
                 time_start, time_end, subject, room, lesson_type, teacher, sort_order
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const results = [];
 
         for (const { groupRow, group, lessons } of resolvedGroups) {
+            // Only the working semester's rows are replaced.
             if (specificWeek === null) {
-                db.prepare('DELETE FROM lessons WHERE group_id = ? AND specific_week IS NULL').run(groupRow.id);
+                db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL')
+                    .run(semester.id, groupRow.id);
             } else {
-                db.prepare('DELETE FROM lessons WHERE group_id = ? AND specific_week = ?').run(groupRow.id, specificWeek);
+                db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?')
+                    .run(semester.id, groupRow.id, specificWeek);
             }
 
             let count = 0;
 
             for (const lesson of lessons) {
                 insert.run(
+                    semester.id,
                     groupRow.id,
                     lesson.subgroup,
                     lesson.day,
@@ -588,13 +624,16 @@ router.get('/schedule/export', async (req, res) => {
         return res.status(400).json({ error: 'Укажите week_start в формате YYYY-MM-DD' });
     }
 
-    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
+    // The week being exported belongs to whichever semester was in effect on
+    // that date — exporting a December week in March must show December's
+    // timetable, not re-read December's dates against the spring semester.
+    const semester = getSemesterForDate(db, weekStart);
 
-    if (!semesterStartRow) {
-        return res.status(400).json({ error: 'Сначала задайте дату начала семестра в разделе «Настройки»' });
+    if (!semester) {
+        return res.status(400).json({ error: 'На эту дату нет семестра — создайте его в разделе «Нагрузка»' });
     }
 
-    const weekMeta = getWeekMeta(semesterStartRow.value, weekStart);
+    const weekMeta = getSemesterWeekMeta(semester, weekStart);
     const groups = db.prepare('SELECT id, name, direction FROM groups_ ORDER BY name').all();
 
     const courseMap = new Map();
@@ -610,14 +649,15 @@ router.get('/schedule/export', async (req, res) => {
             SELECT id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
                    time_start, time_end, subject, room, lesson_type, teacher
             FROM lessons
-            WHERE group_id = ?
-        `).all(group.id);
+            WHERE semester_id = ? AND group_id = ?
+        `).all(semester.id, group.id);
 
         const hasExceptionWeek = allLessons.some((lesson) => lesson.specific_week === weekMeta.weekNumber);
         let lessonsForWeek;
 
         if (hasExceptionWeek) {
-            lessonsForWeek = allLessons.filter((lesson) => lesson.specific_week === weekMeta.weekNumber);
+            // Removed markers only keep the week its own — they are not pairs.
+            lessonsForWeek = allLessons.filter((lesson) => lesson.specific_week === weekMeta.weekNumber && !lesson.is_removed);
         } else {
             const candidates = allLessons.filter((lesson) =>
                 lesson.specific_week === null &&
@@ -726,18 +766,24 @@ router.post('/schedule/move-lesson', (req, res) => {
         return res.json({ success: true, moved: false });
     }
 
-    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-    const currentWeek = getWeekMeta(semesterStart, formatLocalDate()).weekNumber;
+    // Week numbers only mean something within the lesson's own semester —
+    // moving an autumn pair must never be measured against spring's calendar.
+    const semester = getSemesterById(db, lesson.semester_id) || getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    const currentWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
     const insertLesson = () => db.prepare(`
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week,
             template_from_week, is_removed,
             time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-            kind, load_plan_id
+            kind, load_plan_id, semester_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     try {
@@ -747,6 +793,7 @@ router.post('/schedule/move-lesson', (req, res) => {
             // overlapping both parities (the raw query this replaced did not,
             // so an "every week" pair could be dropped onto a чётная one).
             const occupied = findTemplateSlotOccupant(db, {
+                semesterId: semester.id,
                 groupId: lesson.group_id,
                 dayOfWeek: payload.day_of_week,
                 timeStart: payload.time_start,
@@ -773,7 +820,7 @@ router.post('/schedule/move-lesson', (req, res) => {
                     currentWeek, 1,
                     lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
                     lesson.lesson_type, lesson.teacher, lesson.sort_order,
-                    lesson.kind, lesson.load_plan_id
+                    lesson.kind, lesson.load_plan_id, semester.id
                 );
 
                 // Same lesson, new slot, same effective week.
@@ -782,17 +829,18 @@ router.post('/schedule/move-lesson', (req, res) => {
                     currentWeek, 0,
                     payload.time_start, payload.time_end, lesson.subject, lesson.room,
                     lesson.lesson_type, lesson.teacher, lesson.sort_order,
-                    lesson.kind, lesson.load_plan_id
+                    lesson.kind, lesson.load_plan_id, semester.id
                 );
             });
 
             transaction();
         } else {
             const alreadyMaterialized = db.prepare(
-                'SELECT 1 FROM lessons WHERE group_id = ? AND specific_week = ? LIMIT 1'
-            ).get(lesson.group_id, payload.week_number);
+                'SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1'
+            ).get(semester.id, lesson.group_id, payload.week_number);
 
             const occupied = findWeekSlotOccupant(db, {
+                semesterId: semester.id,
                 groupId: lesson.group_id,
                 weekNumber: payload.week_number,
                 dayOfWeek: payload.day_of_week,
@@ -813,14 +861,14 @@ router.post('/schedule/move-lesson', (req, res) => {
                     WHERE id = ?
                 `).run(payload.day_of_week, payload.time_start, payload.time_end, lesson.id);
             } else {
-                const weekTypeNumber = getWeekTypeForWeekNumber(semesterStart, payload.week_number);
+                const weekTypeNumber = getSemesterWeekType(semester, payload.week_number);
                 const templateRows = db.prepare(`
                     SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
                            time_start, time_end, subject, room, lesson_type, teacher, sort_order,
                            kind, load_plan_id
                     FROM lessons
-                    WHERE group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
-                `).all(lesson.group_id, weekTypeNumber);
+                    WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
+                `).all(semester.id, lesson.group_id, weekTypeNumber);
 
                 const resolved = resolveTemplateLessons(templateRows, payload.week_number);
                 const movedKey = `${lesson.day_of_week}|${lesson.time_start}|${lesson.time_end}|${lesson.subgroup}`;
@@ -844,7 +892,7 @@ router.post('/schedule/move-lesson', (req, res) => {
                             isMoved ? payload.time_start : row.time_start,
                             isMoved ? payload.time_end : row.time_end,
                             row.subject, row.room, row.lesson_type, row.teacher,
-                            sortOrder, row.kind, row.load_plan_id
+                            sortOrder, row.kind, row.load_plan_id, semester.id
                         );
                         sortOrder += 1;
                     }
@@ -891,25 +939,30 @@ router.post('/schedule/materialize-week', (req, res) => {
         return res.status(404).json({ error: 'Группа не найдена' });
     }
 
+    // The constructor edits the working semester; "week N" means week N of it.
+    const semester = getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
     // This endpoint only makes sense the first time a week is touched — once it has
     // its own rows, edits should go through the normal single-lesson endpoints.
     const alreadyMaterialized = db.prepare(
-        'SELECT 1 FROM lessons WHERE group_id = ? AND specific_week = ? LIMIT 1'
-    ).get(payload.group_id, payload.week_number);
+        'SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1'
+    ).get(semester.id, payload.group_id, payload.week_number);
 
     if (alreadyMaterialized) {
         return res.status(409).json({ error: 'Эта неделя уже содержит собственные записи' });
     }
 
-    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-    const weekTypeNumber = getWeekTypeForWeekNumber(semesterStart, payload.week_number);
+    const weekTypeNumber = getSemesterWeekType(semester, payload.week_number);
     const templateRows = db.prepare(`
         SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
                time_start, time_end, subject, room, lesson_type, teacher, kind, load_plan_id
         FROM lessons
-        WHERE group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
-    `).all(payload.group_id, weekTypeNumber);
+        WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
+    `).all(semester.id, payload.group_id, weekTypeNumber);
 
     const resolved = resolveTemplateLessons(templateRows, payload.week_number);
     const slotKey = (lesson) => `${lesson.day_of_week}|${lesson.time_start}|${lesson.time_end}|${lesson.subgroup}`;
@@ -938,8 +991,26 @@ router.post('/schedule/materialize-week', (req, res) => {
                     kind: lesson.kind,
                     load_plan_id: lesson.load_plan_id
                 });
+            } else {
+                // action === 'remove': kept as a removed marker, never just left
+                // out. If this was the week's only pair, leaving it out would
+                // insert nothing — the week would have no rows of its own, and
+                // the template (with this very pair) would silently apply again,
+                // for students and for the hour counter alike.
+                finalLessons.push({
+                    day_of_week: lesson.day_of_week,
+                    time_start: lesson.time_start,
+                    time_end: lesson.time_end,
+                    subgroup: lesson.subgroup,
+                    subject: lesson.subject,
+                    room: lesson.room,
+                    lesson_type: lesson.lesson_type,
+                    teacher: lesson.teacher,
+                    kind: lesson.kind,
+                    load_plan_id: lesson.load_plan_id,
+                    is_removed: 1
+                });
             }
-            // action === 'remove' — simply not carried into finalLessons
         } else {
             finalLessons.push({
                 day_of_week: lesson.day_of_week,
@@ -977,9 +1048,9 @@ router.post('/schedule/materialize-week', (req, res) => {
                 group_id, subgroup, day_of_week, week_type, specific_week,
                 template_from_week, is_removed,
                 time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-                kind, load_plan_id
+                kind, load_plan_id, semester_id
             )
-            VALUES (?, ?, ?, 0, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         let count = 0;
@@ -990,6 +1061,7 @@ router.post('/schedule/materialize-week', (req, res) => {
                 lesson.subgroup,
                 lesson.day_of_week,
                 payload.week_number,
+                lesson.is_removed ? 1 : 0,
                 lesson.time_start,
                 lesson.time_end,
                 lesson.subject,
@@ -998,7 +1070,8 @@ router.post('/schedule/materialize-week', (req, res) => {
                 lesson.teacher,
                 count,
                 lesson.kind || 'lesson',
-                lesson.load_plan_id ?? null
+                lesson.load_plan_id ?? null,
+                semester.id
             );
             count += 1;
         }
@@ -1038,7 +1111,16 @@ router.delete('/schedule/week', (req, res) => {
         return res.status(400).json({ error: 'Укажите корректный week_number' });
     }
 
-    const result = db.prepare('DELETE FROM lessons WHERE group_id = ? AND specific_week = ?').run(groupId, weekNumber);
+    const semester = getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    // Week N of the working semester only — the same number in another
+    // semester is a different calendar week with its own history.
+    const result = db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?')
+        .run(semester.id, groupId, weekNumber);
 
     writeAuditLog(db, {
         adminId: req.admin.id,
@@ -1066,11 +1148,30 @@ router.get('/lessons', (req, res) => {
         return res.status(404).json({ error: 'Группа не найдена' });
     }
 
+    // The constructor shows one semester at a time — the working one unless a
+    // specific semester is asked for. Mixing semesters here would put autumn's
+    // pairs into spring's grid, where editing them rewrites autumn.
+    let semester;
+
+    if (req.query.semester_id) {
+        semester = getSemesterById(db, Number.parseInt(req.query.semester_id, 10));
+
+        if (!semester) {
+            return res.status(404).json({ error: 'Семестр не найден' });
+        }
+    } else {
+        semester = getActiveSemester(db);
+    }
+
+    if (!semester) {
+        return res.json([]);
+    }
+
     const rows = db.prepare(`
         SELECT * FROM lessons
-        WHERE group_id = ?
+        WHERE semester_id = ? AND group_id = ?
         ORDER BY day_of_week, sort_order, time_start
-    `).all(groupId);
+    `).all(semester.id, groupId);
 
     res.json(rows);
 });
@@ -1094,9 +1195,14 @@ router.post('/lessons', (req, res) => {
     // Only matters for template rows (specific_week IS NULL) — always the real
     // current week, never client-supplied, so a version can never claim to have
     // taken effect in the past and silently rewrite what earlier weeks showed.
-    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-    const templateFromWeek = getWeekMeta(semesterStart, formatLocalDate()).weekNumber;
+    // New pairs go into the working semester, and "now" is measured in its weeks.
+    const semester = getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
     // Without this, an "every week" pair could be created into a cell that
     // already holds a чётная/нечётная one (the constructor's template view
@@ -1105,6 +1211,7 @@ router.post('/lessons', (req, res) => {
     // the teacher — see the slot-collision tests.
     const occupant = payload.specific_week === null
         ? findTemplateSlotOccupant(db, {
+            semesterId: semester.id,
             groupId: payload.group_id,
             dayOfWeek: payload.day_of_week,
             timeStart: payload.time_start,
@@ -1114,6 +1221,7 @@ router.post('/lessons', (req, res) => {
             targetWeek: templateFromWeek
         })
         : findWeekSlotOccupant(db, {
+            semesterId: semester.id,
             groupId: payload.group_id,
             weekNumber: payload.specific_week,
             dayOfWeek: payload.day_of_week,
@@ -1132,9 +1240,10 @@ router.post('/lessons', (req, res) => {
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week,
             template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, sort_order
+            time_start, time_end, subject, room, lesson_type, teacher, sort_order,
+            kind, semester_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         payload.group_id,
         payload.subgroup,
@@ -1149,7 +1258,9 @@ router.post('/lessons', (req, res) => {
         payload.room,
         payload.lesson_type,
         payload.teacher,
-        payload.sort_order
+        payload.sort_order,
+        payload.kind,
+        semester.id
     );
 
     const created = db.prepare('SELECT * FROM lessons WHERE id = ?').get(result.lastInsertRowid);
@@ -1287,9 +1398,12 @@ router.delete('/lessons/:id', (req, res) => {
         return res.status(404).json({ error: 'Занятие не найдено' });
     }
 
-    const semesterStartRow = db.prepare("SELECT value FROM settings WHERE key = 'semester_start_date'").get();
-    const semesterStart = semesterStartRow ? semesterStartRow.value : '2026-02-09';
-    const currentWeek = getWeekMeta(semesterStart, formatLocalDate()).weekNumber;
+    // "Has this row already been live?" is asked in the row's OWN semester.
+    // Measured against another semester's calendar, an autumn pair deleted in
+    // February looked brand new (spring week 1) and was hard-deleted — taking
+    // every autumn week it had run in, and those hours, with it.
+    const semester = getSemesterById(db, lesson.semester_id) || getActiveSemester(db);
+    const currentWeek = semester ? getSemesterWeekMeta(semester, formatLocalDate()).weekNumber : 1;
 
     // A template row that has already been live in earlier weeks is retired
     // with a tombstone from this week forward, never erased: hard-deleting it
@@ -1306,19 +1420,24 @@ router.delete('/lessons/:id', (req, res) => {
                 group_id, subgroup, day_of_week, week_type, specific_week,
                 template_from_week, is_removed,
                 time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-                kind, load_plan_id
+                kind, load_plan_id, semester_id
             )
-            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type,
             currentWeek,
             lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
             lesson.lesson_type, lesson.teacher, lesson.sort_order,
-            lesson.kind, lesson.load_plan_id
+            lesson.kind, lesson.load_plan_id, lesson.semester_id
         );
+    } else if (isLastVisibleWeekRow(db, lesson)) {
+        // Deleting a week's last pair must still leave the week "its own" —
+        // with no rows left, the template would take the week back and the
+        // pair just cancelled would reappear (and be counted again).
+        db.prepare('UPDATE lessons SET is_removed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(lessonId);
     } else {
         // Never been live in a past week (created this week or later), or it is
-        // a single week's own row — nothing in the past depends on it.
+        // one of several rows of a single week — nothing else depends on it.
         db.prepare('DELETE FROM lessons WHERE id = ?').run(lessonId);
     }
 
@@ -1350,6 +1469,11 @@ router.get('/settings', (req, res) => {
     for (const row of rows) {
         settings[row.key] = row.value;
     }
+
+    // The constructor numbers weeks and picks parity from the semester it is
+    // editing, so it needs that semester, not just a start date.
+    const active = getActiveSemester(db);
+    settings.active_semester = active ? mapSemesterRow(active) : null;
 
     res.json(settings);
 });
@@ -1751,6 +1875,11 @@ router.get('/semesters/:id/impact', (req, res) => {
         ? req.query.start_date
         : semester.start_date;
     const nextWeeksCount = req.query.weeks_count ? Number.parseInt(req.query.weeks_count, 10) : semester.weeks_count;
+    // Flipping which week is нечётная swaps every template pair onto the other
+    // weeks — as much a re-derivation of past hours as moving the start date.
+    const nextParity = req.query.first_week_parity
+        ? Number.parseInt(req.query.first_week_parity, 10)
+        : resolveFirstWeekParity(semester);
 
     if (!isValidIsoDate(nextStartDate)) {
         return res.status(400).json({ error: 'Некорректная дата начала' });
@@ -1760,42 +1889,27 @@ router.get('/semesters/:id/impact', (req, res) => {
         return res.status(400).json({ error: 'Некорректное число недель' });
     }
 
+    if (nextParity !== 1 && nextParity !== 2) {
+        return res.status(400).json({ error: 'Некорректная чётность первой недели' });
+    }
+
     const planRows = db.prepare(`
         SELECT lp.id, lp.group_id, lp.teacher_id, t.full_name AS teacher_name
         FROM load_plan lp JOIN teachers t ON t.id = lp.teacher_id
         WHERE lp.semester_id = ?
     `).all(semesterId);
 
-    const exceptionCache = new Map();
-    const exceptionWeeksFor = (groupId, weeksCount) => {
-        const key = `${groupId}:${weeksCount}`;
-        if (!exceptionCache.has(key)) {
-            const overrides = db.prepare(
-                'SELECT specific_week FROM lessons WHERE group_id = ? AND specific_week IS NOT NULL'
-            ).all(groupId);
-            exceptionCache.set(key, computeExceptionWeeks(overrides, weeksCount));
-        }
-        return exceptionCache.get(key);
-    };
-
+    const progressCache = new Map();
     const changedTeachers = new Set();
     let hoursBefore = 0;
     let hoursAfter = 0;
     let changedRows = 0;
 
     for (const row of planRows) {
-        const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ?').all(row.id);
-        const before = computeLoadProgress({
-            semesterStartDate: semester.start_date,
-            weeksCount: semester.weeks_count,
-            linkedLessons,
-            exceptionWeeks: exceptionWeeksFor(row.group_id, semester.weeks_count)
-        }).occurred_hours;
-        const after = computeLoadProgress({
-            semesterStartDate: nextStartDate,
-            weeksCount: nextWeeksCount,
-            linkedLessons,
-            exceptionWeeks: exceptionWeeksFor(row.group_id, nextWeeksCount)
+        const before = computePlanRowProgress(db, row, semester, { cache: progressCache }).occurred_hours;
+        const after = computePlanRowProgress(db, row, semester, {
+            cache: progressCache,
+            overrides: { start_date: nextStartDate, weeks_count: nextWeeksCount, first_week_parity: nextParity }
         }).occurred_hours;
 
         hoursBefore += before;
@@ -1808,8 +1922,8 @@ router.get('/semesters/:id/impact', (req, res) => {
     }
 
     res.json({
-        current: { start_date: semester.start_date, weeks_count: semester.weeks_count },
-        proposed: { start_date: nextStartDate, weeks_count: nextWeeksCount },
+        current: { start_date: semester.start_date, weeks_count: semester.weeks_count, first_week_parity: resolveFirstWeekParity(semester) },
+        proposed: { start_date: nextStartDate, weeks_count: nextWeeksCount, first_week_parity: nextParity },
         last_week: {
             current: addDaysToIsoDate(semester.start_date, (semester.weeks_count - 1) * 7),
             proposed: addDaysToIsoDate(nextStartDate, (nextWeeksCount - 1) * 7)
@@ -1840,9 +1954,16 @@ router.post('/semesters', (req, res) => {
 
     const db = getDb();
     const result = db.prepare(`
-        INSERT INTO semesters (label, start_date, weeks_count, is_active)
-        VALUES (?, ?, ?, 0)
-    `).run(payload.label, payload.start_date, payload.weeks_count);
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES (?, ?, ?, 0, ?)
+    `).run(
+        payload.label,
+        payload.start_date,
+        payload.weeks_count,
+        // Read off the header of the semester's first published week sheet;
+        // only when not given does the calendar rule stand in for it.
+        payload.first_week_parity ?? defaultFirstWeekParity(payload.start_date)
+    );
     const created = db.prepare('SELECT * FROM semesters WHERE id = ?').get(result.lastInsertRowid);
 
     writeAuditLog(db, {
@@ -1890,13 +2011,16 @@ router.put('/semesters/:id', (req, res) => {
 
         db.prepare(`
             UPDATE semesters
-            SET label = ?, start_date = ?, weeks_count = ?, is_active = ?
+            SET label = ?, start_date = ?, weeks_count = ?, is_active = ?, first_week_parity = ?
             WHERE id = ?
-        `).run(next.label, next.start_date, next.weeks_count, next.is_active ? 1 : 0, semesterId);
+        `).run(
+            next.label, next.start_date, next.weeks_count, next.is_active ? 1 : 0,
+            resolveFirstWeekParity(next), semesterId
+        );
 
         // Whichever semester is now the active one dictates the date the
         // schedule numbers its weeks from — see syncSemesterStartDate.
-        const active = db.prepare('SELECT start_date FROM semesters WHERE is_active = 1').get();
+        const active = getActiveSemester(db);
         if (active) {
             syncSemesterStartDate(db, active.start_date);
         }
@@ -1996,28 +2120,10 @@ router.get('/load-plan/export', async (req, res) => {
         ORDER BY t.full_name, d.name, lp.lesson_type
     `).all(semester.id);
 
-    const exceptionWeeksCache = new Map();
+    const progressCache = new Map();
 
     const rows = planRows.map((row) => {
-        const cacheKey = `${row.group_id}:${semester.id}`;
-        let exceptionWeeks = exceptionWeeksCache.get(cacheKey);
-
-        if (!exceptionWeeks) {
-            const overrideRows = db.prepare(`
-                SELECT specific_week FROM lessons
-                WHERE group_id = ? AND specific_week IS NOT NULL
-            `).all(row.group_id);
-            exceptionWeeks = computeExceptionWeeks(overrideRows, semester.weeks_count);
-            exceptionWeeksCache.set(cacheKey, exceptionWeeks);
-        }
-
-        const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ?').all(row.id);
-        const progress = computeLoadProgress({
-            semesterStartDate: semester.start_date,
-            weeksCount: semester.weeks_count,
-            linkedLessons,
-            exceptionWeeks
-        });
+        const progress = computePlanRowProgress(db, row, semester, { cache: progressCache });
 
         return {
             teacher_name: row.teacher_name,
@@ -2239,14 +2345,14 @@ router.put('/lessons/:id/load-plan', (req, res) => {
     }
 
     const db = getDb();
-    const lesson = db.prepare('SELECT id, group_id FROM lessons WHERE id = ?').get(lessonId);
+    const lesson = db.prepare('SELECT id, group_id, semester_id FROM lessons WHERE id = ?').get(lessonId);
 
     if (!lesson) {
         return res.status(404).json({ error: 'Занятие не найдено' });
     }
 
     if (payload.load_plan_id !== null) {
-        const plan = db.prepare('SELECT id, group_id FROM load_plan WHERE id = ?').get(payload.load_plan_id);
+        const plan = db.prepare('SELECT id, group_id, semester_id FROM load_plan WHERE id = ?').get(payload.load_plan_id);
 
         if (!plan) {
             return res.status(404).json({ error: 'Строка плана не найдена' });
@@ -2258,6 +2364,11 @@ router.put('/lessons/:id/load-plan', (req, res) => {
         // the same hole at the API.
         if (plan.group_id !== lesson.group_id) {
             return res.status(409).json({ error: 'Пара и строка плана относятся к разным группам' });
+        }
+
+        // Same for semesters: an autumn pair must not feed a spring plan row.
+        if (plan.semester_id !== lesson.semester_id) {
+            return res.status(409).json({ error: 'Пара и строка плана относятся к разным семестрам' });
         }
     }
 
@@ -2276,7 +2387,9 @@ router.put('/lessons/:id/load-plan', (req, res) => {
 });
 
 function mapSemesterRow(row) {
-    return { ...row, is_active: Boolean(row.is_active) };
+    // Never hands out the 0 "not stated" marker — callers always see the parity
+    // week 1 actually resolves to.
+    return { ...row, is_active: Boolean(row.is_active), first_week_parity: resolveFirstWeekParity(row) };
 }
 
 /**
@@ -2294,7 +2407,50 @@ function syncSemesterStartDate(db, startDate) {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `).run(startDate);
 
-    db.prepare('UPDATE semesters SET start_date = ? WHERE is_active = 1').run(startDate);
+    // Exactly one row: the working semester. (The database allows at most one
+    // active semester, but updating by id keeps this correct regardless.)
+    const working = getActiveSemester(db);
+    if (working) {
+        db.prepare('UPDATE semesters SET start_date = ? WHERE id = ?').run(startDate, working.id);
+    }
+}
+
+const NO_WORKING_SEMESTER = 'Сначала создайте семестр в разделе «Нагрузка» — расписание ведётся внутри семестра';
+
+/**
+ * How many of the rows an upload is about to replace are already linked to a
+ * load_plan row. Replacing them would detach those pairs from the plan (the
+ * uploaded rows arrive unlinked) and erase hours already counted from them.
+ */
+function isLastVisibleWeekRow(db, lesson) {
+    if (lesson.specific_week === null || lesson.is_removed) {
+        return false;
+    }
+
+    const others = db.prepare(`
+        SELECT COUNT(*) AS count FROM lessons
+        WHERE semester_id = ? AND group_id = ? AND specific_week = ? AND is_removed = 0 AND id != ?
+    `).get(lesson.semester_id, lesson.group_id, lesson.specific_week, lesson.id).count;
+
+    return others === 0;
+}
+
+function countLinkedLessonsToReplace(db, semesterId, groupId, specificWeek) {
+    return specificWeek === null
+        ? db.prepare(`
+            SELECT COUNT(*) c FROM lessons
+            WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND load_plan_id IS NOT NULL
+        `).get(semesterId, groupId).c
+        : db.prepare(`
+            SELECT COUNT(*) c FROM lessons
+            WHERE semester_id = ? AND group_id = ? AND specific_week = ? AND load_plan_id IS NOT NULL
+        `).get(semesterId, groupId, specificWeek).c;
+}
+
+function replacingLinkedLessonsError(count) {
+    return `${count} пар(ы) из заменяемого расписания уже привязаны к плану нагрузки. `
+        + 'Загрузка файлом заменила бы их непривязанными парами и стёрла бы уже посчитанные часы. '
+        + 'Правьте такое расписание в конструкторе или сначала отвяжите пары.';
 }
 
 function pluralizePlanRows(count) {
@@ -2317,26 +2473,7 @@ function attachLoadProgress(db, planRow, exceptionWeeksCache = new Map()) {
         return { ...planRow, confirmed: Boolean(planRow.confirmed), progress: null };
     }
 
-    const cacheKey = `${planRow.group_id}:${semester.id}`;
-    let exceptionWeeks = exceptionWeeksCache.get(cacheKey);
-
-    if (!exceptionWeeks) {
-        const overrideRows = db.prepare(`
-            SELECT specific_week FROM lessons
-            WHERE group_id = ? AND specific_week IS NOT NULL
-        `).all(planRow.group_id);
-        exceptionWeeks = computeExceptionWeeks(overrideRows, semester.weeks_count);
-        exceptionWeeksCache.set(cacheKey, exceptionWeeks);
-    }
-
-    const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ?').all(planRow.id);
-
-    const progress = computeLoadProgress({
-        semesterStartDate: semester.start_date,
-        weeksCount: semester.weeks_count,
-        linkedLessons,
-        exceptionWeeks
-    });
+    const progress = computePlanRowProgress(db, planRow, semester, { cache: exceptionWeeksCache });
 
     return {
         ...planRow,
