@@ -15,7 +15,11 @@ const path = require('path');
 // writes and bad migrations, not against losing the volume itself — for that,
 // download one from the admin panel now and then.
 
-const RETENTION = { boot: 10, daily: 30 };
+// Sized for the 500 MB Railway volume: at ~14 MB of database (roughly ten
+// years of this app's data) 19 copies stay well under half of it.
+const RETENTION = { boot: 5, daily: 14 };
+// Leave the database room to grow: never fill the volume with copies.
+const MIN_FREE_BYTES_FACTOR = 5;
 const DAY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 function resolveBackupsDir(dbPath) {
@@ -42,6 +46,13 @@ function writeSnapshot(db, dbPath, kind, fileStamp) {
     const target = path.join(dir, `schedule-${kind}-${fileStamp}.db`);
 
     if (fs.existsSync(target)) {
+        return null;
+    }
+
+    const dbSize = fs.statSync(dbPath).size;
+    const { bavail, bsize } = fs.statfsSync(dir);
+    if (bavail * bsize < dbSize * MIN_FREE_BYTES_FACTOR) {
+        console.error(`[backup] Skipped ${kind} backup: only ${Math.round((bavail * bsize) / 1e6)} MB free on the volume`);
         return null;
     }
 
