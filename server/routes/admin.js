@@ -1208,6 +1208,35 @@ router.post('/lessons', (req, res) => {
 
     const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
+    // An edit in the template view is a new version of an existing row. It
+    // must be allowed into the cell that row occupies, and it inherits the
+    // row's load-plan link — a version without it would leave the teacher's
+    // hours counting the old version while students see the new one.
+    let replaced = null;
+
+    if (payload.replaces_lesson_id !== null) {
+        replaced = db.prepare('SELECT * FROM lessons WHERE id = ?').get(payload.replaces_lesson_id);
+
+        if (
+            !replaced || replaced.group_id !== payload.group_id || replaced.semester_id !== semester.id
+            || replaced.specific_week !== null || payload.specific_week !== null
+        ) {
+            return res.status(409).json({ error: 'Изменяемая пара не найдена в шаблоне этой группы — обновите страницу' });
+        }
+    } else if (payload.is_removed && payload.specific_week === null) {
+        // A removal sent without naming its row still has to carry the link of
+        // the pair it hides: the hour counter selects rows by load_plan_id, so an
+        // unlinked tombstone is invisible to it and the pair keeps counting.
+        replaced = resolveTemplateLessons(db.prepare(`
+            SELECT * FROM lessons
+            WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL
+              AND day_of_week = ? AND time_start = ? AND time_end = ? AND subgroup = ? AND week_type = ?
+        `).all(
+            semester.id, payload.group_id, payload.day_of_week, payload.time_start, payload.time_end,
+            payload.subgroup, payload.week_type
+        ), templateFromWeek)[0] || null;
+    }
+
     // Without this, an "every week" pair could be created into a cell that
     // already holds a чётная/нечётная one (the constructor's template view
     // filters by exact parity, so such a cell looks empty). The result was two
@@ -1222,7 +1251,8 @@ router.post('/lessons', (req, res) => {
             timeEnd: payload.time_end,
             subgroup: payload.subgroup,
             weekType: payload.week_type,
-            targetWeek: templateFromWeek
+            targetWeek: templateFromWeek,
+            ignoreLessonId: replaced ? replaced.id : null
         })
         : findWeekSlotOccupant(db, {
             semesterId: semester.id,
@@ -1240,34 +1270,90 @@ router.post('/lessons', (req, res) => {
         });
     }
 
-    const result = db.prepare(`
+    const insertLesson = db.prepare(`
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week,
             template_from_week, is_removed,
             time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-            kind, semester_id
+            kind, load_plan_id, semester_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-        payload.group_id,
-        payload.subgroup,
-        payload.day_of_week,
-        payload.week_type,
-        payload.specific_week,
-        templateFromWeek,
-        payload.is_removed ? 1 : 0,
-        payload.time_start,
-        payload.time_end,
-        payload.subject,
-        payload.room,
-        payload.lesson_type,
-        payload.teacher,
-        payload.sort_order,
-        payload.kind,
-        semester.id
-    );
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const slotKey = (row) => [row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type].join('|');
 
-    const created = db.prepare('SELECT * FROM lessons WHERE id = ?').get(result.lastInsertRowid);
+    const createdId = db.transaction(() => {
+        if (replaced && !payload.is_removed && replaced.template_from_week >= templateFromWeek && !replaced.is_removed) {
+            // Not live in any earlier week yet: nothing in the past depends on
+            // it, so the row itself is corrected instead of stacking versions.
+            db.prepare(`
+                UPDATE lessons SET
+                    subgroup = ?, day_of_week = ?, week_type = ?, time_start = ?, time_end = ?,
+                    subject = ?, room = ?, lesson_type = ?, teacher = ?, kind = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `).run(
+                payload.subgroup, payload.day_of_week, payload.week_type, payload.time_start, payload.time_end,
+                payload.subject, payload.room, payload.lesson_type, payload.teacher, payload.kind, replaced.id
+            );
+            return replaced.id;
+        }
+
+        if (replaced && !payload.is_removed && slotKey(replaced) !== slotKey(payload)) {
+            // Moving to another cell or parity: the old cell is retired from
+            // this week, as move-lesson does, carrying the same link.
+            insertLesson.run(
+                replaced.group_id, replaced.subgroup, replaced.day_of_week, replaced.week_type, null,
+                templateFromWeek, 1,
+                replaced.time_start, replaced.time_end, replaced.subject, replaced.room,
+                replaced.lesson_type, replaced.teacher, replaced.sort_order,
+                replaced.kind, replaced.load_plan_id, semester.id
+            );
+        }
+
+        if (replaced && payload.is_removed) {
+            // Hide exactly the row being removed, even if the form's fields were
+            // touched before pressing "убрать".
+            return insertLesson.run(
+                replaced.group_id, replaced.subgroup, replaced.day_of_week, replaced.week_type, null,
+                templateFromWeek, 1,
+                replaced.time_start, replaced.time_end, replaced.subject, replaced.room,
+                replaced.lesson_type, replaced.teacher, replaced.sort_order,
+                replaced.kind, replaced.load_plan_id, semester.id
+            ).lastInsertRowid;
+        }
+
+        return insertLesson.run(
+            payload.group_id,
+            payload.subgroup,
+            payload.day_of_week,
+            payload.week_type,
+            payload.specific_week,
+            templateFromWeek,
+            payload.is_removed ? 1 : 0,
+            payload.time_start,
+            payload.time_end,
+            payload.subject,
+            payload.room,
+            payload.lesson_type,
+            payload.teacher,
+            payload.sort_order,
+            replaced ? replaced.kind : payload.kind,
+            replaced ? replaced.load_plan_id : null,
+            semester.id
+        ).lastInsertRowid;
+    })();
+
+    const created = db.prepare('SELECT * FROM lessons WHERE id = ?').get(createdId);
+
+    // Weeks from now on that already have their own rows ignore the template
+    // (no merging) — so this change will not show up in them. Said out loud,
+    // otherwise "I changed the room" silently doesn't apply to week 12.
+    const ownWeeksAhead = payload.specific_week === null
+        ? db.prepare(`
+            SELECT DISTINCT specific_week FROM lessons
+            WHERE semester_id = ? AND group_id = ? AND specific_week >= ?
+            ORDER BY specific_week
+        `).all(semester.id, payload.group_id, templateFromWeek).map((row) => row.specific_week)
+        : [];
 
     writeAuditLog(db, {
         adminId: req.admin.id,
@@ -1285,7 +1371,7 @@ router.post('/lessons', (req, res) => {
         }
     });
 
-    res.status(201).json(created);
+    res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead });
 });
 
 router.put('/lessons/:id', (req, res) => {
@@ -1317,6 +1403,25 @@ router.put('/lessons/:id', (req, res) => {
 
     if (nextLesson.time_start >= nextLesson.time_end) {
         return res.status(400).json({ error: 'Время окончания должно быть позже времени начала' });
+    }
+
+    // In-place edits are for one week's own rows; moving such a row onto a
+    // cell another pair of that week already holds would show two at once.
+    if (nextLesson.specific_week !== null) {
+        const occupant = findWeekSlotOccupant(db, {
+            semesterId: lesson.semester_id,
+            groupId: lesson.group_id,
+            weekNumber: nextLesson.specific_week,
+            dayOfWeek: nextLesson.day_of_week,
+            timeStart: nextLesson.time_start,
+            timeEnd: nextLesson.time_end,
+            subgroup: nextLesson.subgroup,
+            ignoreLessonId: lessonId
+        });
+
+        if (occupant && !lesson.is_removed) {
+            return res.status(409).json({ error: `В этой ячейке уже есть занятие: ${occupant.subject}` });
+        }
     }
 
     db.prepare(`
@@ -2235,6 +2340,11 @@ router.post('/load-plan', (req, res) => {
         return res.status(404).json({ error: 'Группа не найдена' });
     }
 
+    const duplicate = findDuplicatePlanRow(db, payload);
+    if (duplicate) {
+        return res.status(409).json({ error: duplicatePlanRowError(duplicate) });
+    }
+
     const result = db.prepare(`
         INSERT INTO load_plan (
             semester_id, teacher_id, discipline_id, lesson_type,
@@ -2321,6 +2431,11 @@ router.put('/load-plan/:id', (req, res) => {
     }
 
     const next = { ...existing, ...payload };
+
+    const duplicate = findDuplicatePlanRow(db, next, planId);
+    if (duplicate) {
+        return res.status(409).json({ error: duplicatePlanRowError(duplicate) });
+    }
 
     db.prepare(`
         UPDATE load_plan
@@ -2475,6 +2590,31 @@ const NO_WORKING_SEMESTER = 'Сначала создайте семестр в �
  * load_plan row. Replacing them would detach those pairs from the plan (the
  * uploaded rows arrive unlinked) and erase hours already counted from them.
  */
+/**
+ * The same teacher, discipline, type, group and subgroup twice in one semester
+ * is always a slip: pairs get linked to one of the two rows, the other sits at
+ * 0 hours forever and its planned hours inflate the totals in the report.
+ */
+function findDuplicatePlanRow(db, row, excludeId = null) {
+    return db.prepare(`
+        SELECT lp.id, t.full_name AS teacher_name, d.name AS discipline_name, g.name AS group_name
+        FROM load_plan lp
+        JOIN teachers t ON t.id = lp.teacher_id
+        JOIN disciplines d ON d.id = lp.discipline_id
+        JOIN groups_ g ON g.id = lp.group_id
+        WHERE lp.semester_id = ? AND lp.teacher_id = ? AND lp.discipline_id = ? AND lp.lesson_type = ?
+          AND lp.group_id = ? AND lp.subgroup = ? AND lp.id != ?
+        LIMIT 1
+    `).get(
+        row.semester_id, row.teacher_id, row.discipline_id, row.lesson_type,
+        row.group_id, row.subgroup ?? 0, excludeId ?? 0
+    );
+}
+
+function duplicatePlanRowError(duplicate) {
+    return `Такая строка уже есть в плане: ${duplicate.teacher_name} — ${duplicate.discipline_name}, группа ${duplicate.group_name}. Измените часы в ней.`;
+}
+
 function isLastVisibleWeekRow(db, lesson) {
     if (lesson.specific_week === null || lesson.is_removed) {
         return false;

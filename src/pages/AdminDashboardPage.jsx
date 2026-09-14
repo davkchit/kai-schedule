@@ -765,7 +765,8 @@ export default function AdminDashboardPage() {
                         subgroup: Number(editForm.subgroup),
                         week_type: Number(editForm.week_type),
                         specific_week: null,
-                        is_removed: true
+                        is_removed: true,
+                        replaces_lesson_id: editForm.id ? Number(editForm.id) : null
                     })
                 });
 
@@ -865,7 +866,8 @@ export default function AdminDashboardPage() {
                     body: JSON.stringify({
                         ...body,
                         group_id: Number(editForm.group_id),
-                        specific_week: null
+                        specific_week: null,
+                        replaces_lesson_id: editMode === 'edit' && editForm.id ? Number(editForm.id) : null
                     })
                 });
             } else if (editContext === 'materialize') {
@@ -907,9 +909,14 @@ export default function AdminDashboardPage() {
                 return;
             }
 
+            const saved = await response.json().catch(() => ({}));
+            const ownWeeks = editContext === 'template' && Array.isArray(saved.own_weeks_ahead) ? saved.own_weeks_ahead : [];
+
             setIsEditModalOpen(false);
             setEditForm(DEFAULT_EDIT_FORM);
-            setToastMessage(editMode === 'create' ? 'Занятие добавлено' : 'Занятие обновлено');
+            setToastMessage(ownWeeks.length > 0
+                ? `Шаблон изменён. Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них изменение не появится, поправьте их на вкладке недели`
+                : (editMode === 'create' ? 'Занятие добавлено' : 'Занятие обновлено'));
             loadLessons(selectedGroupId);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {

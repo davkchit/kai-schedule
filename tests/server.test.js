@@ -1810,6 +1810,30 @@ test('public teacher search finds by partial name, and the load endpoint returns
     await context.close();
 });
 
+test('load plan refuses the same teacher/discipline/type/group twice in a semester, on create and on edit', async () => {
+    const context = await createTestContext();
+    const post = (url, body) => fetch(`${context.baseUrl}${url}`, {
+        method: 'POST', headers: { ...context.authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const teacherId = (await (await post('/api/admin/teachers', { full_name: 'Петров П.П.' })).json()).id;
+    const disciplineId = (await (await post('/api/admin/disciplines', { name: 'Химия' })).json()).id;
+    const row = { semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лаб', group_id: context.primaryGroupId, planned_hours: 16 };
+
+    assert.equal((await post('/api/admin/load-plan', row)).status, 201);
+    const again = await post('/api/admin/load-plan', row);
+    assert.equal(again.status, 409);
+    assert.match((await again.json()).error, /уже есть/);
+
+    // Another type is a different row; turning it into a duplicate by editing is refused too.
+    const practice = await (await post('/api/admin/load-plan', { ...row, lesson_type: 'Практика' })).json();
+    const edit = await fetch(`${context.baseUrl}/api/admin/load-plan/${practice.id}`, {
+        method: 'PUT', headers: { ...context.authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify({ lesson_type: 'Лаб' })
+    });
+    assert.equal(edit.status, 409);
+
+    await context.close();
+});
+
 async function createTestContext() {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-test-'));
     process.env.DB_PATH = path.join(tempDir, 'schedule.db');

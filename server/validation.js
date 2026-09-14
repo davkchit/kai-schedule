@@ -358,7 +358,12 @@ function validateLessonCreateBody(body) {
         lesson_type: readOptionalString(body.lesson_type, 'Тип занятия'),
         teacher: readOptionalString(body.teacher, 'Преподаватель'),
         kind: readLessonKind(body.kind),
-        sort_order: body.sort_order === undefined ? 0 : readInteger(body.sort_order, 'Порядок сортировки', { min: 0 })
+        sort_order: body.sort_order === undefined ? 0 : readInteger(body.sort_order, 'Порядок сортировки', { min: 0 }),
+        // The template row this one is a new version of (an edit or a removal
+        // made in the template view), so it can take that row's place.
+        replaces_lesson_id: body.replaces_lesson_id === undefined || body.replaces_lesson_id === null
+            ? null
+            : readInteger(body.replaces_lesson_id, 'replaces_lesson_id', { min: 1 })
     };
 }
 
