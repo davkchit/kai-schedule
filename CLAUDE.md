@@ -80,8 +80,13 @@ Pages: `WelcomePage` → user selects university/group → `SchedulePage` render
 
 - `universities`, `groups_` — hierarchy
 - `lessons` — schedule entries; the core of the domain
-- `settings` — key/value store, notably `semester_start_date`
+- `semesters` — `start_date` (always a Monday), `weeks_count`, `first_week_parity` (1 нечётная / 2 чётная), `is_active` (at most one: the *working* semester the constructor and uploads write into)
+- `settings` — key/value store; `semester_start_date` mirrors the working semester
 - `admins`, `audit_logs`, `login_attempts` — auth/security
+
+### Critical Domain: Semesters
+
+Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours are computed inside the lesson's own semester. Three different "which semester" questions — never mix them: the **working** semester (admin writes; `getActiveSemester`), the semester **in effect on a date** (students per day, teachers by default; `getSemesterForDate`), and a semester **being viewed** in the load page (no server state). Parity of week N = strict alternation from `first_week_parity`; ISO-week parity is only the default for a new semester. Past `weeks_count` the template stops (schedule and hours alike). `tests/yearLifecycle.test.js` drives a whole year with `KAI_FAKE_NOW` (ignored in production).
 
 ### Critical Domain: Schedule Override Model
 
@@ -90,7 +95,7 @@ Lessons have a `specific_week` column:
 - `NULL` — template entry, applies every semester week matching `week_type`
 - `N` (integer) — full week override for that group; **when an override exists for week N, all template entries for that group/week are ignored** (no merging)
 
-`week_type`: `0` = every week, `1` = odd weeks, `2` = even weeks. Week number is calculated from `semester_start_date` in settings.
+`week_type`: `0` = every week, `1` = odd weeks, `2` = even weeks. Removing a week's pair leaves an `is_removed` marker row so the week stays "its own". Template rows are versioned by `template_from_week`; edits/removals insert a new version or tombstone from the current week carrying the same `load_plan_id` (hours select rows by it).
 
 ### Bulk Schedule Upload
 
@@ -128,4 +133,4 @@ Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored
 
 ### Deployment Note (Railway)
 
-`data/schedule.db` is committed to git (not in `.gitignore`) so Railway gets the database on deploy. Railway's filesystem is ephemeral — to preserve weekly overrides across deploys, commit the DB before pushing. Download the latest backup from the admin panel → replace `data/schedule.db` → commit → push.
+Railway mounts a persistent volume at `/app/data`, so the live database survives redeploys and the `data/schedule.db` in git is **not** what production runs on (it only matters locally). A brand-new empty volume is bootstrapped from `seed/schedule.seed.db`. Backups: automatic snapshot on every boot before migrations and one per day (`server/autoBackup.js`, same volume), manual ones from the panel; restore from a listed backup or an uploaded file in the panel (`POST /api/admin/backups/:file/restore`, `/backups/upload-restore`). Moving local data to production = upload the file via "Восстановить из файла".
