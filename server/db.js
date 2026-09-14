@@ -3,14 +3,16 @@ const path = require('path');
 const fs = require('fs');
 const { defaultFirstWeekParity, formatLocalDate, isValidIsoDate, mondayOfWeek } = require('./utils/date');
 
+const { snapshotBeforeMigrations } = require('./autoBackup');
+
 const DEFAULT_DB_PATH = path.join(__dirname, '..', 'data', 'schedule.db');
 
 // Lives outside data/ on purpose: when a persistent volume is mounted at
 // data/, the volume shadows whatever was baked into the image there — this
 // snapshot sits at a separate path so it survives that and can still seed a
 // brand-new (empty) volume on first boot. Updated periodically from a real
-// backup, not meant to be perfectly current — see server/backup-schedule.js
-// for the ongoing automated backups.
+// backup, not meant to be perfectly current — see server/autoBackup.js for
+// the ongoing automated backups.
 const DEFAULT_SEED_DB_PATH = path.join(__dirname, '..', 'seed', 'schedule.seed.db');
 
 let db;
@@ -87,12 +89,18 @@ function getDb() {
     }
 
     ensureDataDirectory(nextDbPath);
+    const existedBefore = fs.existsSync(nextDbPath);
     bootstrapFromSeedIfMissing(nextDbPath);
 
     db = new Database(nextDbPath);
     currentDbPath = nextDbPath;
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
+
+    if (existedBefore) {
+        // initTables also migrates — keep the data as it was right before.
+        snapshotBeforeMigrations(db, nextDbPath);
+    }
 
     initTables();
 

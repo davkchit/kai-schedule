@@ -329,6 +329,61 @@ export default function AdminDashboardPage() {
         }
     }
 
+    // Replacing the whole database is the one action here that cannot be
+    // undone by editing — so the specialist types a word, not just clicks OK.
+    // The server keeps a copy of the state being replaced either way.
+    function confirmRestore(sourceLabel) {
+        const answer = window.prompt(
+            `Восстановить базу из «${sourceLabel}»?\n\n` +
+            'Всё расписание, нагрузка и настройки станут такими, какими были в этой копии. ' +
+            'Изменения, сделанные после неё, пропадут (текущее состояние сохранится отдельной копией).\n\n' +
+            'Чтобы продолжить, введите слово ВОССТАНОВИТЬ'
+        );
+        return answer !== null && answer.trim().toUpperCase() === 'ВОССТАНОВИТЬ';
+    }
+
+    async function finishRestore(response) {
+        const data = await response.json();
+
+        if (!response.ok) {
+            setToastMessage(data.error || 'Не удалось восстановить базу');
+            return;
+        }
+
+        window.alert(
+            `База восстановлена: групп ${data.groups}, занятий ${data.lessons}.\n` +
+            `Состояние до восстановления сохранено как ${data.safety_backup}.\n\nСтраница перезагрузится.`
+        );
+        window.location.reload();
+    }
+
+    async function restoreBackup(fileName) {
+        if (!confirmRestore(fileName)) return;
+
+        try {
+            await finishRestore(await api(`/api/admin/backups/${encodeURIComponent(fileName)}/restore`, { method: 'POST' }));
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') setToastMessage('Ошибка сети');
+        }
+    }
+
+    async function restoreFromFile(event) {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+
+        if (!file || !confirmRestore(file.name)) return;
+
+        try {
+            await finishRestore(await api('/api/admin/backups/upload-restore', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: file
+            }));
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') setToastMessage('Ошибка сети');
+        }
+    }
+
     async function createBackup() {
         setIsCreatingBackup(true);
 
@@ -1457,12 +1512,19 @@ export default function AdminDashboardPage() {
                     <div className="audit-header">
                         <div>
                             <h2 className="section-title">Резервные копии</h2>
-                            <p className="section-desc">Ручное создание и скачивание backup-файлов SQLite перед опасными изменениями.</p>
+                            <p className="section-desc">
+                                Копия создаётся автоматически раз в день и при каждом обновлении сервера. Скачивайте копию
+                                себе время от времени: если пропадёт сам сервер, базу можно вернуть из файла.
+                            </p>
                         </div>
                         <div className="section-actions">
                             <button className="btn btn-secondary" onClick={loadBackups}>
                                 Обновить список
                             </button>
+                            <label className="btn btn-secondary">
+                                Восстановить из файла
+                                <input type="file" accept=".db" hidden onChange={restoreFromFile} />
+                            </label>
                             <button className="btn btn-primary" onClick={createBackup} disabled={isCreatingBackup}>
                                 {isCreatingBackup ? 'Создание...' : 'Создать backup'}
                             </button>
@@ -1488,6 +1550,10 @@ export default function AdminDashboardPage() {
                                             <a className="btn-link" href={`/api/admin/backups/${encodeURIComponent(backup.file_name)}/download`}>
                                                 Скачать
                                             </a>
+                                            {' · '}
+                                            <button type="button" className="btn-link" onClick={() => restoreBackup(backup.file_name)}>
+                                                Восстановить
+                                            </button>
                                         </td>
                                     </tr>
                                 ))}
@@ -1722,7 +1788,8 @@ function formatAuditAction(action) {
         'lesson.update': 'Редактирование занятия',
         'lesson.delete': 'Удаление занятия',
         'settings.update': 'Изменение настройки',
-        'backup.create': 'Создание backup'
+        'backup.create': 'Создание backup',
+        'backup.restore': 'Восстановление базы из копии'
     };
 
     return labels[action] || action;

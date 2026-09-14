@@ -1,10 +1,14 @@
 const express = require('express');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { writeAuditLog } = require('../audit');
 const {
     createDatabaseBackup,
     getBackupDownloadPath,
-    listDatabaseBackups
+    getBackupFilePathForRestore,
+    listDatabaseBackups,
+    restoreDatabaseFromFile,
+    saveUploadedBackup
 } = require('../backups');
 const { getDb } = require('../db');
 const { buildScheduleWorkbook } = require('../exportSchedule');
@@ -1587,6 +1591,55 @@ router.get('/backups/:fileName/download', async (req, res) => {
     }
 
     res.download(filePath, req.params.fileName);
+});
+
+function respondRestored(req, res, result, source) {
+    // The audit row goes into the restored database — the one that stays.
+    writeAuditLog(getDb(), {
+        adminId: req.admin.id,
+        action: 'backup.restore',
+        entityType: 'database_backup',
+        entityId: source,
+        ipAddress: getClientAddress(req),
+        details: { source, ...result }
+    });
+
+    res.json({ success: true, ...result });
+}
+
+router.post('/backups/:fileName/restore', async (req, res) => {
+    let filePath;
+
+    try {
+        filePath = await getBackupFilePathForRestore(req.params.fileName);
+    } catch {
+        return res.status(404).json({ error: 'Резервная копия не найдена' });
+    }
+
+    try {
+        respondRestored(req, res, restoreDatabaseFromFile(filePath), req.params.fileName);
+    } catch (error) {
+        console.error('Backup restore error:', error);
+        res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Не удалось восстановить базу' });
+    }
+});
+
+// For when the copies on the server are gone too: a file downloaded earlier
+// from this panel is sent back as the raw request body.
+router.post('/backups/upload-restore', express.raw({ type: 'application/octet-stream', limit: '100mb' }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: 'Файл не получен' });
+    }
+
+    const { fileName, filePath } = await saveUploadedBackup(req.body);
+
+    try {
+        respondRestored(req, res, restoreDatabaseFromFile(filePath), fileName);
+    } catch (error) {
+        fs.rmSync(filePath, { force: true });
+        console.error('Backup upload-restore error:', error);
+        res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Не удалось восстановить базу' });
+    }
 });
 
 // ---------------------------------------------------------------------------
