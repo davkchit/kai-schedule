@@ -756,20 +756,42 @@ test('PUT /account changes the username and rejects a collision with an existing
     await context.close();
 });
 
-test('public API is rate-limited past the configured request budget', async () => {
+test('a burst of public reads from one address is not throttled — the whole campus shares one', async () => {
+    // Everyone on the university network leaves through a single NAT address,
+    // so a per-IP budget counts a thousand students as one visitor. A break
+    // between pairs must not end with most of them seeing an error.
     const context = await createTestContext();
 
-    const requests = [];
+    const statuses = await fireRequests(400, () => fetch(`${context.baseUrl}/api/universities`));
 
-    for (let i = 0; i < 201; i += 1) {
-        requests.push(fetch(`${context.baseUrl}/api/universities`));
-    }
+    assert.equal(statuses.filter((status) => status === 429).length, 0, 'public reads must survive a campus-sized burst');
 
-    const responses = await Promise.all(requests);
-    const statuses = responses.map((response) => response.status);
+    await context.close();
+});
 
-    assert.ok(statuses.includes(429), 'expected at least one request to be rate-limited');
-    assert.ok(statuses.filter((status) => status === 200).length <= 200);
+test('the admin area keeps a tight request budget', async () => {
+    // Writing needs a login, and one specialist never makes hundreds of
+    // requests a minute — so a flood here is either a bug or an attack.
+    const context = await createTestContext();
+
+    const statuses = await fireRequests(320, () => fetch(`${context.baseUrl}/api/admin/groups`, { headers: context.authHeaders }));
+
+    assert.ok(statuses.includes(429), 'expected the admin limiter to kick in');
+
+    await context.close();
+});
+
+test('health check answers with the state of the database', async () => {
+    const context = await createTestContext();
+
+    const response = await fetch(`${context.baseUrl}/api/health`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.status, 'ok');
+    assert.equal(body.database, 'ok');
+    assert.ok(body.groups > 0, 'a live server can count its groups');
+    assert.equal(body.working_semester, 'Тестовый семестр');
 
     await context.close();
 });
@@ -1833,6 +1855,22 @@ test('load plan refuses the same teacher/discipline/type/group twice in a semest
 
     await context.close();
 });
+
+/**
+ * Fires many requests in small batches. All at once exhausts the local socket
+ * pool on Windows and fails with ECONNREFUSED long before any rate limit is
+ * reached — which says nothing about the limiter.
+ */
+async function fireRequests(total, send, batchSize = 40) {
+    const statuses = [];
+
+    for (let sent = 0; sent < total; sent += batchSize) {
+        const batch = Array.from({ length: Math.min(batchSize, total - sent) }, send);
+        statuses.push(...(await Promise.all(batch)).map((response) => response.status));
+    }
+
+    return statuses;
+}
 
 async function createTestContext() {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-test-'));

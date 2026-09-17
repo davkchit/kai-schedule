@@ -3,8 +3,10 @@ const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
 const { ensureAdminAccessAllowed } = require('./access-control');
-const { API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS, TRUST_PROXY } = require('./config');
+const { ADMIN_RATE_LIMIT_MAX, API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS, TRUST_PROXY } = require('./config');
 const { getDb } = require('./db');
+const { notify } = require('./alerts');
+const { getActiveSemester } = require('./utils/semesters');
 
 const apiRoutes = require('./routes/api');
 const adminRoutes = require('./routes/admin');
@@ -52,11 +54,45 @@ function createApp() {
 
     app.use(express.json({ limit: '5mb' }));
 
-    // Coarse volumetric guard on top of everything under /api — a separate,
-    // stricter DB-backed limiter already protects /login specifically.
+    // Deliberately before the rate limiter and before every route: an uptime
+    // monitor has to be able to ask "are you alive?" even while the server is
+    // being hammered, and the answer has to touch the database — a process
+    // that answers but cannot read the schedule is not actually up.
+    app.get('/api/health', (req, res) => {
+        try {
+            const db = getDb();
+            const groups = db.prepare('SELECT COUNT(*) AS count FROM groups_').get().count;
+            const semester = getActiveSemester(db);
+
+            res.set('Cache-Control', 'no-store').json({
+                status: 'ok',
+                database: 'ok',
+                groups,
+                working_semester: semester ? semester.label : null,
+                uptime_seconds: Math.round(process.uptime()),
+                time: new Date().toISOString()
+            });
+        } catch (error) {
+            notify(`Проверка живости не прошла: база не отвечает (${error.message})`, { key: 'health-db' });
+            res.status(503).set('Cache-Control', 'no-store').json({ status: 'error', database: 'error' });
+        }
+    });
+
+    // Coarse volumetric guard over public reads. The whole campus shares one
+    // address, so this is a flood ceiling rather than a per-person quota.
     app.use('/api', rateLimit({
         windowMs: API_RATE_LIMIT_WINDOW_MS,
         limit: API_RATE_LIMIT_MAX,
+        standardHeaders: 'draft-7',
+        legacyHeaders: false,
+        message: { error: 'Слишком много запросов. Попробуйте позже.' }
+    }));
+
+    // Writing requires a login, and one specialist never makes hundreds of
+    // requests a minute — so the admin area keeps the tight limit.
+    app.use('/api/admin', rateLimit({
+        windowMs: API_RATE_LIMIT_WINDOW_MS,
+        limit: ADMIN_RATE_LIMIT_MAX,
         standardHeaders: 'draft-7',
         legacyHeaders: false,
         message: { error: 'Слишком много запросов. Попробуйте позже.' }
@@ -96,6 +132,7 @@ function createApp() {
         }
 
         console.error('Unhandled server error:', error);
+        notify(`Ошибка 500 на ${req.method} ${req.originalUrl}: ${error.message}`, { key: `500:${req.path}` });
         res.status(500).json({ error: 'Внутренняя ошибка сервера' });
     });
 

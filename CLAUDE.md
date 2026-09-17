@@ -41,7 +41,7 @@ Required for production (see `.env.example`):
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — admin credentials
 - `NODE_ENV`, `PORT` (default 3000)
 
-Optional: `ADMIN_COOKIE_NAME`, `TRUST_PROXY`, `ADMIN_ALLOWED_IPS`, `BACKUPS_DIR`, `DB_PATH`, `API_RATE_LIMIT_MAX` (default 200/min), `API_RATE_LIMIT_WINDOW_MS` (default 60000)
+Optional: `ADMIN_COOKIE_NAME`, `TRUST_PROXY`, `ADMIN_ALLOWED_IPS`, `BACKUPS_DIR`, `DB_PATH`, `API_RATE_LIMIT_MAX` (public reads, default 5000/min — a flood ceiling, since the whole campus shares one NAT address), `ADMIN_RATE_LIMIT_MAX` (default 300/min), `API_RATE_LIMIT_WINDOW_MS` (default 60000), `ALERT_WEBHOOK_URL` + `ALERT_CHAT_ID` (Telegram/Discord/Slack webhook for crash and 500 alerts — see `server/alerts.js`)
 
 ## Architecture
 
@@ -88,6 +88,10 @@ Pages: `WelcomePage` → user selects university/group → `SchedulePage` render
 
 Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours are computed inside the lesson's own semester. Three different "which semester" questions — never mix them: the **working** semester (admin writes; `getActiveSemester`), the semester **in effect on a date** (students per day, teachers by default; `getSemesterForDate`), and a semester **being viewed** in the load page (no server state). Parity of week N = strict alternation from `first_week_parity`; ISO-week parity is only the default for a new semester. Past `weeks_count` the template stops (schedule and hours alike). `tests/yearLifecycle.test.js` drives a whole year with `KAI_FAKE_NOW` (ignored in production).
 
+### Closing a semester
+
+`POST /api/admin/semesters/:id/close` freezes it: every `load_plan.final_hours` is filled from the current calculation, `semesters.closed_at` is set, and every write touching that semester is refused with 409 (`findClosedSemester` in `routes/admin.js` guards lessons, schedule uploads, plan rows and the semester's own dates). Reads then report the stored total instead of recomputing, so a printed report stays true. `POST .../reopen` clears both and hours go live again. See `tests/semesterClose.test.js`.
+
 ### Critical Domain: Schedule Override Model
 
 Lessons have a `specific_week` column:
@@ -125,7 +129,8 @@ Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored
 
 - Admin auth: JWT stored in httpOnly, SameSite=Strict cookie
 - State-changing admin endpoints require CSRF token
-- Login is rate-limited via `login_attempts` table; all of `/api` additionally has a coarser volumetric rate limit (`express-rate-limit`, configurable via `API_RATE_LIMIT_MAX`/`API_RATE_LIMIT_WINDOW_MS`)
+- Login is rate-limited via `login_attempts` table; public reads get a high flood ceiling and `/api/admin` a tight one (`express-rate-limit`; per-IP budgets can't be per-person when a campus shares one address)
+- `GET /api/health` (before the limiter, no auth) reports process + database state for an uptime monitor
 - Optional IP allowlist via `ADMIN_ALLOWED_IPS`
 - CSP and security headers set in `app.js`
 - `PUT /api/admin/account` changes the admin's username/password (requires current password) — the only account-management path that doesn't require the destructive `npm run seed`

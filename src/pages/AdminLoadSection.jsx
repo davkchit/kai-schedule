@@ -424,6 +424,62 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
         }
     }
 
+    // Closing turns the semester's hours into a stored result: reports printed
+    // from it stay true afterwards, because nothing in it can change any more.
+    async function closeSemester() {
+        const hours = loadPlan.reduce((sum, row) => sum + (row.progress?.occurred_hours || 0), 0);
+        const confirmed = window.confirm(
+            `Закрыть семестр «${viewedSemester.label}»?\n\n` +
+            `Итог будет зафиксирован: строк плана ${loadPlan.length}, проведено ${hours} часов.\n\n` +
+            'После этого расписание и нагрузку этого семестра нельзя будет менять, ' +
+            'а часы перестанут пересчитываться. Семестр можно открыть заново.'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            const response = await api(`/api/admin/semesters/${viewedSemester.id}/close`, { method: 'POST' });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось закрыть семестр');
+                return;
+            }
+
+            setSemesters((previous) => previous.map((s) => (s.id === data.id ? data : s)));
+            await refreshPlan();
+            setToastMessage(`Семестр закрыт. Итог: ${data.total_hours} часов по ${data.plan_rows} строкам`);
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') setToastMessage('Ошибка сети');
+        }
+    }
+
+    async function reopenSemester() {
+        const confirmed = window.confirm(
+            `Открыть семестр «${viewedSemester.label}» заново?\n\n` +
+            'Часы снова начнут считаться по расписанию, и цифры могут отличаться от тех, ' +
+            'что уже попали в отчёт.'
+        );
+
+        if (!confirmed) return;
+
+        try {
+            const response = await api(`/api/admin/semesters/${viewedSemester.id}/reopen`, { method: 'POST' });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось открыть семестр');
+                return;
+            }
+
+            setSemesters((previous) => previous.map((s) => (s.id === data.id ? data : s)));
+            await refreshPlan();
+            setToastMessage('Семестр открыт — часы снова считаются по расписанию');
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') setToastMessage('Ошибка сети');
+        }
+    }
+
     async function submitPlanForm(event) {
         event.preventDefault();
 
@@ -683,7 +739,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                         {semesters.length === 0 && <option value="">Семестров пока нет</option>}
                         {semesters.map((semester) => (
                             <option key={semester.id} value={semester.id}>
-                                {semester.label}{semester.is_active ? ' (рабочий)' : ''}
+                                {semester.label}{semester.is_active ? ' (рабочий)' : ''}{semester.closed ? ' (закрыт)' : ''}
                             </option>
                         ))}
                     </select>
@@ -694,17 +750,28 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                                 {' '}1-я неделя {parityLabel(viewedSemester.first_week_parity)} ·
                                 {' '}последняя неделя {formatWeekRange(viewedSemester.start_date, viewedSemester.weeks_count)}
                             </span>
-                            <button type="button" className="btn-link" onClick={startEditSemester}>изменить</button>
-                            {viewedSemester.is_active ? (
+                            {!viewedSemester.closed && (
+                                <button type="button" className="btn-link" onClick={startEditSemester}>изменить</button>
+                            )}
+                            {viewedSemester.is_active && (
                                 <span className="load-semester-meta"><strong>рабочий</strong></span>
-                            ) : (
+                            )}
+                            {!viewedSemester.is_active && !viewedSemester.closed && (
                                 <button type="button" className="btn-link" onClick={() => activateSemester(viewedSemester)}>
                                     сделать рабочим
                                 </button>
                             )}
+                            {viewedSemester.closed ? (
+                                <>
+                                    <span className="load-semester-closed">закрыт {viewedSemester.closed_at}</span>
+                                    <button type="button" className="btn-link" onClick={reopenSemester}>открыть заново</button>
+                                </>
+                            ) : (
+                                <button type="button" className="btn-link" onClick={closeSemester}>закрыть семестр</button>
+                            )}
                         </>
                     )}
-                    {viewedSemester && isEditingSemester && (
+                    {viewedSemester && isEditingSemester && !viewedSemester.closed && (
                         <form className="load-semester-edit" onSubmit={saveSemesterEdit}>
                             <input
                                 type="date"
@@ -872,6 +939,14 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                         <span>{planStats.percentFilled}% заполнено</span>
                     </div>
 
+                    {viewedSemester.closed && (
+                        <p className="empty-message">
+                            Семестр закрыт {viewedSemester.closed_at}: часы зафиксированы, изменения выключены.
+                            Чтобы что-то поправить, откройте его заново выше.
+                        </p>
+                    )}
+
+                    {!viewedSemester.closed && (
                     <form className="load-plan-form" onSubmit={submitPlanForm}>
                         <select
                             className="form-input"
@@ -923,6 +998,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                         />
                         <button type="submit" className="btn btn-primary">Добавить в план</button>
                     </form>
+                    )}
 
                     <div className="load-plan-toolbar">
                         <div className="load-plan-search">
@@ -986,6 +1062,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                                         linkGroupLessons={linkingPlanId === row.id ? linkGroupLessons : EMPTY_ARRAY}
                                         onOpenLinkPicker={openLinkPicker}
                                         onToggleLessonLink={toggleLessonLink}
+                                        isClosed={Boolean(viewedSemester.closed)}
                                         isMenuOpen={openMenuId === row.id}
                                         onToggleMenu={toggleRowMenu}
                                         onScheduleMenuClose={scheduleMenuClose}
@@ -1025,7 +1102,7 @@ function buildEditFormFromRow(row) {
 }
 
 const PlanRow = memo(function PlanRow({
-    row, teachers, disciplines, groups,
+    row, teachers, disciplines, groups, isClosed,
     isEditing, onSaveEdit, onCancelEdit, onStartEdit, onUpdateHours,
     isLinking, linkGroupLessons, onOpenLinkPicker, onToggleLessonLink,
     isMenuOpen, onToggleMenu, onScheduleMenuClose, onDelete
@@ -1132,7 +1209,7 @@ const PlanRow = memo(function PlanRow({
                     <td>{row.group_name}{row.subgroup ? ` (${row.subgroup} п/г)` : ''}</td>
                     <td>
                         {row.planned_hours === null ? (
-                            <HoursEditor onSave={(hours) => onUpdateHours(row.id, hours)} />
+                            isClosed ? <span className="load-hours-empty">—</span> : <HoursEditor onSave={(hours) => onUpdateHours(row.id, hours)} />
                         ) : (
                             <div className="load-progress-cell">
                                 <span className="load-hours-figure">{row.planned_hours} ч</span>
@@ -1146,11 +1223,14 @@ const PlanRow = memo(function PlanRow({
                         )}
                     </td>
                     <td>
-                        <button type="button" className="btn-link" onClick={() => onOpenLinkPicker(row)}>
-                            {isLinking ? 'Закрыть' : 'Привязать пару'}
-                        </button>
+                        {!isClosed && (
+                            <button type="button" className="btn-link" onClick={() => onOpenLinkPicker(row)}>
+                                {isLinking ? 'Закрыть' : 'Привязать пару'}
+                            </button>
+                        )}
                     </td>
                     <td className="load-row-menu-cell">
+                        {!isClosed && (
                         <div className="load-row-menu" onBlur={onScheduleMenuClose}>
                             <button
                                 type="button"
@@ -1171,6 +1251,7 @@ const PlanRow = memo(function PlanRow({
                                 </div>
                             )}
                         </div>
+                        )}
                     </td>
                 </tr>
             )}

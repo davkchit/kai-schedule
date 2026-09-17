@@ -34,13 +34,23 @@ function computePlanRowProgress(db, planRow, semester, { cache = new Map(), over
     const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ? AND semester_id = ?')
         .all(planRow.id, semester.id);
 
-    return computeLoadProgress({
+    const progress = computeLoadProgress({
         semesterStartDate: effective.start_date,
         weeksCount: effective.weeks_count,
         linkedLessons,
         exceptionWeeks,
         firstWeekParity: resolveFirstWeekParity(effective)
     });
+
+    // A closed semester keeps reporting the total it reported on the day it
+    // was closed. The per-date breakdown is still computed (nothing in a
+    // closed semester can change, so it matches), but the number that goes
+    // into reports comes from the stored snapshot.
+    if (semester.closed_at && Number.isInteger(planRow.final_hours)) {
+        return { ...progress, occurred_hours: planRow.final_hours, frozen: true };
+    }
+
+    return progress;
 }
 
 module.exports = { computePlanRowProgress };

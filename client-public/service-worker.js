@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
 const DATA_CACHE = `anti-vuz-data-${CACHE_VERSION}`;
@@ -161,9 +161,15 @@ async function networkFirstData(request) {
 
         if (isCacheableResponse(response)) {
             await cache.put(request, response.clone());
+            return response;
         }
 
-        return response;
+        // The request went through but the server refused it — rate limit,
+        // restart, bad gateway. A saved copy of the schedule is far more
+        // useful to a student standing in a corridor than an error screen.
+        const savedResponse = await findCachedDataResponse(request, cache);
+
+        return savedResponse || response;
     } catch {
         const cachedResponse = await findCachedDataResponse(request, cache);
 

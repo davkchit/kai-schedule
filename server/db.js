@@ -319,6 +319,7 @@ function initTables() {
     db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_load_plan ON lessons(load_plan_id)');
 
     migrateSemesterScoping();
+    migrateSemesterClosing();
 }
 
 /**
@@ -337,6 +338,26 @@ function initTables() {
  * getWeekTypeForSemesterWeek in utils/date.js for why it is stored rather
  * than derived).
  */
+/**
+ * A finished semester can be closed: its schedule and its hours stop changing.
+ * The hours a closed semester reports are the ones stored at closing time, not
+ * a fresh calculation — the figures went into a signed report, and a later
+ * correction to an old pair must not silently rewrite them.
+ */
+function migrateSemesterClosing() {
+    try {
+        db.exec('ALTER TABLE semesters ADD COLUMN closed_at TEXT DEFAULT NULL');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
+    try {
+        db.exec('ALTER TABLE load_plan ADD COLUMN final_hours INTEGER DEFAULT NULL');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+}
+
 function migrateSemesterScoping() {
     try {
         db.exec('ALTER TABLE semesters ADD COLUMN first_week_parity INTEGER NOT NULL DEFAULT 0');

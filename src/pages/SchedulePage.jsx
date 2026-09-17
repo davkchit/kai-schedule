@@ -54,7 +54,13 @@ export default function SchedulePage() {
     const [activeMobileTab, setActiveMobileTab] = useState('');
     const [isDark, setIsDark] = useState(() => getSavedTheme() === 'dark');
     const [refreshKey, setRefreshKey] = useState(0);
+    // Shown over the timetable when a refresh failed but the previously loaded
+    // schedule is still on screen — better than replacing it with an error.
+    const [staleNotice, setStaleNotice] = useState('');
     const lastFetchTimeRef = useRef(0);
+    // What the loaded response actually covers, so browsing inside it costs
+    // no requests: one 28-day window already holds every day of that month.
+    const loadedRangeRef = useRef(null);
 
     useEffect(() => {
         const selection = getSavedSelection();
@@ -110,7 +116,30 @@ export default function SchedulePage() {
     }, [isBurgerOpen, isDatePickerOpen]);
 
     useEffect(() => {
+        setActiveMobileTab(`day-${normalizeDate(currentDate).getTime()}`);
+    }, [currentDate]);
+
+    useEffect(() => {
         if (!savedSelection?.group_id) {
+            return undefined;
+        }
+
+        const groupId = savedSelection.group_id;
+        const subgroup = savedSelection.subgroup || 0;
+        const wantedDate = formatLocalDateForApi(currentDate);
+        const loaded = loadedRangeRef.current;
+        const alreadyLoaded = loaded
+            && loaded.groupId === groupId
+            && loaded.subgroup === subgroup
+            && loaded.refreshKey === refreshKey
+            && wantedDate >= loaded.from
+            && wantedDate <= loaded.to;
+
+        if (alreadyLoaded) {
+            // This day is inside the window already on screen. Tapping through
+            // a week used to fire one 28-day request per tap — with a whole
+            // campus behind a single address, that is what actually generates
+            // the load.
             return undefined;
         }
 
@@ -122,28 +151,51 @@ export default function SchedulePage() {
 
             try {
                 const response = await fetch(
-                    `/api/schedule/${savedSelection.group_id}?subgroup=${savedSelection.subgroup || 0}&date=${formatLocalDateForApi(currentDate)}&days=${SCHEDULE_WINDOW_DAYS}`
+                    `/api/schedule/${groupId}?subgroup=${subgroup}&date=${wantedDate}&days=${SCHEDULE_WINDOW_DAYS}`
                 );
 
                 if (!response.ok) {
-                    throw new Error('Failed to fetch schedule');
+                    const error = new Error('Failed to fetch schedule');
+                    error.status = response.status;
+                    throw error;
                 }
 
                 const data = await response.json();
 
                 if (!ignore) {
                     setScheduleData(data);
-                    setActiveMobileTab(`day-${normalizeDate(currentDate).getTime()}`);
+                    setStaleNotice('');
+                    loadedRangeRef.current = {
+                        groupId,
+                        subgroup,
+                        refreshKey,
+                        from: data.requested_date || wantedDate,
+                        to: data.range_end || wantedDate
+                    };
                     lastFetchTimeRef.current = Date.now();
                 }
-            } catch {
-                if (!ignore) {
+            } catch (error) {
+                if (ignore) {
+                    return;
+                }
+
+                // Keep whatever is already on screen. A rate-limited or failing
+                // server used to blank the page even though the phone was
+                // holding a perfectly good copy of the schedule.
+                if (scheduleData) {
+                    setStaleNotice(
+                        error.status === 429
+                            ? 'Сервер сейчас загружен — показываем сохранённое расписание'
+                            : navigator.onLine
+                                ? 'Не удалось обновить — показываем сохранённое расписание'
+                                : 'Нет связи — показываем сохранённое расписание'
+                    );
+                } else {
                     setErrorMessage(
                         navigator.onLine
                             ? 'Ошибка загрузки расписания'
                             : 'Нет интернета и сохранённой версии расписания для этой даты'
                     );
-                    setScheduleData(null);
                 }
             } finally {
                 if (!ignore) {
@@ -157,6 +209,8 @@ export default function SchedulePage() {
         return () => {
             ignore = true;
         };
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- scheduleData is
+        // read only to decide between "keep showing it" and "show an error".
     }, [currentDate, savedSelection, refreshKey]);
 
     useEffect(() => {
@@ -563,10 +617,14 @@ export default function SchedulePage() {
                             Загрузка...
                         </div>
                     )}
-                    {!isLoading && errorMessage && (
+                    {!isLoading && errorMessage && !scheduleData && (
                         <div className="schedule-loading">{errorMessage}</div>
                     )}
-                    {!isLoading && !errorMessage && scheduleDays.map((day) => (
+
+                    {!isLoading && staleNotice && scheduleData && (
+                        <div className="schedule-stale" role="status">{staleNotice}</div>
+                    )}
+                    {!isLoading && scheduleData && scheduleDays.map((day) => (
                         <div className="day-column" key={day.id}>
                             <div className="day-header">
                                 <div className={`day-badge ${day.isToday ? '' : 'hidden'}`}>Сегодня</div>

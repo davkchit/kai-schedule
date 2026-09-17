@@ -32,8 +32,20 @@ if (generatedDevSecret) {
 const JWT_SECRET = jwtSecretFromEnv || generatedDevSecret;
 const PORT = Number(process.env.PORT || 3000);
 const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME || 'kai_schedule_admin';
-const API_RATE_LIMIT_MAX = Number(process.env.API_RATE_LIMIT_MAX || 200);
+// The whole campus leaves through one NAT address, so a per-IP limit counts a
+// thousand students as one visitor. The public ceiling is therefore a flood
+// guard, not a per-person quota: it has to sit above what a full building
+// reading its timetable during one break produces. Writing is a different
+// story — every write needs a login, and one logged-in specialist never makes
+// hundreds of requests a minute, so that limit stays tight.
+const API_RATE_LIMIT_MAX = Number(process.env.API_RATE_LIMIT_MAX || 5000);
+const ADMIN_RATE_LIMIT_MAX = Number(process.env.ADMIN_RATE_LIMIT_MAX || 300);
 const API_RATE_LIMIT_WINDOW_MS = Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60 * 1000);
+
+// Where to shout when the server is in trouble: a Telegram bot, Discord or
+// Slack webhook. Empty means alerts go to the log only.
+const ALERT_WEBHOOK_URL = (process.env.ALERT_WEBHOOK_URL || '').trim();
+const ALERT_CHAT_ID = (process.env.ALERT_CHAT_ID || '').trim();
 
 const baseCookieOptions = {
     httpOnly: true,
@@ -123,7 +135,10 @@ module.exports = {
     isProduction,
     JWT_SECRET,
     API_RATE_LIMIT_MAX,
+    ADMIN_RATE_LIMIT_MAX,
     API_RATE_LIMIT_WINDOW_MS,
+    ALERT_WEBHOOK_URL,
+    ALERT_CHAT_ID,
     TRUST_PROXY: trustProxyValue,
     parseTrustProxy,
     ADMIN_ALLOWED_IPS: adminAllowedIps,

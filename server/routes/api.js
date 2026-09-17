@@ -132,6 +132,9 @@ router.get('/schedule/:groupId', (req, res) => {
             .map((lesson) => lesson.specific_week))].sort((left, right) => left - right)
         : [];
 
+    // A minute of browser caching: flipping between days inside the window
+    // then costs nothing, and a page reopened right away doesn't re-ask.
+    res.set('Cache-Control', 'private, max-age=60');
     res.json({
         group: { id: group.id, name: group.name },
         semesters: semesters.map((semester) => ({
@@ -182,8 +185,8 @@ router.get('/teachers/search', (req, res) => {
 // back to a finished semester and still show its totals.
 router.get('/semesters', (req, res) => {
     const db = getDb();
-    const rows = db.prepare('SELECT id, label, start_date, weeks_count FROM semesters ORDER BY start_date DESC').all();
-    res.json(rows);
+    const rows = db.prepare('SELECT id, label, start_date, weeks_count, closed_at FROM semesters ORDER BY start_date DESC').all();
+    res.json(rows.map(({ closed_at: closedAt, ...row }) => ({ ...row, closed: Boolean(closedAt) })));
 });
 
 // Public, read-only. Returns the given teacher's load plan for the semester in
@@ -258,7 +261,7 @@ router.get('/teachers/:id/load', (req, res) => {
 
     res.json({
         teacher,
-        semester: { id: semester.id, label: semester.label },
+        semester: { id: semester.id, label: semester.label, closed: Boolean(semester.closed_at) },
         plan
     });
 });

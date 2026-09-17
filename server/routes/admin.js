@@ -379,6 +379,10 @@ router.post('/schedule/upload', (req, res) => {
         return res.status(400).json({ error: NO_WORKING_SEMESTER });
     }
 
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
     if (targetWeek === 'current') {
         specificWeek = getSemesterWeekMeta(semester, referenceDate || formatLocalDate()).weekNumber;
     } else if (typeof targetWeek === 'number') {
@@ -484,6 +488,10 @@ router.post('/schedule/upload-bulk', (req, res) => {
 
     if (!semester) {
         return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     if (targetWeek === 'current') {
@@ -778,6 +786,10 @@ router.post('/schedule/move-lesson', (req, res) => {
         return res.status(400).json({ error: NO_WORKING_SEMESTER });
     }
 
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
     const currentWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
     const insertLesson = () => db.prepare(`
@@ -948,6 +960,10 @@ router.post('/schedule/materialize-week', (req, res) => {
 
     if (!semester) {
         return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     // This endpoint only makes sense the first time a week is touched — once it has
@@ -1121,6 +1137,10 @@ router.delete('/schedule/week', (req, res) => {
         return res.status(400).json({ error: NO_WORKING_SEMESTER });
     }
 
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
     // Week N of the working semester only — the same number in another
     // semester is a different calendar week with its own history.
     const result = db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?')
@@ -1204,6 +1224,10 @@ router.post('/lessons', (req, res) => {
 
     if (!semester) {
         return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
@@ -1396,6 +1420,10 @@ router.put('/lessons/:id', (req, res) => {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
 
+    if (findClosedSemester(db, lesson.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
     const nextLesson = {
         ...lesson,
         ...updates
@@ -1505,6 +1533,10 @@ router.delete('/lessons/:id', (req, res) => {
 
     if (!lesson) {
         return res.status(404).json({ error: 'Занятие не найдено' });
+    }
+
+    if (findClosedSemester(db, lesson.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     // "Has this row already been live?" is asked in the row's OWN semester.
@@ -2158,6 +2190,10 @@ router.put('/semesters/:id', (req, res) => {
         return res.status(404).json({ error: 'Семестр не найден' });
     }
 
+    if (existing.closed_at) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
     const next = { ...existing, ...payload };
 
     const transaction = db.transaction(() => {
@@ -2198,6 +2234,98 @@ router.put('/semesters/:id', (req, res) => {
     });
 
     res.json(mapSemesterRow(updated));
+});
+
+// Closing is what makes a printed report trustworthy: after it, the semester's
+// hours are a stored number rather than a live calculation, and nothing in that
+// semester can be edited without deliberately reopening it first.
+router.post('/semesters/:id/close', (req, res) => {
+    const semesterId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(semesterId) || semesterId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID семестра' });
+    }
+
+    const db = getDb();
+    const semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+
+    if (!semester) {
+        return res.status(404).json({ error: 'Семестр не найден' });
+    }
+
+    if (semester.closed_at) {
+        return res.status(409).json({ error: 'Этот семестр уже закрыт' });
+    }
+
+    const planRows = db.prepare('SELECT * FROM load_plan WHERE semester_id = ?').all(semesterId);
+    const closedAt = formatLocalDate();
+    const cache = new Map();
+    let totalHours = 0;
+
+    const transaction = db.transaction(() => {
+        const storeFinal = db.prepare('UPDATE load_plan SET final_hours = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+
+        for (const row of planRows) {
+            const hours = computePlanRowProgress(db, row, semester, { cache }).occurred_hours;
+            storeFinal.run(hours, row.id);
+            totalHours += hours;
+        }
+
+        db.prepare('UPDATE semesters SET closed_at = ? WHERE id = ?').run(closedAt, semesterId);
+    });
+
+    transaction();
+
+    writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'semester.close',
+        entityType: 'semester',
+        entityId: semesterId,
+        ipAddress: getClientAddress(req),
+        details: { closed_at: closedAt, plan_rows: planRows.length, total_hours: totalHours }
+    });
+
+    const updated = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+
+    res.json({ ...mapSemesterRow(updated), plan_rows: planRows.length, total_hours: totalHours });
+});
+
+router.post('/semesters/:id/reopen', (req, res) => {
+    const semesterId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(semesterId) || semesterId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID семестра' });
+    }
+
+    const db = getDb();
+    const semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+
+    if (!semester) {
+        return res.status(404).json({ error: 'Семестр не найден' });
+    }
+
+    if (!semester.closed_at) {
+        return res.status(409).json({ error: 'Этот семестр и так открыт' });
+    }
+
+    // Dropping the stored totals is the point: an open semester's hours are
+    // always what the schedule currently says, with no stale number hiding
+    // behind them.
+    db.transaction(() => {
+        db.prepare('UPDATE load_plan SET final_hours = NULL WHERE semester_id = ?').run(semesterId);
+        db.prepare('UPDATE semesters SET closed_at = NULL WHERE id = ?').run(semesterId);
+    })();
+
+    writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'semester.reopen',
+        entityType: 'semester',
+        entityId: semesterId,
+        ipAddress: getClientAddress(req),
+        details: { was_closed_at: semester.closed_at }
+    });
+
+    res.json(mapSemesterRow(db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId)));
 });
 
 router.get('/load-plan', (req, res) => {
@@ -2340,6 +2468,10 @@ router.post('/load-plan', (req, res) => {
         return res.status(404).json({ error: 'Группа не найдена' });
     }
 
+    if (findClosedSemester(db, payload.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
     const duplicate = findDuplicatePlanRow(db, payload);
     if (duplicate) {
         return res.status(409).json({ error: duplicatePlanRowError(duplicate) });
@@ -2404,6 +2536,10 @@ router.put('/load-plan/:id', (req, res) => {
 
     if (!existing) {
         return res.status(404).json({ error: 'Строка плана не найдена' });
+    }
+
+    if (findClosedSemester(db, existing.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     if (payload.teacher_id !== undefined && !db.prepare('SELECT id FROM teachers WHERE id = ?').get(payload.teacher_id)) {
@@ -2476,11 +2612,17 @@ router.delete('/load-plan/:id', (req, res) => {
     }
 
     const db = getDb();
-    const result = db.prepare('DELETE FROM load_plan WHERE id = ?').run(planId);
+    const existingPlan = db.prepare('SELECT id, semester_id FROM load_plan WHERE id = ?').get(planId);
 
-    if (result.changes === 0) {
+    if (!existingPlan) {
         return res.status(404).json({ error: 'Строка плана не найдена' });
     }
+
+    if (findClosedSemester(db, existingPlan.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
+    db.prepare('DELETE FROM load_plan WHERE id = ?').run(planId);
 
     writeAuditLog(db, {
         adminId: req.admin.id,
@@ -2517,6 +2659,10 @@ router.put('/lessons/:id/load-plan', (req, res) => {
 
     if (!lesson) {
         return res.status(404).json({ error: 'Занятие не найдено' });
+    }
+
+    if (findClosedSemester(db, lesson.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     if (payload.load_plan_id !== null) {
@@ -2557,7 +2703,12 @@ router.put('/lessons/:id/load-plan', (req, res) => {
 function mapSemesterRow(row) {
     // Never hands out the 0 "not stated" marker — callers always see the parity
     // week 1 actually resolves to.
-    return { ...row, is_active: Boolean(row.is_active), first_week_parity: resolveFirstWeekParity(row) };
+    return {
+        ...row,
+        is_active: Boolean(row.is_active),
+        first_week_parity: resolveFirstWeekParity(row),
+        closed: Boolean(row.closed_at)
+    };
 }
 
 /**
@@ -2581,6 +2732,25 @@ function syncSemesterStartDate(db, startDate) {
     if (working) {
         db.prepare('UPDATE semesters SET start_date = ? WHERE id = ?').run(startDate, working.id);
     }
+}
+
+const SEMESTER_CLOSED = 'Семестр закрыт — его расписание и часы зафиксированы. Чтобы вносить изменения, откройте его заново в разделе «Нагрузка».';
+
+/**
+ * Returns the semester if it is closed, so the caller can refuse the write.
+ * Every path that can change a lesson, a plan row or the semester's own dates
+ * goes through this: after closing, the reported hours are a stored snapshot,
+ * and letting the underlying data drift away from them is exactly the silent
+ * inconsistency closing exists to prevent.
+ */
+function findClosedSemester(db, semesterId) {
+    if (!semesterId) {
+        return null;
+    }
+
+    const semester = db.prepare('SELECT id, label, closed_at FROM semesters WHERE id = ?').get(semesterId);
+
+    return semester && semester.closed_at ? semester : null;
 }
 
 const NO_WORKING_SEMESTER = 'Сначала создайте семестр в разделе «Нагрузка» — расписание ведётся внутри семестра';
