@@ -73,7 +73,23 @@ test('a closed semester stops changing — its hours and its schedule are final'
     at('2026-09-16T12:00:00');
     assert.equal(await adminHours(plan.id), 6);
 
+    // Weeks 1 and 2 finished without anyone entering what actually happened:
+    // their hours came from the template, and that has to be visible.
+    const coverage = await ok('GET', `/api/admin/semesters/${semester.id}/week-coverage`);
+    assert.equal(coverage.current_week, 3);
+    assert.deepEqual(coverage.unconfirmed_weeks, [1, 2]);
+
+    // Entering week 2 as it actually ran (same pair) takes it off the list
+    // without changing the total.
+    await ok('POST', '/api/admin/schedule/materialize-week', {
+        group_id: groupId, week_number: 2, action: 'upsert', day_of_week: 1,
+        time_start: '08:00', time_end: '09:30', subject: 'Физика', lesson_type: 'Лекция', teacher: 'Иванов И.И.'
+    });
+    assert.deepEqual((await ok('GET', `/api/admin/semesters/${semester.id}/week-coverage`)).unconfirmed_weeks, [1]);
+    assert.equal(await adminHours(plan.id), 6, 'entering a week as it ran changes nothing');
+
     const closed = await ok('POST', `/api/admin/semesters/${semester.id}/close`);
+    assert.deepEqual(closed.unconfirmed_weeks, [1], 'closing records which weeks were counted from the template');
     assert.equal(closed.closed, true);
     assert.equal(closed.closed_at, '2026-09-16');
     assert.equal(closed.plan_rows, 1);

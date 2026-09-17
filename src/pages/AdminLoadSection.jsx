@@ -31,6 +31,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     // PlanRow) so that typing in the edit form never re-renders every other row.
     const [editingPlanId, setEditingPlanId] = useState(null);
 
+    // Past weeks nobody entered: their hours came from the template.
+    const [unconfirmedWeeks, setUnconfirmedWeeks] = useState([]);
     const [isEditingSemester, setIsEditingSemester] = useState(false);
     const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18, first_week_parity: 1 });
 
@@ -93,6 +95,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
         try {
             const response = await api(`/api/admin/load-plan?semester_id=${semesterId}`);
             setLoadPlan(await response.json());
+
+            const coverage = await (await api(`/api/admin/semesters/${semesterId}/week-coverage`)).json();
+            setUnconfirmedWeeks(Array.isArray(coverage.unconfirmed_weeks) ? coverage.unconfirmed_weeks : []);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Не удалось загрузить план нагрузки');
@@ -431,6 +436,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
         const confirmed = window.confirm(
             `Закрыть семестр «${viewedSemester.label}»?\n\n` +
             `Итог будет зафиксирован: строк плана ${loadPlan.length}, проведено ${hours} часов.\n\n` +
+            (unconfirmedWeeks.length > 0
+                ? `Внимание: расписание не вносили на недели ${unconfirmedWeeks.join(', ')} — часы по ним посчитаны по шаблону.\n\n`
+                : '') +
             'После этого расписание и нагрузку этого семестра нельзя будет менять, ' +
             'а часы перестанут пересчитываться. Семестр можно открыть заново.'
         );
@@ -938,6 +946,14 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                         </div>
                         <span>{planStats.percentFilled}% заполнено</span>
                     </div>
+
+                    {unconfirmedWeeks.length > 0 && (
+                        <p className="load-unconfirmed-note">
+                            На {unconfirmedWeeks.length === 1 ? 'неделю' : 'недели'} {unconfirmedWeeks.join(', ')} расписание
+                            не вносили — часы за {unconfirmedWeeks.length === 1 ? 'неё' : 'них'} посчитаны по шаблону.
+                            Если там были отмены или переносы, откройте нужную неделю в конструкторе и внесите, как было.
+                        </p>
+                    )}
 
                     {viewedSemester.closed && (
                         <p className="empty-message">

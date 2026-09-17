@@ -2047,6 +2047,60 @@ router.delete('/disciplines/:id', (req, res) => {
  * counter stops at — so the UI asks this first and shows the damage before
  * writing anything. Computes only, never writes.
  */
+/**
+ * Weeks that have already finished without anyone entering what actually
+ * happened in them — the hours for those weeks were taken from the template.
+ *
+ * The system cannot tell "the week really did go by the template" from "we
+ * forgot about that week": both look like a week with no rows of its own. So
+ * it says which weeks those are and lets the person who was there decide —
+ * especially before closing the semester, where the number becomes final.
+ */
+function findUnconfirmedWeeks(db, semester) {
+    const currentWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
+    const lastFinishedWeek = Math.min(currentWeek - 1, semester.weeks_count);
+
+    if (lastFinishedWeek < 1) {
+        return { current_week: currentWeek, unconfirmed_weeks: [] };
+    }
+
+    const weeksWithOwnRows = new Set(
+        db.prepare(`
+            SELECT DISTINCT specific_week FROM lessons
+            WHERE semester_id = ? AND specific_week IS NOT NULL
+        `).all(semester.id).map((row) => row.specific_week)
+    );
+
+    const unconfirmed = [];
+
+    for (let week = 1; week <= lastFinishedWeek; week += 1) {
+        if (!weeksWithOwnRows.has(week)) {
+            unconfirmed.push(week);
+        }
+    }
+
+    return { current_week: currentWeek, unconfirmed_weeks: unconfirmed };
+}
+
+router.get('/semesters/:id/week-coverage', (req, res) => {
+    const semesterId = Number.parseInt(req.params.id, 10);
+
+    if (!Number.isInteger(semesterId) || semesterId <= 0) {
+        return res.status(400).json({ error: 'Некорректный ID семестра' });
+    }
+
+    const db = getDb();
+    const semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+
+    if (!semester) {
+        return res.status(404).json({ error: 'Семестр не найден' });
+    }
+
+    const coverage = findUnconfirmedWeeks(db, semester);
+
+    res.json({ ...coverage, weeks_count: semester.weeks_count });
+});
+
 router.get('/semesters/:id/impact', (req, res) => {
     const semesterId = Number.parseInt(req.params.id, 10);
 
@@ -2258,6 +2312,7 @@ router.post('/semesters/:id/close', (req, res) => {
     }
 
     const planRows = db.prepare('SELECT * FROM load_plan WHERE semester_id = ?').all(semesterId);
+    const { unconfirmed_weeks: unconfirmedWeeks } = findUnconfirmedWeeks(db, semester);
     const closedAt = formatLocalDate();
     const cache = new Map();
     let totalHours = 0;
@@ -2282,12 +2337,24 @@ router.post('/semesters/:id/close', (req, res) => {
         entityType: 'semester',
         entityId: semesterId,
         ipAddress: getClientAddress(req),
-        details: { closed_at: closedAt, plan_rows: planRows.length, total_hours: totalHours }
+        details: {
+            closed_at: closedAt,
+            plan_rows: planRows.length,
+            total_hours: totalHours,
+            // Recorded as it was at closing: if a total is questioned later,
+            // this says which weeks were counted from the template.
+            unconfirmed_weeks: unconfirmedWeeks
+        }
     });
 
     const updated = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
 
-    res.json({ ...mapSemesterRow(updated), plan_rows: planRows.length, total_hours: totalHours });
+    res.json({
+        ...mapSemesterRow(updated),
+        plan_rows: planRows.length,
+        total_hours: totalHours,
+        unconfirmed_weeks: unconfirmedWeeks
+    });
 });
 
 router.post('/semesters/:id/reopen', (req, res) => {
