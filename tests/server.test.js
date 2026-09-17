@@ -1856,6 +1856,20 @@ test('load plan refuses the same teacher/discipline/type/group twice in a semest
     await context.close();
 });
 
+test('a crash in the browser is reported to the server instead of vanishing', async () => {
+    const context = await createTestContext();
+
+    const response = await fetch(`${context.baseUrl}/api/client-error`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'Cannot read properties of undefined', path: '/schedule', stack: 'at buildScheduleDays' })
+    });
+
+    assert.equal(response.status, 204);
+
+    await context.close();
+});
+
 /**
  * Fires many requests in small batches. All at once exhausts the local socket
  * pool on Windows and fails with ECONNREFUSED long before any rate limit is

@@ -3,6 +3,7 @@ const { getDb } = require('../db');
 const { addDaysToIsoDate, formatLocalDate, getSemesterWeekMeta, resolveFirstWeekParity } = require('../utils/date');
 const { computePlanRowProgress } = require('../utils/planProgress');
 const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
+const { notify } = require('../alerts');
 
 const router = express.Router();
 const DEFAULT_SCHEDULE_RANGE_DAYS = 28;
@@ -155,6 +156,20 @@ router.get('/schedule/:groupId', (req, res) => {
         lessons,
         by_day: byDay
     });
+});
+
+// A crash in someone's browser is otherwise invisible: nothing reaches the
+// server log, and the student simply closes the page. The app's error screen
+// reports here so the same alerting that covers server crashes covers these.
+router.post('/client-error', (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const message = String(body.message || '').slice(0, 500);
+    const where = String(body.path || '').slice(0, 200);
+
+    console.error(`[client] Ошибка в браузере на ${where}: ${message}\n${String(body.stack || '').slice(0, 2000)}`);
+    notify(`Ошибка интерфейса на странице ${where}: ${message}`, { key: `client:${where}:${message.slice(0, 60)}` });
+
+    res.status(204).end();
 });
 
 // Public, read-only — mirrors the group search on the welcome page.
