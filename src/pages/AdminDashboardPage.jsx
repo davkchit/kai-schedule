@@ -26,6 +26,8 @@ export default function AdminDashboardPage() {
     const navigate = useNavigate();
     const [activeSection, setActiveSection] = useState('builder');
     const [groups, setGroups] = useState([]);
+    const [teachers, setTeachers] = useState([]);
+    const [disciplines, setDisciplines] = useState([]);
     const [universities, setUniversities] = useState([]);
     const [newGroupUniversityId, setNewGroupUniversityId] = useState('');
     const [newGroupName, setNewGroupName] = useState('');
@@ -83,7 +85,10 @@ export default function AdminDashboardPage() {
 
                 setCsrfToken(sessionData.csrf_token || '');
 
-                await Promise.all([loadGroups(), loadUniversities(), loadSettings(), loadAuditLogs(), loadBackups()]);
+                await Promise.all([
+                    loadGroups(), loadUniversities(), loadSettings(), loadAuditLogs(), loadBackups(),
+                    loadTeachers(), loadDisciplines()
+                ]);
             } catch {
                 if (!ignore) {
                     navigate('/admin', { replace: true });
@@ -187,6 +192,59 @@ export default function AdminDashboardPage() {
                 setToastMessage('Не удалось загрузить группы');
             }
         }
+    }
+
+    // The constructor's teacher/discipline pickers need the same dictionaries
+    // the "Нагрузка" section manages — a pair's identity comes from picking
+    // one of these rows, not from typing.
+    async function loadTeachers() {
+        try {
+            const response = await api('/api/admin/teachers');
+            const data = await response.json();
+            setTeachers(Array.isArray(data) ? data : []);
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Не удалось загрузить преподавателей');
+            }
+        }
+    }
+
+    async function loadDisciplines() {
+        try {
+            const response = await api('/api/admin/disciplines');
+            const data = await response.json();
+            setDisciplines(Array.isArray(data) ? data : []);
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Не удалось загрузить дисциплины');
+            }
+        }
+    }
+
+    async function createTeacher(fullName) {
+        const response = await api('/api/admin/teachers', { method: 'POST', body: JSON.stringify({ full_name: fullName }) });
+        const data = await response.json();
+
+        if (!response.ok) {
+            setToastMessage(data.error || 'Не удалось добавить преподавателя');
+            return null;
+        }
+
+        setTeachers((previous) => [...previous, data]);
+        return { id: data.id, label: data.full_name };
+    }
+
+    async function createDiscipline(name) {
+        const response = await api('/api/admin/disciplines', { method: 'POST', body: JSON.stringify({ name }) });
+        const data = await response.json();
+
+        if (!response.ok) {
+            setToastMessage(data.error || 'Не удалось добавить дисциплину');
+            return null;
+        }
+
+        setDisciplines((previous) => [...previous, data]);
+        return { id: data.id, label: data.name };
     }
 
     async function loadUniversities() {
@@ -381,6 +439,8 @@ export default function AdminDashboardPage() {
             room: lesson.room || '',
             lesson_type: lesson.lesson_type || 'Лекция',
             teacher: lesson.teacher || '',
+            teacher_id: lesson.teacher_id ?? null,
+            discipline_id: lesson.discipline_id ?? null,
             subgroup: lesson.subgroup,
             week_type: lesson.week_type,
             specific_week: lesson.specific_week ?? ''
@@ -435,6 +495,8 @@ export default function AdminDashboardPage() {
             room: '',
             lesson_type: 'Лекция',
             teacher: '',
+            teacher_id: null,
+            discipline_id: null,
             subgroup,
             week_type: context === 'template' ? builderTemplateWeekType : 0,
             specific_week: context === 'template' ? '' : targetWeekNumber
@@ -800,6 +862,8 @@ export default function AdminDashboardPage() {
             room: editForm.room,
             lesson_type: editForm.lesson_type,
             teacher: editForm.teacher,
+            teacher_id: editForm.teacher_id,
+            discipline_id: editForm.discipline_id,
             subgroup: Number(editForm.subgroup),
             week_type: Number(editForm.week_type),
             specific_week: editForm.specific_week
@@ -838,7 +902,9 @@ export default function AdminDashboardPage() {
                         subject: editForm.subject,
                         room: editForm.room,
                         lesson_type: editForm.lesson_type,
-                        teacher: editForm.teacher
+                        teacher: editForm.teacher,
+                        teacher_id: editForm.teacher_id,
+                        discipline_id: editForm.discipline_id
                     })
                 });
             } else if (editMode === 'create') {
@@ -865,20 +931,12 @@ export default function AdminDashboardPage() {
             setIsEditModalOpen(false);
             setEditForm(DEFAULT_EDIT_FORM);
 
-            // Subject or teacher changed on a slot that was linked to a plan
-            // row — that link was just dropped (a substitute or a one-off
-            // consultation is not the original teacher's hours) rather than
-            // silently kept, so say so: otherwise this pair simply stops
-            // counting toward anyone's plan and nothing explains why.
-            const messages = [];
-            if (saved.link_dropped) {
-                messages.push('Предмет или преподаватель изменились, поэтому привязка к плану снята — часы за эту пару не считаются, пока её не привяжут заново.');
-            }
-            if (ownWeeks.length > 0) {
-                messages.push(`Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них это изменение не появится, поправьте их на вкладке недели.`);
-            }
-            setToastMessage(messages.length > 0
-                ? messages.join(' ')
+            // Hours match this pair to a plan row live, by identity — no
+            // separate link to lose track of any more. A substitute or a
+            // swapped-in discipline just carries different ids and stops
+            // matching the old plan row on its own.
+            setToastMessage(ownWeeks.length > 0
+                ? `Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них это изменение не появится, поправьте их на вкладке недели.`
                 : (editMode === 'create' ? 'Занятие добавлено' : 'Занятие обновлено'));
             loadLessons(selectedGroupId);
         } catch (error) {
@@ -1292,14 +1350,18 @@ export default function AdminDashboardPage() {
             </main>
 
             <LessonEditModal
+                disciplines={disciplines}
                 editContext={editContext}
                 editForm={editForm}
                 editMode={editMode}
                 handleDeleteFromModal={handleDeleteFromModal}
                 handleEditSubmit={handleEditSubmit}
                 isEditModalOpen={isEditModalOpen}
+                onCreateDiscipline={createDiscipline}
+                onCreateTeacher={createTeacher}
                 setEditForm={setEditForm}
                 setIsEditModalOpen={setIsEditModalOpen}
+                teachers={teachers}
             />
 
             <div className={`toast ${isToastVisible ? 'active' : ''}`} aria-hidden={!isToastVisible}>{toastMessage}</div>

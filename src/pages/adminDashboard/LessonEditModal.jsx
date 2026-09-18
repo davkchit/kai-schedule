@@ -1,16 +1,25 @@
+import { LESSON_TYPES } from './builderUtils';
+import DictionaryPicker from './DictionaryPicker';
+
 // The dialog for creating, editing and removing a pair in the constructor.
-// Presentational only: moved verbatim from AdminDashboardPage.jsx, every
-// value and handler comes from the page as a prop of the same name.
+// teachers/disciplines and onCreateTeacher/onCreateDiscipline come from the
+// page so a picker can add a new dictionary entry without leaving the modal.
 export default function LessonEditModal({
+    disciplines,
     editContext,
     editForm,
     editMode,
     handleDeleteFromModal,
     handleEditSubmit,
     isEditModalOpen,
+    onCreateDiscipline,
+    onCreateTeacher,
     setEditForm,
-    setIsEditModalOpen
+    setIsEditModalOpen,
+    teachers
 }) {
+    const teacherOptions = teachers.map((teacher) => ({ id: teacher.id, label: teacher.full_name }));
+    const disciplineOptions = disciplines.map((discipline) => ({ id: discipline.id, label: discipline.name }));
     return (
         <div
             className={`modal-overlay ${isEditModalOpen ? 'active' : ''}`}
@@ -72,17 +81,20 @@ export default function LessonEditModal({
                             />
                         </div>
                     </div>
-                    <div className="form-row">
-                        <label>Предмет</label>
-                        <input
-                            type="text"
-                            id="editSubject"
-                            className="form-input"
-                            required
-                            value={editForm.subject}
-                            onChange={(event) => setEditForm((previous) => ({ ...previous, subject: event.target.value }))}
-                        />
-                    </div>
+                    <DictionaryPicker
+                        id="editSubject"
+                        label="Предмет"
+                        placeholder="Начните вводить название"
+                        options={disciplineOptions}
+                        valueId={editForm.discipline_id}
+                        valueText={editForm.subject}
+                        onChange={(picked) => setEditForm((previous) => ({
+                            ...previous,
+                            discipline_id: picked ? picked.id : null,
+                            subject: picked ? picked.label : ''
+                        }))}
+                        onCreate={onCreateDiscipline}
+                    />
                     <div className="form-row">
                         <label>Кабинет</label>
                         <input
@@ -93,17 +105,20 @@ export default function LessonEditModal({
                             onChange={(event) => setEditForm((previous) => ({ ...previous, room: event.target.value }))}
                         />
                     </div>
-                    <div className="form-row">
-                        <label>Преподаватель</label>
-                        <input
-                            type="text"
-                            id="editTeacher"
-                            className="form-input"
-                            placeholder="Например: Герасимов Н.П."
-                            value={editForm.teacher}
-                            onChange={(event) => setEditForm((previous) => ({ ...previous, teacher: event.target.value }))}
-                        />
-                    </div>
+                    <DictionaryPicker
+                        id="editTeacher"
+                        label="Преподаватель"
+                        placeholder="Например: Герасимов Н.П."
+                        options={teacherOptions}
+                        valueId={editForm.teacher_id}
+                        valueText={editForm.teacher}
+                        onChange={(picked) => setEditForm((previous) => ({
+                            ...previous,
+                            teacher_id: picked ? picked.id : null,
+                            teacher: picked ? picked.label : ''
+                        }))}
+                        onCreate={onCreateTeacher}
+                    />
                     <div className="form-row-pair">
                         <div className="form-row">
                             <label>Тип</label>
@@ -113,9 +128,7 @@ export default function LessonEditModal({
                                 value={editForm.lesson_type}
                                 onChange={(event) => setEditForm((previous) => ({ ...previous, lesson_type: event.target.value }))}
                             >
-                                <option value="Лекция">Лекция</option>
-                                <option value="Практика">Практика</option>
-                                <option value="Лаб. работа">Лаб. работа</option>
+                                {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                             </select>
                         </div>
                         <div className="form-row">

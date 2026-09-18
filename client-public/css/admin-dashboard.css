@@ -443,25 +443,22 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     color: var(--text);
 }
 
-.load-link-row td { background: var(--bg); padding: 12px 16px; }
-.load-link-picker { display: flex; flex-direction: column; gap: 10px; }
-.load-link-options { display: flex; flex-direction: column; gap: 6px; }
-.load-link-hint { margin: 0; font-size: 13px; color: var(--text-secondary); }
-.load-link-others summary {
-    cursor: pointer; font-size: 13px; color: var(--text-secondary); user-select: none; padding: 4px 0;
+.dict-picker { position: relative; }
+.dict-picker-hint { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.dict-picker-list {
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px;
+    max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
 }
-.load-link-others summary:hover { color: var(--primary); }
-.load-link-others .load-link-options { margin-top: 8px; }
-.load-link-option {
-    text-align: left; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);
-    background: var(--card); color: var(--text); font-size: 13px; cursor: pointer;
-    transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                border-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                transform 0.12s ease-out;
+.dict-picker-option {
+    text-align: left; padding: 8px 10px; border-radius: 8px; border: none; background: none;
+    color: var(--text); font-size: 13px; cursor: pointer;
 }
-.load-link-option:hover { border-color: var(--primary); color: var(--primary); }
-.load-link-option:active { transform: scale(0.98); }
-.load-link-option.selected { border-color: var(--primary); background: rgba(59,130,246,0.08); color: var(--primary); font-weight: 600; }
+.dict-picker-option:hover { background: rgba(59,130,246,0.08); color: var(--primary); }
+.dict-picker-option.selected { background: rgba(59,130,246,0.1); color: var(--primary); font-weight: 600; }
+.dict-picker-option.dict-picker-create { color: var(--primary); font-weight: 600; border-top: 1px solid var(--border); margin-top: 2px; padding-top: 10px; }
+.dict-picker-empty { margin: 6px 8px; font-size: 13px; color: var(--text-secondary); }
 
 @media (max-width: 768px) {
     .load-refs-row { grid-template-columns: 1fr; gap: 16px; }

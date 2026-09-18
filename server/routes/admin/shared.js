@@ -63,11 +63,52 @@ function getClientAddress(req) {
     return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
+function referenceError(message) {
+    const error = new Error(message);
+    error.statusCode = 404;
+    return error;
+}
+
+/**
+ * The single place a schedule pair's teacher/discipline get resolved.
+ *
+ * Given optional teacher_id/discipline_id, looks each one up and returns the
+ * dictionary's OWN current text alongside it — the app never trusts text sent
+ * by the client once an id is given, so the schedule and the load plan can
+ * never show the same person under two different spellings. No id at all is
+ * a valid, ordinary case (kind='event', or a one-off nobody wants to track):
+ * the row keeps whatever text was typed and simply never matches any plan
+ * row's hours.
+ *
+ * Throws (404) if an id is given but doesn't resolve — a deleted or
+ * mistyped id must never silently fall back to free text.
+ */
+function resolveTeacherDiscipline(db, { teacherId, teacherText, disciplineId, disciplineText }) {
+    let teacher = teacherText ?? null;
+
+    if (teacherId != null) {
+        const row = db.prepare('SELECT full_name FROM teachers WHERE id = ?').get(teacherId);
+        if (!row) throw referenceError('Преподаватель не найден');
+        teacher = row.full_name;
+    }
+
+    let discipline = disciplineText ?? null;
+
+    if (disciplineId != null) {
+        const row = db.prepare('SELECT name FROM disciplines WHERE id = ?').get(disciplineId);
+        if (!row) throw referenceError('Дисциплина не найдена');
+        discipline = row.name;
+    }
+
+    return { teacherId: teacherId ?? null, teacher, disciplineId: disciplineId ?? null, discipline };
+}
+
 module.exports = {
     mapSemesterRow,
     syncSemesterStartDate,
     SEMESTER_CLOSED,
     findClosedSemester,
     NO_WORKING_SEMESTER,
-    getClientAddress
+    getClientAddress,
+    resolveTeacherDiscipline
 };

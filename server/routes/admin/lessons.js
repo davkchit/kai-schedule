@@ -13,7 +13,8 @@ const {
     SEMESTER_CLOSED,
     findClosedSemester,
     NO_WORKING_SEMESTER,
-    getClientAddress
+    getClientAddress,
+    resolveTeacherDiscipline
 } = require('./shared');
 
 const router = express.Router();
@@ -92,10 +93,30 @@ router.post('/lessons', (req, res) => {
 
     const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
+    // teacher_id/discipline_id chosen from the dropdown are resolved to the
+    // dictionary's OWN current text — the app never trusts text sent
+    // alongside an id, so the schedule and the load plan can never show the
+    // same person under two spellings. No id at all stays valid (kind=
+    // 'event', or a one-off nobody wants tracked): the row keeps whatever
+    // text was given and simply matches no plan row's hours.
+    let identity;
+
+    try {
+        identity = resolveTeacherDiscipline(db, {
+            teacherId: payload.teacher_id, teacherText: payload.teacher,
+            disciplineId: payload.discipline_id, disciplineText: payload.subject
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
     // An edit in the template view is a new version of an existing row. It
-    // must be allowed into the cell that row occupies, and it inherits the
-    // row's load-plan link — a version without it would leave the teacher's
-    // hours counting the old version while students see the new one.
+    // must be allowed into the cell that row occupies. Nothing here needs to
+    // "inherit" whether it counts toward anyone's hours any more — that is
+    // decided live, by whether THIS version's own teacher_id/discipline_id
+    // match a plan row, every time hours are asked for. A substitute or a
+    // swapped-in discipline simply carries different ids and stops matching
+    // the old plan row on its own, with no separate step.
     let replaced = null;
 
     if (payload.replaces_lesson_id !== null) {
@@ -108,9 +129,8 @@ router.post('/lessons', (req, res) => {
             return res.status(409).json({ error: 'Изменяемая пара не найдена в шаблоне этой группы — обновите страницу' });
         }
     } else if (payload.is_removed && payload.specific_week === null) {
-        // A removal sent without naming its row still has to carry the link of
-        // the pair it hides: the hour counter selects rows by load_plan_id, so an
-        // unlinked tombstone is invisible to it and the pair keeps counting.
+        // A removal sent without naming its row still needs to find it, to
+        // retire the right slot rather than insert a stray tombstone.
         replaced = resolveTemplateLessons(db.prepare(`
             SELECT * FROM lessons
             WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL
@@ -158,28 +178,12 @@ router.post('/lessons', (req, res) => {
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week,
             template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-            kind, load_plan_id, semester_id
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
+            kind, semester_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const slotKey = (row) => [row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type].join('|');
-
-    // A version "inherits" the row it replaces only while it is plausibly the
-    // same teaching assignment — subject and teacher unchanged, everything
-    // else (room, time, day, type) is fair game as a correction. The moment
-    // either identity changes — a substitute covering the class, a
-    // consultation standing in for the lecture — carrying the old link
-    // forward would count those hours toward the ORIGINAL teacher's ORIGINAL
-    // discipline while students see something else, with nothing anywhere
-    // saying so. So the link resets instead, same as any freshly created
-    // pair, and the specialist re-links it deliberately if it should count.
-    let linkDropped = false;
-    const inheritedLoadPlanId = (source) => {
-        const sameAssignment = source.subject === payload.subject && source.teacher === payload.teacher;
-        if (!sameAssignment && source.load_plan_id) linkDropped = true;
-        return sameAssignment ? source.load_plan_id : null;
-    };
 
     const createdId = db.transaction(() => {
         if (replaced && !payload.is_removed && replaced.template_from_week >= templateFromWeek && !replaced.is_removed) {
@@ -188,25 +192,27 @@ router.post('/lessons', (req, res) => {
             db.prepare(`
                 UPDATE lessons SET
                     subgroup = ?, day_of_week = ?, week_type = ?, time_start = ?, time_end = ?,
-                    subject = ?, room = ?, lesson_type = ?, teacher = ?, kind = ?, load_plan_id = ?, updated_at = CURRENT_TIMESTAMP
+                    subject = ?, room = ?, lesson_type = ?, teacher = ?, teacher_id = ?, discipline_id = ?,
+                    kind = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             `).run(
                 payload.subgroup, payload.day_of_week, payload.week_type, payload.time_start, payload.time_end,
-                payload.subject, payload.room, payload.lesson_type, payload.teacher, payload.kind,
-                inheritedLoadPlanId(replaced), replaced.id
+                identity.discipline, payload.room, payload.lesson_type, identity.teacher, identity.teacherId, identity.disciplineId,
+                payload.kind, replaced.id
             );
             return replaced.id;
         }
 
         if (replaced && !payload.is_removed && slotKey(replaced) !== slotKey(payload)) {
             // Moving to another cell or parity: the old cell is retired from
-            // this week, as move-lesson does, carrying the same link.
+            // this week, as move-lesson does, keeping its own identity — it
+            // is a tombstone of what WAS there, not of the new version.
             insertLesson.run(
                 replaced.group_id, replaced.subgroup, replaced.day_of_week, replaced.week_type, null,
                 templateFromWeek, 1,
                 replaced.time_start, replaced.time_end, replaced.subject, replaced.room,
-                replaced.lesson_type, replaced.teacher, replaced.sort_order,
-                replaced.kind, replaced.load_plan_id, semester.id
+                replaced.lesson_type, replaced.teacher, replaced.teacher_id, replaced.discipline_id, replaced.sort_order,
+                replaced.kind, semester.id
             );
         }
 
@@ -217,8 +223,8 @@ router.post('/lessons', (req, res) => {
                 replaced.group_id, replaced.subgroup, replaced.day_of_week, replaced.week_type, null,
                 templateFromWeek, 1,
                 replaced.time_start, replaced.time_end, replaced.subject, replaced.room,
-                replaced.lesson_type, replaced.teacher, replaced.sort_order,
-                replaced.kind, replaced.load_plan_id, semester.id
+                replaced.lesson_type, replaced.teacher, replaced.teacher_id, replaced.discipline_id, replaced.sort_order,
+                replaced.kind, semester.id
             ).lastInsertRowid;
         }
 
@@ -232,13 +238,14 @@ router.post('/lessons', (req, res) => {
             payload.is_removed ? 1 : 0,
             payload.time_start,
             payload.time_end,
-            payload.subject,
+            identity.discipline,
             payload.room,
             payload.lesson_type,
-            payload.teacher,
+            identity.teacher,
+            identity.teacherId,
+            identity.disciplineId,
             payload.sort_order,
             replaced ? replaced.kind : payload.kind,
-            replaced ? inheritedLoadPlanId(replaced) : null,
             semester.id
         ).lastInsertRowid;
     })();
@@ -272,7 +279,7 @@ router.post('/lessons', (req, res) => {
         }
     });
 
-    res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead, link_dropped: linkDropped });
+    res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead });
 });
 
 router.put('/lessons/:id', (req, res) => {
@@ -301,9 +308,26 @@ router.put('/lessons/:id', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
+    let identity;
+
+    try {
+        identity = resolveTeacherDiscipline(db, {
+            teacherId: updates.teacher_id !== undefined ? updates.teacher_id : lesson.teacher_id,
+            teacherText: updates.teacher !== undefined ? updates.teacher : lesson.teacher,
+            disciplineId: updates.discipline_id !== undefined ? updates.discipline_id : lesson.discipline_id,
+            disciplineText: updates.subject !== undefined ? updates.subject : lesson.subject
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
     const nextLesson = {
         ...lesson,
-        ...updates
+        ...updates,
+        teacher: identity.teacher,
+        teacher_id: identity.teacherId,
+        subject: identity.discipline,
+        discipline_id: identity.disciplineId
     };
 
     if (nextLesson.time_start >= nextLesson.time_end) {
@@ -341,6 +365,8 @@ router.put('/lessons/:id', (req, res) => {
             room = ?,
             lesson_type = ?,
             teacher = ?,
+            teacher_id = ?,
+            discipline_id = ?,
             sort_order = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -355,6 +381,8 @@ router.put('/lessons/:id', (req, res) => {
         nextLesson.room,
         nextLesson.lesson_type,
         nextLesson.teacher,
+        nextLesson.teacher_id,
+        nextLesson.discipline_id,
         nextLesson.sort_order,
         lessonId
     );
@@ -437,16 +465,16 @@ router.delete('/lessons/:id', (req, res) => {
             INSERT INTO lessons (
                 group_id, subgroup, day_of_week, week_type, specific_week,
                 template_from_week, is_removed,
-                time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-                kind, load_plan_id, semester_id
+                time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
+                kind, semester_id
             )
-            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type,
             currentWeek,
             lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
-            lesson.lesson_type, lesson.teacher, lesson.sort_order,
-            lesson.kind, lesson.load_plan_id, lesson.semester_id
+            lesson.lesson_type, lesson.teacher, lesson.teacher_id, lesson.discipline_id, lesson.sort_order,
+            lesson.kind, lesson.semester_id
         );
     } else if (isLastVisibleWeekRow(db, lesson)) {
         // Deleting a week's last pair must still leave the week "its own" —

@@ -40,7 +40,7 @@ function computeExceptionWeeks(groupLessons, weeksCount) {
  *
  * @param {string} semesterStartDate - ISO date, the semester's week 1 Monday
  * @param {number} weeksCount - how many weeks the semester spans
- * @param {Array} linkedLessons - all lessons rows with load_plan_id === this plan's id
+ * @param {Array} linkedLessons - all lessons rows matching this plan's teacher/discipline/type/group/subgroup
  *   (any mix of template versions and specific-week rows for this exact slot)
  * @param {Set<number>} exceptionWeeks - from computeExceptionWeeks, scoped to the group
  * @param {number} [firstWeekParity] - the semester's week-1 parity (1 нечётная, 2 чётная);

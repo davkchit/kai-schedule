@@ -122,7 +122,7 @@ router.get('/semesters/:id/impact', (req, res) => {
     }
 
     const planRows = db.prepare(`
-        SELECT lp.id, lp.group_id, lp.teacher_id, t.full_name AS teacher_name
+        SELECT lp.id, lp.group_id, lp.teacher_id, lp.discipline_id, lp.lesson_type, lp.subgroup, t.full_name AS teacher_name
         FROM load_plan lp JOIN teachers t ON t.id = lp.teacher_id
         WHERE lp.semester_id = ?
     `).all(semesterId);

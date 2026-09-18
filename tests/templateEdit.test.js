@@ -68,18 +68,22 @@ test('template view: edit, move and remove keep past weeks and hours right', asy
     const mondayPlan = await plan('Лекция');
     const wednesdayPlan = await plan('Практика');
 
-    const pair = { group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Физика', room: '101' };
+    const pair = {
+        group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Физика', room: '101',
+        teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция'
+    };
     let monday = await ok('POST', '/api/admin/lessons', pair);
-    await ok('PUT', `/api/admin/lessons/${monday.id}/load-plan`, { load_plan_id: mondayPlan.id });
-    const wednesday = await ok('POST', '/api/admin/lessons', { ...pair, day_of_week: 3 });
-    await ok('PUT', `/api/admin/lessons/${wednesday.id}/load-plan`, { load_plan_id: wednesdayPlan.id });
+    const wednesday = await ok('POST', '/api/admin/lessons', { ...pair, day_of_week: 3, lesson_type: 'Практика' });
+    assert.equal(monday.teacher_id, teacherId);
+    assert.equal(wednesday.discipline_id, disciplineId);
 
     // Week 3: room change in the template view.
     at('2026-09-16T12:00:00');
     const blind = await call('POST', '/api/admin/lessons', { ...pair, room: '202' });
     assert.equal(blind.status, 409, 'a second pair into an occupied cell is still refused');
     monday = await ok('POST', '/api/admin/lessons', { ...pair, room: '202', replaces_lesson_id: monday.id });
-    assert.equal(monday.load_plan_id, mondayPlan.id, 'the new version keeps the load-plan link');
+    assert.equal(monday.teacher_id, teacherId, 'the new version keeps the same identity');
+    assert.equal(monday.discipline_id, disciplineId);
 
     // Week 5: the pair moves to 09:40.
     at('2026-09-30T12:00:00');
@@ -98,10 +102,16 @@ test('template view: edit, move and remove keep past weeks and hours right', asy
         '2026-10-19': [] // week 8: removed
     });
 
-    // A pair added this week and corrected this week is fixed in place, not stacked.
-    const fresh = await ok('POST', '/api/admin/lessons', { ...pair, day_of_week: 5, room: '305' });
+    // A pair added this week and corrected this week is fixed in place, not
+    // stacked. A different teacher/discipline than Monday's, on purpose —
+    // otherwise it would count toward mondayPlan too, since matching cares
+    // about identity, not which cell it happened to be created in.
+    const fridayTeacherId = (await ok('POST', '/api/admin/teachers', { full_name: 'Пятницын П.П.' })).id;
+    const fridayDisciplineId = (await ok('POST', '/api/admin/disciplines', { name: 'Другой предмет' })).id;
+    const freshPair = { ...pair, teacher_id: fridayTeacherId, discipline_id: fridayDisciplineId, subject: 'Другой предмет' };
+    const fresh = await ok('POST', '/api/admin/lessons', { ...freshPair, day_of_week: 5, room: '305' });
     const rowsBefore = db.prepare('SELECT COUNT(*) AS c FROM lessons').get().c;
-    const corrected = await ok('POST', '/api/admin/lessons', { ...pair, day_of_week: 5, room: '306', replaces_lesson_id: fresh.id });
+    const corrected = await ok('POST', '/api/admin/lessons', { ...freshPair, day_of_week: 5, room: '306', replaces_lesson_id: fresh.id });
     assert.equal(corrected.id, fresh.id);
     assert.equal(db.prepare('SELECT COUNT(*) AS c FROM lessons').get().c, rowsBefore);
 
@@ -111,12 +121,13 @@ test('template view: edit, move and remove keep past weeks and hours right', asy
     assert.equal(await hours(wednesdayPlan.id), 12);
 });
 
-test('a substitute teacher or a one-off replacement drops the load-plan link instead of silently keeping it', async (t) => {
+test('a substitute teacher or a one-off replacement simply stops matching the original plan row, no explicit step needed', async (t) => {
     // Same slot, but the content genuinely changes for a week (a substitute,
     // a consultation standing in for the lecture) or for the rest of the
-    // semester (a swap in the template). Carrying the old link forward would
-    // count those hours toward the ORIGINAL teacher's ORIGINAL discipline
-    // while students see something else — with nothing anywhere saying so.
+    // semester (a swap in the template). Hours are matched live by identity,
+    // so a swapped-in pair just carries a different teacher_id/discipline_id
+    // and stops matching the original plan row on its own — there is nothing
+    // to "drop" and nothing that could forget to.
     const { resolveLessonsForDay } = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'lib', 'scheduleResolve.js')).href);
 
     const db = getDb();
@@ -150,64 +161,90 @@ test('a substitute teacher or a one-off replacement drops the load-plan link ins
     await ok('PUT', `/api/admin/semesters/${semester.id}`, { is_active: true });
     const teacherId = (await ok('POST', '/api/admin/teachers', { full_name: 'Иванов И.И.' })).id;
     const disciplineId = (await ok('POST', '/api/admin/disciplines', { name: 'Физика' })).id;
+    const substituteTeacherId = (await ok('POST', '/api/admin/teachers', { full_name: 'Петров П.П.' })).id;
     const plan = await ok('POST', '/api/admin/load-plan', {
         semester_id: semester.id, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция', group_id: groupId, planned_hours: 20
     });
-    const pair = { group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Физика', room: '101', teacher: 'Иванов И.И.' };
+    const pair = {
+        group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Физика', room: '101',
+        teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция'
+    };
     let lesson = await ok('POST', '/api/admin/lessons', pair);
-    await ok('PUT', `/api/admin/lessons/${lesson.id}/load-plan`, { load_plan_id: plan.id });
+    assert.equal(lesson.teacher_id, teacherId);
 
     // ── materialize-week: one week only, a substitute covers the class ──
     at('2026-09-16T12:00:00'); // week 3
-    const substituted = await ok('POST', '/api/admin/schedule/materialize-week', {
+    await ok('POST', '/api/admin/schedule/materialize-week', {
         group_id: groupId, week_number: 5, action: 'upsert', day_of_week: 1, time_start: '08:00', time_end: '09:30',
-        subject: 'Физика (замена)', teacher: 'Петров П.П.', lesson_type: 'Лекция'
+        subject: 'Физика (замена)', teacher: 'Петров П.П.', teacher_id: substituteTeacherId, lesson_type: 'Лекция'
+        // discipline_id deliberately omitted — nobody set up a plan row for
+        // Петров teaching this, so this week counts toward nobody.
     });
-    assert.equal(substituted.link_dropped, true, 'a subject/teacher swap for one week must report the dropped link');
     assert.equal(
-        db.prepare('SELECT load_plan_id FROM lessons WHERE group_id = ? AND specific_week = 5').get(groupId).load_plan_id,
-        null,
-        'that week must not silently keep counting toward the original teacher'
+        db.prepare('SELECT teacher_id FROM lessons WHERE group_id = ? AND specific_week = 5').get(groupId).teacher_id,
+        substituteTeacherId,
+        'the week shows the substitute'
     );
 
-    // A room-only fix on another week is a correction, not a swap — the link stays.
-    const corrected = await ok('POST', '/api/admin/schedule/materialize-week', {
+    // A room-only fix on another week is a correction — same identity, same room change.
+    await ok('POST', '/api/admin/schedule/materialize-week', {
         group_id: groupId, week_number: 6, action: 'upsert', day_of_week: 1, time_start: '08:00', time_end: '09:30',
-        subject: 'Физика', teacher: 'Иванов И.И.', room: '202', lesson_type: 'Лекция'
+        subject: 'Физика', teacher: 'Иванов И.И.', teacher_id: teacherId, discipline_id: disciplineId, room: '202', lesson_type: 'Лекция'
     });
-    assert.ok(!corrected.link_dropped, 'a same-subject, same-teacher correction keeps the link');
     assert.equal(
-        db.prepare('SELECT load_plan_id FROM lessons WHERE group_id = ? AND specific_week = 6').get(groupId).load_plan_id,
-        plan.id
+        db.prepare('SELECT teacher_id FROM lessons WHERE group_id = ? AND specific_week = 6').get(groupId).teacher_id,
+        teacherId
     );
+
+    // The set of lessons the plan row would match confirms it directly: week
+    // 5 (the substitute) is absent, week 6 (Иванов's own) is present.
+    const matchingWeeks = db.prepare(`
+        SELECT specific_week FROM lessons
+        WHERE teacher_id = ? AND discipline_id = ? AND lesson_type = 'Лекция' AND group_id = ? AND specific_week IN (5, 6)
+    `).all(teacherId, disciplineId, groupId).map((row) => row.specific_week);
+    assert.deepEqual(matchingWeeks, [6], 'only the corrected week matches the plan; the substitute\'s does not');
 
     // ── template edit: the swap is meant for the rest of the semester ──
     // Case A: the row has not been live yet (corrected in place, no version stack).
     at('2026-08-26T12:00:00'); // before the semester even starts — week 1, nothing live
-    const wednesdayPair = { group_id: groupId, day_of_week: 3, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Физика', teacher: 'Иванов И.И.' };
+    const wednesdayPair = {
+        group_id: groupId, day_of_week: 3, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Физика',
+        teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Практика'
+    };
     let wednesday = await ok('POST', '/api/admin/lessons', wednesdayPair);
     const secondPlan = await ok('POST', '/api/admin/load-plan', {
         semester_id: semester.id, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Практика', group_id: groupId, planned_hours: 10
     });
-    await ok('PUT', `/api/admin/lessons/${wednesday.id}/load-plan`, { load_plan_id: secondPlan.id });
+    assert.equal(wednesday.discipline_id, disciplineId);
 
+    const otherDisciplineId = (await ok('POST', '/api/admin/disciplines', { name: 'Другая дисциплина' })).id;
+    const otherTeacherId = (await ok('POST', '/api/admin/teachers', { full_name: 'Сидорова А.А.' })).id;
     const swappedInPlace = await ok('POST', '/api/admin/lessons', {
-        ...wednesdayPair, subject: 'Другая дисциплина', teacher: 'Сидорова А.А.', replaces_lesson_id: wednesday.id
+        ...wednesdayPair, subject: 'Другая дисциплина', teacher: 'Сидорова А.А.',
+        teacher_id: otherTeacherId, discipline_id: otherDisciplineId, replaces_lesson_id: wednesday.id
     });
-    assert.equal(swappedInPlace.link_dropped, true, 'not-yet-live rows swapped in place must drop the link too');
-    assert.equal(swappedInPlace.load_plan_id, null);
+    assert.equal(swappedInPlace.discipline_id, otherDisciplineId, 'the swapped identity is written');
     assert.equal(swappedInPlace.id, wednesday.id, 'still corrected in place, not stacked as a new row');
+    assert.equal(
+        (await ok('GET', `/api/admin/load-plan?semester_id=${semester.id}`)).find((row) => row.id === secondPlan.id).progress.occurred_hours,
+        0,
+        'the original plan row no longer matches anything'
+    );
 
     // Case B: the row IS already live (a real version is inserted).
     at('2026-09-16T12:00:00'); // week 3 — Monday's row has been live since week 1
     lesson = db.prepare('SELECT * FROM lessons WHERE group_id = ? AND day_of_week = 1 AND specific_week IS NULL').get(groupId);
-    assert.equal(lesson.load_plan_id, plan.id);
+    assert.equal(lesson.teacher_id, teacherId);
 
+    // A distinct discipline of its own — reusing Case A's would resolve to
+    // ITS text ('Другая дисциплина'), since an id always wins over whatever
+    // text is sent alongside it.
+    const thirdDisciplineId = (await ok('POST', '/api/admin/disciplines', { name: 'Совсем другой предмет' })).id;
     const newVersion = await ok('POST', '/api/admin/lessons', {
-        ...pair, subject: 'Совсем другой предмет', teacher: 'Другой Т.Т.', replaces_lesson_id: lesson.id
+        ...pair, teacher_id: otherTeacherId, discipline_id: thirdDisciplineId, replaces_lesson_id: lesson.id
     });
-    assert.equal(newVersion.link_dropped, true);
-    assert.equal(newVersion.load_plan_id, null);
+    assert.equal(newVersion.teacher_id, otherTeacherId);
+    assert.equal(newVersion.subject, 'Совсем другой предмет', 'the dictionary\'s own text wins over whatever was typed');
     assert.notEqual(newVersion.id, lesson.id, 'a live row gets a new version, not an in-place update');
 
     // Students see the swap; the old teacher's hours stop where the swap started.

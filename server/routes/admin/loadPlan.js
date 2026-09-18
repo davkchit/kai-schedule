@@ -1,4 +1,6 @@
-// Load plan: plan rows, their hours, Excel report, and linking schedule lessons to rows.
+// Load plan: plan rows and their hours, Excel report. Hours are matched live
+// against the schedule by teacher/discipline/type/group/subgroup — see
+// utils/planProgress.js — there is no separate linking step any more.
 // Mounted by ../admin.js after authentication and CSRF checks.
 
 const express = require('express');
@@ -6,7 +8,7 @@ const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { buildLoadWorkbook } = require('../../exportLoad');
 const { computePlanRowProgress } = require('../../utils/planProgress');
-const { validateLessonLoadPlanLinkBody, validateLoadPlanCreateBody, validateLoadPlanUpdateBody } = require('../../validation');
+const { validateLoadPlanCreateBody, validateLoadPlanUpdateBody } = require('../../validation');
 const { SEMESTER_CLOSED, findClosedSemester, getClientAddress } = require('./shared');
 
 const router = express.Router();
@@ -237,18 +239,11 @@ router.put('/load-plan/:id', (req, res) => {
         return res.status(404).json({ error: 'Группа не найдена' });
     }
 
-    // Changing the group out from under linked lessons would leave them
-    // pointing at a plan row whose group no longer matches where they
-    // actually live — unlink first, then the group is free to change.
-    if (payload.group_id !== undefined && payload.group_id !== existing.group_id) {
-        const linkedCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE load_plan_id = ?').get(planId).c;
-        if (linkedCount > 0) {
-            return res.status(409).json({
-                error: `К этой строке привязано пар: ${linkedCount}. Сначала отвяжите их («Привязать пару» → снять привязку), потом меняйте группу.`
-            });
-        }
-    }
-
+    // Nothing to detach any more: changing a row's group (or teacher,
+    // discipline, type, subgroup) just makes it match a different set of
+    // lessons on the next read — there is no stored link that could point
+    // at the wrong group. The duplicate check right below is what actually
+    // guards this write.
     const next = { ...existing, ...payload };
 
     const duplicate = findDuplicatePlanRow(db, next, planId);
@@ -317,70 +312,6 @@ router.delete('/load-plan/:id', (req, res) => {
     });
 
     res.json({ success: true });
-});
-
-// Links (or unlinks, with load_plan_id: null) one schedule entry to a plan
-// row — this is what tells the calculator which recurring slot in the
-// schedule counts toward that plan's hours.
-router.put('/lessons/:id/load-plan', (req, res) => {
-    const lessonId = Number.parseInt(req.params.id, 10);
-
-    if (!Number.isInteger(lessonId) || lessonId <= 0) {
-        return res.status(400).json({ error: 'Некорректный ID занятия' });
-    }
-
-    let payload;
-
-    try {
-        payload = validateLessonLoadPlanLinkBody(req.body);
-    } catch (error) {
-        return res.status(error.statusCode || 400).json({ error: error.message });
-    }
-
-    const db = getDb();
-    const lesson = db.prepare('SELECT id, group_id, semester_id FROM lessons WHERE id = ?').get(lessonId);
-
-    if (!lesson) {
-        return res.status(404).json({ error: 'Занятие не найдено' });
-    }
-
-    if (findClosedSemester(db, lesson.semester_id)) {
-        return res.status(409).json({ error: SEMESTER_CLOSED });
-    }
-
-    if (payload.load_plan_id !== null) {
-        const plan = db.prepare('SELECT id, group_id, semester_id FROM load_plan WHERE id = ?').get(payload.load_plan_id);
-
-        if (!plan) {
-            return res.status(404).json({ error: 'Строка плана не найдена' });
-        }
-
-        // Otherwise a pair from one group could feed hours into another
-        // group's plan row — the hours would be real, just billed to the
-        // wrong line. The UI only ever offers same-group pairs; this closes
-        // the same hole at the API.
-        if (plan.group_id !== lesson.group_id) {
-            return res.status(409).json({ error: 'Пара и строка плана относятся к разным группам' });
-        }
-
-        // Same for semesters: an autumn pair must not feed a spring plan row.
-        if (plan.semester_id !== lesson.semester_id) {
-            return res.status(409).json({ error: 'Пара и строка плана относятся к разным семестрам' });
-        }
-    }
-
-    db.prepare('UPDATE lessons SET load_plan_id = ? WHERE id = ?').run(payload.load_plan_id, lessonId);
-
-    writeAuditLog(db, {
-        adminId: req.admin.id,
-        action: 'lesson.link_load_plan',
-        entityType: 'lesson',
-        entityId: lessonId,
-        ipAddress: getClientAddress(req),
-        details: { load_plan_id: payload.load_plan_id }
-    });
-
-    res.json({ success: true, lesson_id: lessonId, load_plan_id: payload.load_plan_id });
 });
 
 /**

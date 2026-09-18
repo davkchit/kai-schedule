@@ -3,10 +3,6 @@ import { getWeekTypeNumber } from '../lib/date';
 
 const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
 const REF_PREVIEW_COUNT = 5;
-// Stable reference for rows that aren't the one currently open for linking —
-// a fresh [] literal every render would defeat PlanRow's memo() comparison
-// for all 130+ other rows every time any single row's state changes.
-const EMPTY_ARRAY = [];
 
 // The teaching-load admin window — kept as its own component (rather than
 // folded into AdminDashboardPage.jsx) since that file is already the
@@ -24,8 +20,6 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     const [newSemester, setNewSemester] = useState({ label: '', start_date: '', weeks_count: 18, first_week_parity: '' });
 
     const [planForm, setPlanForm] = useState(emptyPlanForm());
-    const [linkingPlanId, setLinkingPlanId] = useState(null);
-    const [linkGroupLessons, setLinkGroupLessons] = useState([]);
     // Only tracks WHICH row is being edited — the field values themselves live
     // as local state inside that row's PlanRow instance (see the comment on
     // PlanRow) so that typing in the edit form never re-renders every other row.
@@ -59,7 +53,6 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     useEffect(() => {
         setIsEditingSemester(false);
         setEditingPlanId(null);
-        setLinkingPlanId(null);
 
         if (viewedSemester) {
             loadPlanForSemester(viewedSemester.id);
@@ -564,7 +557,6 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
 
     const startEditRow = useCallback((row) => {
         setOpenMenuId(null);
-        setLinkingPlanId(null);
         setEditingPlanId(row.id);
     }, []);
 
@@ -630,66 +622,6 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             }
         }
     }, [api, setToastMessage]);
-
-    const openLinkPicker = useCallback(async (planRow) => {
-        setOpenMenuId(null);
-        setEditingPlanId(null);
-
-        // Functional form so this callback never needs linkingPlanId in its
-        // closure — reading it directly would change this function's identity
-        // on every open/close, re-rendering every other row in the table.
-        let alreadyOpenForThisRow = false;
-        setLinkingPlanId((previous) => {
-            alreadyOpenForThisRow = previous === planRow.id;
-            return alreadyOpenForThisRow ? null : planRow.id;
-        });
-
-        if (alreadyOpenForThisRow) {
-            return;
-        }
-
-        try {
-            const response = await api(`/api/admin/lessons?group_id=${planRow.group_id}&semester_id=${planRow.semester_id}`);
-            const lessons = await response.json();
-            // Only template rows make sense to link — a one-off specific-week
-            // override wouldn't recur for the whole semester.
-            setLinkGroupLessons(Array.isArray(lessons) ? lessons.filter((lesson) => lesson.specific_week === null) : []);
-        } catch (error) {
-            if (error.message !== 'UNAUTHORIZED') {
-                setToastMessage('Не удалось загрузить пары группы');
-            }
-        }
-    }, [api, setToastMessage]);
-
-    const toggleLessonLink = useCallback(async (planId, lesson) => {
-        // Clicking an already-linked lesson unlinks it; clicking any other
-        // lesson links it to this plan row (a lesson can only count toward
-        // one plan row at a time).
-        const nextLoadPlanId = lesson.load_plan_id === planId ? null : planId;
-
-        try {
-            const response = await api(`/api/admin/lessons/${lesson.id}/load-plan`, {
-                method: 'PUT',
-                body: JSON.stringify({ load_plan_id: nextLoadPlanId })
-            });
-
-            if (!response.ok) {
-                const data = await response.json();
-                setToastMessage(data.error || 'Не удалось изменить привязку');
-                return;
-            }
-
-            setToastMessage(nextLoadPlanId ? 'Пара привязана к плану' : 'Пара отвязана от плана');
-            setLinkGroupLessons((previous) =>
-                previous.map((item) => (item.id === lesson.id ? { ...item, load_plan_id: nextLoadPlanId } : item))
-            );
-            await refreshPlan();
-        } catch (error) {
-            if (error.message !== 'UNAUTHORIZED') {
-                setToastMessage('Ошибка сети');
-            }
-        }
-    }, [api, setToastMessage, refreshPlan]);
 
     const toggleRowMenu = useCallback((planId) => {
         if (menuCloseTimeout.current) {
@@ -1057,7 +989,6 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                                     <th>Вид</th>
                                     <th>Группа</th>
                                     <th>Часы</th>
-                                    <th>Привязка</th>
                                     <th></th>
                                 </tr>
                             </thead>
@@ -1074,10 +1005,6 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                                         onCancelEdit={cancelEditRow}
                                         onStartEdit={startEditRow}
                                         onUpdateHours={updatePlannedHours}
-                                        isLinking={linkingPlanId === row.id}
-                                        linkGroupLessons={linkingPlanId === row.id ? linkGroupLessons : EMPTY_ARRAY}
-                                        onOpenLinkPicker={openLinkPicker}
-                                        onToggleLessonLink={toggleLessonLink}
                                         isClosed={Boolean(viewedSemester.closed)}
                                         isMenuOpen={openMenuId === row.id}
                                         onToggleMenu={toggleRowMenu}
@@ -1100,9 +1027,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     );
 }
 
-const DAY_NAMES = { 1: 'Пн', 2: 'Вт', 3: 'Ср', 4: 'Чт', 5: 'Пт', 6: 'Сб', 7: 'Вс' };
-
-// Memoized so opening/closing one row's kebab menu, edit form, or link picker
+// Memoized so opening/closing one row's kebab menu or edit form
 // doesn't re-render the other 100+ rows in the table — before this, every
 // click on any row's "⋯" re-rendered the entire plan (132 rows on a real
 // semester), which is exactly the visible lag that prompted this split.
@@ -1120,7 +1045,6 @@ function buildEditFormFromRow(row) {
 const PlanRow = memo(function PlanRow({
     row, teachers, disciplines, groups, isClosed,
     isEditing, onSaveEdit, onCancelEdit, onStartEdit, onUpdateHours,
-    isLinking, linkGroupLessons, onOpenLinkPicker, onToggleLessonLink,
     isMenuOpen, onToggleMenu, onScheduleMenuClose, onDelete
 }) {
     // Lives here, not in the parent — otherwise every keystroke while editing
@@ -1208,7 +1132,7 @@ const PlanRow = memo(function PlanRow({
                             onChange={(event) => setDraft({ ...form, planned_hours: event.target.value })}
                         />
                     </td>
-                    <td colSpan={2} className="load-edit-actions">
+                    <td className="load-edit-actions">
                         <button type="button" className="btn btn-primary load-edit-save" onClick={handleSave}>
                             Сохранить
                         </button>
@@ -1238,13 +1162,6 @@ const PlanRow = memo(function PlanRow({
                             </div>
                         )}
                     </td>
-                    <td>
-                        {!isClosed && (
-                            <button type="button" className="btn-link" onClick={() => onOpenLinkPicker(row)}>
-                                {isLinking ? 'Закрыть' : 'Привязать пару'}
-                            </button>
-                        )}
-                    </td>
                     <td className="load-row-menu-cell">
                         {!isClosed && (
                         <div className="load-row-menu" onBlur={onScheduleMenuClose}>
@@ -1271,87 +1188,9 @@ const PlanRow = memo(function PlanRow({
                     </td>
                 </tr>
             )}
-            {isLinking && (
-                <tr className="load-link-row">
-                    <td colSpan={7}>
-                        {linkGroupLessons.length === 0 ? (
-                            <span className="empty-message">У этой группы нет пар в шаблоне расписания.</span>
-                        ) : (
-                            <LinkPicker planRow={row} lessons={linkGroupLessons} onToggle={onToggleLessonLink} />
-                        )}
-                    </td>
-                </tr>
-            )}
         </Fragment>
     );
 });
-
-/**
- * Why a plan row (teacher + discipline + group) links to a specific day/time,
- * not just "this discipline": one row can be taught in more than one weekly
- * slot (a lecture Monday AND Wednesday, or a lecture plus a separate lab), so
- * the system has to know exactly which calendar slots to watch — hours are
- * counted per occurrence of a linked slot, not per discipline name.
- *
- * The picker used to list every pair of the group in one flat list — fine for
- * a group with a handful of subjects, unusable for one with twenty. This
- * pulls pairs whose subject matches the row's discipline (plus anything
- * already linked here) to the top, so the two or three real candidates are
- * the first thing the specialist sees instead of the last.
- */
-function LinkPicker({ planRow, lessons, onToggle }) {
-    const disciplineKey = normalizeForMatch(planRow.discipline_name);
-
-    const { matches, others } = useMemo(() => {
-        const isMatch = (lesson) => lesson.load_plan_id === planRow.id || subjectsLikelyMatch(lesson.subject, disciplineKey);
-        return {
-            matches: lessons.filter(isMatch),
-            others: lessons.filter((lesson) => !isMatch(lesson))
-        };
-    }, [lessons, planRow.id, disciplineKey]);
-
-    const renderOption = (lesson) => (
-        <button
-            type="button"
-            key={lesson.id}
-            className={`load-link-option ${lesson.load_plan_id === planRow.id ? 'selected' : ''}`}
-            onClick={() => onToggle(planRow.id, lesson)}
-        >
-            {DAY_NAMES[lesson.day_of_week] || lesson.day_of_week}, {lesson.time_start}–{lesson.time_end} · {lesson.subject}
-            {lesson.load_plan_id === planRow.id ? ' ✓' : ''}
-        </button>
-    );
-
-    return (
-        <div className="load-link-picker">
-            {matches.length > 0 && (
-                <div className="load-link-options">{matches.map(renderOption)}</div>
-            )}
-            {matches.length === 0 && (
-                <p className="load-link-hint">
-                    Ни одна пара в расписании группы не называется похоже на «{planRow.discipline_name}» — возможно,
-                    в расписании она записана под другим названием. Ищите нужную пару ниже, среди всех пар группы.
-                </p>
-            )}
-            {others.length > 0 && (
-                <details className="load-link-others">
-                    <summary>Остальные пары группы ({others.length})</summary>
-                    <div className="load-link-options">{others.map(renderOption)}</div>
-                </details>
-            )}
-        </div>
-    );
-}
-
-function normalizeForMatch(text) {
-    return String(text || '').toLowerCase().replace(/ё/g, 'е').trim();
-}
-
-function subjectsLikelyMatch(subject, disciplineKey) {
-    if (!disciplineKey) return false;
-    const subjectKey = normalizeForMatch(subject);
-    return subjectKey === disciplineKey || subjectKey.includes(disciplineKey) || disciplineKey.includes(subjectKey);
-}
 
 /**
  * Turns "18 недель" into the dates it actually means, shown right next to the

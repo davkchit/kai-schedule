@@ -26,7 +26,8 @@ const {
     SEMESTER_CLOSED,
     findClosedSemester,
     NO_WORKING_SEMESTER,
-    getClientAddress
+    getClientAddress,
+    resolveTeacherDiscipline
 } = require('./shared');
 
 const router = express.Router();
@@ -499,10 +500,10 @@ router.post('/schedule/move-lesson', (req, res) => {
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week,
             template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-            kind, load_plan_id, semester_id
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
+            kind, semester_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     try {
@@ -531,15 +532,12 @@ router.post('/schedule/move-lesson', (req, res) => {
                 const statement = insertLesson();
 
                 // Tombstone at the old slot, effective from this week forward.
-                // It MUST carry the same load_plan_id: the hour counter selects a
-                // plan's rows by that column, so a tombstone written with NULL is
-                // invisible to it and the old slot keeps counting forever.
                 statement.run(
                     lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type, null,
                     currentWeek, 1,
                     lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
-                    lesson.lesson_type, lesson.teacher, lesson.sort_order,
-                    lesson.kind, lesson.load_plan_id, semester.id
+                    lesson.lesson_type, lesson.teacher, lesson.teacher_id, lesson.discipline_id, lesson.sort_order,
+                    lesson.kind, semester.id
                 );
 
                 // Same lesson, new slot, same effective week.
@@ -547,8 +545,8 @@ router.post('/schedule/move-lesson', (req, res) => {
                     lesson.group_id, lesson.subgroup, payload.day_of_week, lesson.week_type, null,
                     currentWeek, 0,
                     payload.time_start, payload.time_end, lesson.subject, lesson.room,
-                    lesson.lesson_type, lesson.teacher, lesson.sort_order,
-                    lesson.kind, lesson.load_plan_id, semester.id
+                    lesson.lesson_type, lesson.teacher, lesson.teacher_id, lesson.discipline_id, lesson.sort_order,
+                    lesson.kind, semester.id
                 );
             });
 
@@ -583,8 +581,8 @@ router.post('/schedule/move-lesson', (req, res) => {
                 const weekTypeNumber = getSemesterWeekType(semester, payload.week_number);
                 const templateRows = db.prepare(`
                     SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
-                           time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-                           kind, load_plan_id
+                           time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
+                           kind
                     FROM lessons
                     WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
                 `).all(semester.id, lesson.group_id, weekTypeNumber);
@@ -610,8 +608,8 @@ router.post('/schedule/move-lesson', (req, res) => {
                             0,
                             isMoved ? payload.time_start : row.time_start,
                             isMoved ? payload.time_end : row.time_end,
-                            row.subject, row.room, row.lesson_type, row.teacher,
-                            sortOrder, row.kind, row.load_plan_id, semester.id
+                            row.subject, row.room, row.lesson_type, row.teacher, row.teacher_id, row.discipline_id,
+                            sortOrder, row.kind, semester.id
                         );
                         sortOrder += 1;
                     }
@@ -679,10 +677,25 @@ router.post('/schedule/materialize-week', (req, res) => {
         return res.status(409).json({ error: 'Эта неделя уже содержит собственные записи' });
     }
 
+    // The dropdown's ids resolve to the dictionary's own current text, same
+    // as POST /lessons — never trust text sent alongside an id.
+    let identity = null;
+
+    if (payload.action === 'upsert') {
+        try {
+            identity = resolveTeacherDiscipline(db, {
+                teacherId: payload.teacher_id, teacherText: payload.teacher,
+                disciplineId: payload.discipline_id, disciplineText: payload.subject
+            });
+        } catch (error) {
+            return res.status(error.statusCode || 400).json({ error: error.message });
+        }
+    }
+
     const weekTypeNumber = getSemesterWeekType(semester, payload.week_number);
     const templateRows = db.prepare(`
         SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
-               time_start, time_end, subject, room, lesson_type, teacher, kind, load_plan_id
+               time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, kind
         FROM lessons
         WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
     `).all(semester.id, payload.group_id, weekTypeNumber);
@@ -693,41 +706,30 @@ router.post('/schedule/materialize-week', (req, res) => {
 
     const finalLessons = [];
     let touchedHandled = false;
-    let linkDropped = false;
 
     for (const lesson of resolved) {
         if (slotKey(lesson) === touchedKey) {
             touchedHandled = true;
 
             if (payload.action === 'upsert') {
-                // Editing a slot in place (room, time-of-day details, a typo in
-                // the teacher's name) keeps whatever the template row was linked
-                // to — otherwise the first week edit would silently detach the
-                // lesson from its load plan and drop its hours.
-                //
-                // But when the subject or teacher actually changes — a substitute
-                // covering the class, a consultation standing in for the lecture,
-                // an exam replacing it for one week — this is no longer the same
-                // teaching assignment. Carrying the old link forward would count
-                // that week's hours toward the ORIGINAL teacher's ORIGINAL
-                // discipline while students see something else entirely, with no
-                // sign anything is wrong. Reset it instead: the week counts
-                // nothing until someone deliberately links it, same as any other
-                // freshly created pair.
-                const sameAssignment = lesson.subject === payload.subject && lesson.teacher === payload.teacher;
-                if (!sameAssignment && lesson.load_plan_id) linkDropped = true;
-
+                // Editing a slot in place — a substitute, a swapped-in subject,
+                // a room fix — just writes this week's own teacher_id/
+                // discipline_id. Whether it counts toward anyone's hours is
+                // decided live from those ids every time hours are asked for;
+                // nothing here needs to reason about "is this still the same
+                // teaching assignment" any more.
                 finalLessons.push({
                     day_of_week: payload.day_of_week,
                     time_start: payload.time_start,
                     time_end: payload.time_end,
                     subgroup: payload.subgroup,
-                    subject: payload.subject,
+                    subject: identity.discipline,
                     room: payload.room,
                     lesson_type: payload.lesson_type,
-                    teacher: payload.teacher,
-                    kind: lesson.kind,
-                    load_plan_id: sameAssignment ? lesson.load_plan_id : null
+                    teacher: identity.teacher,
+                    teacher_id: identity.teacherId,
+                    discipline_id: identity.disciplineId,
+                    kind: lesson.kind
                 });
             } else {
                 // action === 'remove': kept as a removed marker, never just left
@@ -744,8 +746,9 @@ router.post('/schedule/materialize-week', (req, res) => {
                     room: lesson.room,
                     lesson_type: lesson.lesson_type,
                     teacher: lesson.teacher,
+                    teacher_id: lesson.teacher_id,
+                    discipline_id: lesson.discipline_id,
                     kind: lesson.kind,
-                    load_plan_id: lesson.load_plan_id,
                     is_removed: 1
                 });
             }
@@ -759,8 +762,9 @@ router.post('/schedule/materialize-week', (req, res) => {
                 room: lesson.room,
                 lesson_type: lesson.lesson_type,
                 teacher: lesson.teacher,
-                kind: lesson.kind,
-                load_plan_id: lesson.load_plan_id
+                teacher_id: lesson.teacher_id,
+                discipline_id: lesson.discipline_id,
+                kind: lesson.kind
             });
         }
     }
@@ -771,12 +775,13 @@ router.post('/schedule/materialize-week', (req, res) => {
             time_start: payload.time_start,
             time_end: payload.time_end,
             subgroup: payload.subgroup,
-            subject: payload.subject,
+            subject: identity.discipline,
             room: payload.room,
             lesson_type: payload.lesson_type,
-            teacher: payload.teacher,
-            kind: 'lesson',
-            load_plan_id: null
+            teacher: identity.teacher,
+            teacher_id: identity.teacherId,
+            discipline_id: identity.disciplineId,
+            kind: 'lesson'
         });
     }
 
@@ -785,10 +790,10 @@ router.post('/schedule/materialize-week', (req, res) => {
             INSERT INTO lessons (
                 group_id, subgroup, day_of_week, week_type, specific_week,
                 template_from_week, is_removed,
-                time_start, time_end, subject, room, lesson_type, teacher, sort_order,
-                kind, load_plan_id, semester_id
+                time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
+                kind, semester_id
             )
-            VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         let count = 0;
@@ -806,9 +811,10 @@ router.post('/schedule/materialize-week', (req, res) => {
                 lesson.room,
                 lesson.lesson_type,
                 lesson.teacher,
+                lesson.teacher_id ?? null,
+                lesson.discipline_id ?? null,
                 count,
                 lesson.kind || 'lesson',
-                lesson.load_plan_id ?? null,
                 semester.id
             );
             count += 1;
@@ -829,7 +835,7 @@ router.post('/schedule/materialize-week', (req, res) => {
             details: { group_id: payload.group_id, week_number: payload.week_number, lesson_count: count }
         });
 
-        res.status(201).json({ success: true, count, link_dropped: linkDropped });
+        res.status(201).json({ success: true, count });
     } catch (error) {
         console.error('Materialize week error:', error);
         res.status(500).json({ error: 'Не удалось сохранить неделю' });
@@ -877,26 +883,27 @@ router.delete('/schedule/week', (req, res) => {
 });
 
 /**
- * How many of the rows an upload is about to replace are already linked to a
- * load_plan row. Replacing them would detach those pairs from the plan (the
- * uploaded rows arrive unlinked) and erase hours already counted from them.
+ * How many of the rows an upload is about to replace are tied to a
+ * teacher/discipline (and so, potentially, to a load_plan row's hours).
+ * Uploaded rows arrive as plain text with no ids — replacing tracked pairs
+ * this way would silently untrack them and erase hours already counted.
  */
 function countLinkedLessonsToReplace(db, semesterId, groupId, specificWeek) {
     return specificWeek === null
         ? db.prepare(`
             SELECT COUNT(*) c FROM lessons
-            WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND load_plan_id IS NOT NULL
+            WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND teacher_id IS NOT NULL AND discipline_id IS NOT NULL
         `).get(semesterId, groupId).c
         : db.prepare(`
             SELECT COUNT(*) c FROM lessons
-            WHERE semester_id = ? AND group_id = ? AND specific_week = ? AND load_plan_id IS NOT NULL
+            WHERE semester_id = ? AND group_id = ? AND specific_week = ? AND teacher_id IS NOT NULL AND discipline_id IS NOT NULL
         `).get(semesterId, groupId, specificWeek).c;
 }
 
 function replacingLinkedLessonsError(count) {
-    return `${count} пар(ы) из заменяемого расписания уже привязаны к плану нагрузки. `
-        + 'Загрузка файлом заменила бы их непривязанными парами и стёрла бы уже посчитанные часы. '
-        + 'Правьте такое расписание в конструкторе или сначала отвяжите пары.';
+    return `${count} пар(ы) из заменяемого расписания уже привязаны к преподавателю и дисциплине из справочника. `
+        + 'Загрузка файлом заменила бы их обычным текстом и стёрла бы уже посчитанные часы. '
+        + 'Правьте такое расписание в конструкторе.';
 }
 
 module.exports = router;

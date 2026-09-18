@@ -4,6 +4,10 @@ const { resolveFirstWeekParity } = require('./date');
 /**
  * Hours for one load_plan row, computed strictly inside that row's semester.
  *
+ * `planRow` must carry teacher_id, discipline_id, lesson_type, group_id and
+ * subgroup — every caller selects load_plan.* (or joins in the same), which
+ * already has all five.
+ *
  * This is the only place hours are computed from the database, on purpose.
  * The four callers (teacher page, admin plan list, Excel report, the impact
  * preview) each used to query "weeks with their own rows" themselves, keyed
@@ -28,11 +32,16 @@ function computePlanRowProgress(db, planRow, semester, { cache = new Map(), over
         cache.set(cacheKey, exceptionWeeks);
     }
 
-    // Linking already refuses cross-semester pairs; filtering here too means a
-    // lesson from another semester can never feed this row's hours even if one
-    // slipped in some other way.
-    const linkedLessons = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ? AND semester_id = ?')
-        .all(planRow.id, semester.id);
+    // No explicit link any more: a lesson counts toward this row the moment
+    // its own teacher_id/discipline_id/lesson_type/group_id/subgroup match the
+    // row's — the same identity, not text that happened to be typed the same
+    // way twice. Scoped to this semester so a lesson from another semester can
+    // never feed this row's hours.
+    const linkedLessons = db.prepare(`
+        SELECT * FROM lessons
+        WHERE teacher_id = ? AND discipline_id = ? AND lesson_type = ? AND group_id = ? AND subgroup = ?
+          AND semester_id = ?
+    `).all(planRow.teacher_id, planRow.discipline_id, planRow.lesson_type, planRow.group_id, planRow.subgroup, semester.id);
 
     const progress = computeLoadProgress({
         semesterStartDate: effective.start_date,

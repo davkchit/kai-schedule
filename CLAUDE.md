@@ -99,7 +99,15 @@ Lessons have a `specific_week` column:
 - `NULL` — template entry, applies every semester week matching `week_type`
 - `N` (integer) — full week override for that group; **when an override exists for week N, all template entries for that group/week are ignored** (no merging)
 
-`week_type`: `0` = every week, `1` = odd weeks, `2` = even weeks. Removing a week's pair leaves an `is_removed` marker row so the week stays "its own". Template rows are versioned by `template_from_week`; edits/removals insert a new version or tombstone from the current week carrying the same `load_plan_id` (hours select rows by it).
+`week_type`: `0` = every week, `1` = odd weeks, `2` = even weeks. Removing a week's pair leaves an `is_removed` marker row so the week stays "its own". Template rows are versioned by `template_from_week`; edits/removals insert a new version or tombstone from the current week carrying the same `teacher_id`/`discipline_id` (hours match rows by identity — see below).
+
+### Critical Domain: Teaching Load Matching
+
+Hours are never stored — they're computed live from whichever schedule rows currently match a `load_plan` row's identity: `teacher_id`, `discipline_id`, `lesson_type`, `group_id`, `subgroup`, all within the same `semester_id` (`server/utils/planProgress.js`). There is no separate "link this pair to the plan" step or column — a lesson and a plan row are the same teaching assignment purely because they share that five-field identity, both drawn from the same `teachers`/`disciplines` dictionaries the constructor and the load page both read from.
+
+`lessons.teacher_id`/`discipline_id` are nullable FKs into those dictionaries. `lessons.subject`/`teacher` (text) are kept for display, exports, `kind='event'` rows, and untracked one-offs — but whenever an id is supplied, the server always derives the text from the dictionary and ignores client-sent text alongside it (`resolveTeacherDiscipline` in `routes/admin/shared.js`), so text and id can never drift apart. A pair typed free-text with no dictionary match is shown to students like any other pair but doesn't count toward anyone's hours — expected, not a bug: a one-off substitute costs two extra clicks to add to the dictionary if it should count.
+
+Because matching is live, editing a past week's identity (e.g., swapping the teacher) immediately moves hours between teachers with no extra step — the old teacher's count drops, the new one's rises, next time either is computed. Deleting a teacher or discipline is refused while **any** lesson (any semester, not just `load_plan` rows) still references it — checked in `routes/admin/references.js`. Renaming in the dictionary doesn't touch history, since lessons reference the row by id, not text.
 
 ### Bulk Schedule Upload
 

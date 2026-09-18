@@ -320,6 +320,58 @@ function initTables() {
 
     migrateSemesterScoping();
     migrateSemesterClosing();
+    migrateLessonsTeacherDiscipline();
+}
+
+/**
+ * Replaces the manual "link this pair to a plan row" step with a direct
+ * identity: a lesson now carries teacher_id/discipline_id, the same two
+ * foreign keys a load_plan row already has. Hours are computed by matching
+ * (teacher_id, discipline_id, lesson_type, group_id, subgroup) live — no
+ * explicit link, and no possibility of the schedule's text and the plan's
+ * dictionary silently drifting apart, because they are now the same id.
+ *
+ * subject/teacher stay as plain text columns too (still what's shown to
+ * students and printed on exports), but once an id is set the app always
+ * writes the dictionary's own current text into them — see
+ * resolveTeacherDiscipline in routes/admin/shared.js. A row can still exist
+ * with no ids at all (kind='event', or a one-off nobody wants to track);
+ * it simply never counts toward anyone's hours, same as before.
+ */
+function migrateLessonsTeacherDiscipline() {
+    try {
+        db.exec('ALTER TABLE lessons ADD COLUMN teacher_id INTEGER REFERENCES teachers(id)');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
+    try {
+        db.exec('ALTER TABLE lessons ADD COLUMN discipline_id INTEGER REFERENCES disciplines(id)');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
+    // One-time backfill for rows that predate the columns: today's schedule
+    // text already matches the dictionaries exactly (verified against the
+    // real semester before writing this), so this just links up what a
+    // human already made consistent by hand. Re-runs harmlessly on rows that
+    // still have no match (kept NULL, same as any untracked entry) — including
+    // picking up a match later if the matching dictionary entry gets added.
+    db.exec(`
+        UPDATE lessons SET teacher_id = (
+            SELECT id FROM teachers WHERE full_name = TRIM(lessons.teacher)
+        )
+        WHERE teacher_id IS NULL AND teacher IS NOT NULL AND TRIM(teacher) != ''
+    `);
+    db.exec(`
+        UPDATE lessons SET discipline_id = (
+            SELECT id FROM disciplines WHERE name = TRIM(lessons.subject)
+        )
+        WHERE discipline_id IS NULL AND subject IS NOT NULL AND TRIM(subject) != ''
+    `);
+
+    // The one index the hour engine's live match leans on every read.
+    db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_teacher_discipline ON lessons(teacher_id, discipline_id, lesson_type, group_id, subgroup)');
 }
 
 /**

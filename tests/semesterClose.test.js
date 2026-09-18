@@ -64,10 +64,10 @@ test('a closed semester stops changing — its hours and its schedule are final'
     });
     const pair = {
         group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0,
-        subject: 'Физика', lesson_type: 'Лекция', teacher: 'Иванов И.И.'
+        subject: 'Физика', lesson_type: 'Лекция', teacher: 'Иванов И.И.',
+        teacher_id: teacherId, discipline_id: disciplineId
     };
     const lesson = await ok('POST', '/api/admin/lessons', pair);
-    await ok('PUT', `/api/admin/lessons/${lesson.id}/load-plan`, { load_plan_id: plan.id });
 
     // Week 3: three Mondays have happened.
     at('2026-09-16T12:00:00');
@@ -83,7 +83,8 @@ test('a closed semester stops changing — its hours and its schedule are final'
     // without changing the total.
     await ok('POST', '/api/admin/schedule/materialize-week', {
         group_id: groupId, week_number: 2, action: 'upsert', day_of_week: 1,
-        time_start: '08:00', time_end: '09:30', subject: 'Физика', lesson_type: 'Лекция', teacher: 'Иванов И.И.'
+        time_start: '08:00', time_end: '09:30', subject: 'Физика', lesson_type: 'Лекция', teacher: 'Иванов И.И.',
+        teacher_id: teacherId, discipline_id: disciplineId
     });
     assert.deepEqual((await ok('GET', `/api/admin/semesters/${semester.id}/week-coverage`)).unconfirmed_weeks, [1]);
     assert.equal(await adminHours(plan.id), 6, 'entering a week as it ran changes nothing');
@@ -101,7 +102,7 @@ test('a closed semester stops changing — its hours and its schedule are final'
         ['POST', '/api/admin/lessons', { ...pair, day_of_week: 2 }],
         ['PUT', `/api/admin/lessons/${lesson.id}`, { room: '404' }],
         ['DELETE', `/api/admin/lessons/${lesson.id}`, undefined],
-        ['PUT', `/api/admin/lessons/${lesson.id}/load-plan`, { load_plan_id: null }],
+        ['PUT', `/api/admin/lessons/${lesson.id}`, { discipline_id: null }],
         ['POST', '/api/admin/load-plan', {
             semester_id: semester.id, teacher_id: teacherId, discipline_id: disciplineId,
             lesson_type: 'Практика', group_id: groupId, planned_hours: 10

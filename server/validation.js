@@ -243,6 +243,14 @@ function validateLessonUpdateBody(body) {
         payload.teacher = readOptionalString(body.teacher, 'Преподаватель');
     }
 
+    if (body.teacher_id !== undefined) {
+        payload.teacher_id = readOptionalId(body.teacher_id, 'teacher_id');
+    }
+
+    if (body.discipline_id !== undefined) {
+        payload.discipline_id = readOptionalId(body.discipline_id, 'discipline_id');
+    }
+
     if (body.sort_order !== undefined) {
         payload.sort_order = readInteger(body.sort_order, 'Порядок сортировки', { min: 0 });
     }
@@ -279,6 +287,8 @@ function validateMaterializeWeekBody(body) {
         result.room = readOptionalString(body.room, 'Кабинет');
         result.lesson_type = readOptionalString(body.lesson_type, 'Тип занятия');
         result.teacher = readOptionalString(body.teacher, 'Преподаватель');
+        result.teacher_id = readOptionalId(body.teacher_id, 'teacher_id');
+        result.discipline_id = readOptionalId(body.discipline_id, 'discipline_id');
     }
 
     return result;
@@ -357,6 +367,8 @@ function validateLessonCreateBody(body) {
         room: readOptionalString(body.room, 'Кабинет'),
         lesson_type: readOptionalString(body.lesson_type, 'Тип занятия'),
         teacher: readOptionalString(body.teacher, 'Преподаватель'),
+        teacher_id: readOptionalId(body.teacher_id, 'teacher_id'),
+        discipline_id: readOptionalId(body.discipline_id, 'discipline_id'),
         kind: readLessonKind(body.kind),
         sort_order: body.sort_order === undefined ? 0 : readInteger(body.sort_order, 'Порядок сортировки', { min: 0 }),
         // The template row this one is a new version of (an edit or a removal
@@ -577,6 +589,15 @@ function readOptionalPositiveInteger(value, label) {
     return readInteger(value, label, { min: 1, max: 2000 });
 }
 
+/** A dictionary id (teacher_id/discipline_id on a lesson) — absent or null means "not from the dictionary". */
+function readOptionalId(value, label) {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+
+    return readInteger(value, label, { min: 1 });
+}
+
 function validateLoadPlanUpdateBody(body) {
     assertPlainObject(body, 'Тело запроса должно быть объектом');
 
@@ -621,18 +642,6 @@ function validateLoadPlanUpdateBody(body) {
     return result;
 }
 
-function validateLessonLoadPlanLinkBody(body) {
-    assertPlainObject(body, 'Тело запроса должно быть объектом');
-
-    if (body.load_plan_id === null) {
-        return { load_plan_id: null };
-    }
-
-    return {
-        load_plan_id: readInteger(body.load_plan_id, 'load_plan_id', { min: 1 })
-    };
-}
-
 module.exports = {
     createValidationError,
     validateAccountUpdateBody,
@@ -641,7 +650,6 @@ module.exports = {
     validateGroupCreateBody,
     validateGroupUpdateBody,
     validateLessonCreateBody,
-    validateLessonLoadPlanLinkBody,
     validateLessonUpdateBody,
     validateLoadPlanCreateBody,
     validateLoadPlanUpdateBody,

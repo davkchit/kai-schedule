@@ -894,15 +894,23 @@ test('deleting a template pair mid-semester retires it forward instead of erasin
     const semesterId = context.semesterId;
     db.prepare('UPDATE semesters SET weeks_count = 6 WHERE id = ?').run(semesterId);
     const planId = db.prepare(`
-        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
-        VALUES (?, ?, ?, 'Лекция', ?, 40)
+        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, subgroup, planned_hours)
+        VALUES (?, ?, ?, 'Лекция', ?, 0, 40)
     `).run(semesterId, teacherId, disciplineId, context.primaryGroupId).lastInsertRowid;
 
     const lesson = db.prepare('SELECT * FROM lessons WHERE group_id = ? AND specific_week IS NULL LIMIT 1').get(context.primaryGroupId);
-    db.prepare('UPDATE lessons SET load_plan_id = ?, template_from_week = 1 WHERE id = ?').run(planId, lesson.id);
+    // No explicit link any more — a lesson counts toward the plan row the
+    // moment its own identity matches, so the fixture sets that identity
+    // directly on the lesson.
+    db.prepare(`
+        UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = 'Лекция', subgroup = 0, template_from_week = 1
+        WHERE id = ?
+    `).run(teacherId, disciplineId, lesson.id);
 
     const hoursNow = () => {
-        const response = db.prepare('SELECT * FROM lessons WHERE load_plan_id = ?').all(planId);
+        const response = db.prepare(`
+            SELECT * FROM lessons WHERE teacher_id = ? AND discipline_id = ? AND lesson_type = 'Лекция' AND group_id = ? AND subgroup = 0
+        `).all(teacherId, disciplineId, context.primaryGroupId);
         return computeLoadProgress({
             semesterStartDate: '2026-02-09',
             weeksCount: 6,
@@ -926,12 +934,14 @@ test('deleting a template pair mid-semester retires it forward instead of erasin
     assert.ok(db.prepare('SELECT id FROM lessons WHERE id = ?').get(lesson.id), 'the original row must survive');
     assert.equal(hoursNow(), before, 'hours already taught must not change when a pair is removed going forward');
 
-    // And the tombstone must carry the plan link, or the counter cannot see the slot stop.
+    // And the tombstone must carry the same identity, or the counter cannot see the slot stop.
     const tombstone = db.prepare(`
         SELECT * FROM lessons WHERE group_id = ? AND is_removed = 1 AND day_of_week = ? AND time_start = ?
     `).get(context.primaryGroupId, lesson.day_of_week, lesson.time_start);
     assert.ok(tombstone);
-    assert.equal(tombstone.load_plan_id, planId);
+    assert.equal(tombstone.teacher_id, teacherId);
+    assert.equal(tombstone.discipline_id, disciplineId);
+    assert.ok(planId, 'plan row exists for the assertions above');
 
     await context.close();
 });
@@ -957,38 +967,39 @@ test('a specific-week row marked removed stops counting hours, matching what the
     );
 });
 
-test('a lesson cannot be linked to a load_plan row belonging to a different group', async () => {
+test('the same teacher and discipline taught to a different group never feeds another group\'s plan row', async () => {
     const context = await createTestContext();
     const db = getDb();
 
     const otherGroupId = db.prepare('SELECT id FROM groups_ WHERE id != ? LIMIT 1').get(context.primaryGroupId)?.id
         ?? db.prepare("INSERT INTO groups_ (university_id, name) VALUES (1, 'Чужая')").run().lastInsertRowid;
 
-    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Чужой Ч.Ч.')").run().lastInsertRowid;
-    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Чужая дисциплина')").run().lastInsertRowid;
-    // The seeded working semester (start 2026-02-09) — the database allows
-    // only one active semester, so fixtures reuse it rather than adding one.
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Общий О.О.')").run().lastInsertRowid;
+    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Общая дисциплина')").run().lastInsertRowid;
     const semesterId = context.semesterId;
     db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(semesterId);
-    const foreignPlanId = db.prepare(`
-        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
-        VALUES (?, ?, ?, 'Лекция', ?, 10)
-    `).run(semesterId, teacherId, disciplineId, otherGroupId).lastInsertRowid;
 
+    // Same teacher, same discipline, same type — but one plan row per group,
+    // as the department actually enters streams (one row per group).
+    const planId = db.prepare(`
+        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, subgroup, planned_hours)
+        VALUES (?, ?, ?, 'Лекция', ?, 0, 10)
+    `).run(semesterId, teacherId, disciplineId, context.primaryGroupId).lastInsertRowid;
+
+    db.prepare(`
+        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, subgroup, planned_hours)
+        VALUES (?, ?, ?, 'Лекция', ?, 0, 10)
+    `).run(semesterId, teacherId, disciplineId, otherGroupId);
+
+    // A lesson for the OTHER group, with the exact same teacher/discipline/type.
     const lesson = db.prepare('SELECT id FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
+    db.prepare('UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = ?, subgroup = 0, group_id = ?, template_from_week = 1 WHERE id = ?')
+        .run(teacherId, disciplineId, 'Лекция', otherGroupId, lesson.id);
 
-    const response = await fetch(`${context.baseUrl}/api/admin/lessons/${lesson.id}/load-plan`, {
-        method: 'PUT',
-        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ load_plan_id: foreignPlanId })
-    });
+    const listResponse = await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semesterId}`, { headers: context.authHeaders });
+    const list = await listResponse.json();
 
-    assert.equal(response.status, 409);
-    assert.equal(
-        db.prepare('SELECT load_plan_id FROM lessons WHERE id = ?').get(lesson.id).load_plan_id,
-        null,
-        'the refused link must not have been written'
-    );
+    assert.equal(list.find((row) => row.id === planId).progress.occurred_hours, 0, 'a pair taught to a different group must not count here');
 
     await context.close();
 });
@@ -1047,7 +1058,7 @@ test('move in template mode: tombstones the old slot and creates the new one, wi
     await context.close();
 });
 
-test('move in template mode carries load_plan_id onto the tombstone, so the hour counter sees the old slot stop and the new one start', async () => {
+test('move in template mode carries teacher_id/discipline_id onto the tombstone, so the hour counter sees the old slot stop and the new one start', async () => {
     const context = await createTestContext();
     const db = getDb();
 
@@ -1055,16 +1066,15 @@ test('move in template mode carries load_plan_id onto the tombstone, so the hour
 
     const teacherId = db.prepare('INSERT INTO teachers (full_name) VALUES (?)').run('Тестов Т.Т.').lastInsertRowid;
     const disciplineId = db.prepare('INSERT INTO disciplines (name) VALUES (?)').run('Тестовая дисциплина').lastInsertRowid;
-    // The seeded working semester (start 2026-02-09) — the database allows
-    // only one active semester, so fixtures reuse it rather than adding one.
     const semesterId = context.semesterId;
     db.prepare('UPDATE semesters SET weeks_count = 18 WHERE id = ?').run(semesterId);
     const planId = db.prepare(`
-        INSERT INTO load_plan (teacher_id, discipline_id, lesson_type, group_id, semester_id, planned_hours)
-        VALUES (?, ?, 'Лекция', ?, ?, 36)
+        INSERT INTO load_plan (teacher_id, discipline_id, lesson_type, group_id, subgroup, semester_id, planned_hours)
+        VALUES (?, ?, 'Лекция', ?, 0, ?, 36)
     `).run(teacherId, disciplineId, context.primaryGroupId, semesterId).lastInsertRowid;
 
-    db.prepare('UPDATE lessons SET load_plan_id = ? WHERE id = ?').run(planId, original.id);
+    db.prepare('UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = ?, subgroup = 0 WHERE id = ?')
+        .run(teacherId, disciplineId, 'Лекция', original.id);
 
     const response = await fetch(`${context.baseUrl}/api/admin/schedule/move-lesson`, {
         method: 'POST',
@@ -1080,21 +1090,24 @@ test('move in template mode carries load_plan_id onto the tombstone, so the hour
 
     assert.equal(response.status, 200);
 
-    // A tombstone written with load_plan_id = NULL is invisible to the hour
-    // engine's `WHERE load_plan_id = ?` selection — the old slot would then
-    // count forever, even though the schedule no longer shows it there.
+    // A tombstone written with no identity is invisible to the hour engine's
+    // matching — the old slot would then count forever, even though the
+    // schedule no longer shows it there.
     const tombstone = db.prepare(`
         SELECT * FROM lessons
         WHERE group_id = ? AND is_removed = 1 AND day_of_week = ? AND time_start = ?
     `).get(context.primaryGroupId, original.day_of_week, original.time_start);
     assert.ok(tombstone, 'expected a tombstone at the old slot');
-    assert.equal(tombstone.load_plan_id, planId, 'tombstone must stay linked to the plan so the counter can see the slot stopped');
+    assert.equal(tombstone.teacher_id, teacherId, 'tombstone must keep the identity so the counter can see the slot stopped');
+    assert.equal(tombstone.discipline_id, disciplineId);
 
     const moved = db.prepare(`
         SELECT * FROM lessons
         WHERE group_id = ? AND day_of_week = 3 AND time_start = '13:10' AND is_removed = 0
     `).get(context.primaryGroupId);
-    assert.equal(moved.load_plan_id, planId, 'the moved row must keep the same plan link');
+    assert.equal(moved.teacher_id, teacherId, 'the moved row must keep the same identity');
+    assert.equal(moved.discipline_id, disciplineId);
+    assert.ok(planId, 'plan row exists for context');
 
     await context.close();
 });
@@ -1543,12 +1556,15 @@ test('the impact preview reports how many teachers a semester date/length change
     const semesterId = context.semesterId;
     db.prepare('UPDATE semesters SET weeks_count = 8 WHERE id = ?').run(semesterId);
     const planId = db.prepare(`
-        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, planned_hours)
-        VALUES (?, ?, ?, 'Лекция', ?, 40)
+        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, subgroup, planned_hours)
+        VALUES (?, ?, ?, 'Лекция', ?, 0, 40)
     `).run(semesterId, teacherId, disciplineId, context.primaryGroupId).lastInsertRowid;
 
     const lesson = db.prepare('SELECT id FROM lessons WHERE group_id = ? AND specific_week IS NULL LIMIT 1').get(context.primaryGroupId);
-    db.prepare('UPDATE lessons SET load_plan_id = ?, template_from_week = 1 WHERE id = ?').run(planId, lesson.id);
+    db.prepare(`
+        UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = 'Лекция', subgroup = 0, template_from_week = 1
+        WHERE id = ?
+    `).run(teacherId, disciplineId, lesson.id);
 
     const response = await fetch(
         `${context.baseUrl}/api/admin/semesters/${semesterId}/impact?weeks_count=4`,
@@ -1681,18 +1697,19 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     const plan = await planResponse.json();
 
     assert.equal(planResponse.status, 201);
-    // Not linked to any schedule lesson yet — zero hours so far.
+    // No lesson matches this identity yet — zero hours so far.
     assert.equal(plan.progress.occurred_hours, 0);
 
-    // Link the group's existing Monday template lesson (seeded by
-    // seedTestDatabase, week_type odd) to this plan row.
-    const lessonRow = db.prepare('SELECT id FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
-    const linkResponse = await fetch(`${context.baseUrl}/api/admin/lessons/${lessonRow.id}/load-plan`, {
-        method: 'PUT',
-        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ load_plan_id: plan.id })
-    });
-    assert.equal(linkResponse.status, 200);
+    // "Select this teacher/discipline from the dropdown" for the group's
+    // existing Monday template lesson (seeded by seedTestDatabase, week_type
+    // odd) — there is no separate link step any more, the lesson's own
+    // identity is what makes it count. Written directly (as the dropdown
+    // would leave it), rather than through the versioned POST .../lessons,
+    // which takes effect only from the real current week forward and would
+    // miss this semester's already-elapsed weeks 1 and 3.
+    const lessonRow = db.prepare('SELECT * FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
+    db.prepare('UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = ? WHERE id = ?')
+        .run(teacherId, disciplineId, 'Лаб', lessonRow.id);
 
     const listResponse = await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semester.id}`, {
         headers: context.authHeaders
@@ -1705,12 +1722,14 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     assert.equal(updatedPlan.progress.occurred_hours, 4);
     assert.equal(updatedPlan.progress.remaining_hours, 4);
 
-    // Unlinking brings it back to zero.
-    await fetch(`${context.baseUrl}/api/admin/lessons/${lessonRow.id}/load-plan`, {
-        method: 'PUT',
+    // Picking a different discipline for that same pair brings it back to
+    // zero — the old plan row simply stops matching.
+    const otherDisciplineId = (await (await fetch(`${context.baseUrl}/api/admin/disciplines`, {
+        method: 'POST',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ load_plan_id: null })
-    });
+        body: JSON.stringify({ name: 'Другая дисциплина' })
+    })).json()).id;
+    db.prepare('UPDATE lessons SET discipline_id = ? WHERE id = ?').run(otherDisciplineId, lessonRow.id);
     const afterUnlink = await (await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semester.id}`, {
         headers: context.authHeaders
     })).json();
@@ -1719,7 +1738,7 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     await context.close();
 });
 
-test('load plan full-row edit: fixing a wrongly entered teacher/discipline/type/group, and the guard against changing group while lessons are linked', async () => {
+test('load plan full-row edit: fixing a wrongly entered teacher/discipline/type/group, and moving a plan row between groups just re-targets who its hours match', async () => {
     const context = await createTestContext();
     const db = getDb();
 
@@ -1728,8 +1747,6 @@ test('load plan full-row edit: fixing a wrongly entered teacher/discipline/type/
     const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Тестовая дисциплина')").run().lastInsertRowid;
     const otherGroupId = db.prepare('SELECT id FROM groups_ WHERE id != ? LIMIT 1').get(context.primaryGroupId)?.id
         ?? db.prepare("INSERT INTO groups_ (university_id, name) VALUES (1, 'ДругаяГруппа')").run().lastInsertRowid;
-    // The seeded working semester (start 2026-02-09) — the database allows
-    // only one active semester, so fixtures reuse it rather than adding one.
     const semesterId = context.semesterId;
     db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(semesterId);
 
@@ -1752,31 +1769,28 @@ test('load plan full-row edit: fixing a wrongly entered teacher/discipline/type/
     assert.equal(edited.lesson_type, 'Практика');
     assert.equal(edited.planned_hours, 20);
 
-    // Link a lesson to this plan row, then try to move it to a different
-    // group — must be refused until the lesson is unlinked first.
+    // A pair matching this row's identity, in the original group.
     const lessonRow = db.prepare('SELECT id FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
-    db.prepare('UPDATE lessons SET load_plan_id = ? WHERE id = ?').run(planId, lessonRow.id);
+    db.prepare(`
+        UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = 'Практика', subgroup = 0, template_from_week = 1
+        WHERE id = ?
+    `).run(rightTeacherId, disciplineId, lessonRow.id);
+    const beforeMove = await (await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semesterId}`, { headers: context.authHeaders })).json();
+    assert.ok(beforeMove.find((row) => row.id === planId).progress.occurred_hours > 0, 'the pair must count before the move');
 
-    const blockedGroupChange = await fetch(`${context.baseUrl}/api/admin/load-plan/${planId}`, {
+    // There is no explicit link to detach any more — moving the plan row to
+    // a different group is just a write. It no longer matches the pair
+    // still sitting in the original group.
+    const groupChange = await fetch(`${context.baseUrl}/api/admin/load-plan/${planId}`, {
         method: 'PUT',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ group_id: otherGroupId })
     });
-    assert.equal(blockedGroupChange.status, 409);
+    assert.equal(groupChange.status, 200);
+    assert.equal((await groupChange.json()).group_id, otherGroupId);
 
-    // Still refers to the original group — the blocked write changed nothing.
-    const stillOriginalGroup = db.prepare('SELECT group_id FROM load_plan WHERE id = ?').get(planId);
-    assert.equal(stillOriginalGroup.group_id, context.primaryGroupId);
-
-    // Unlink, then the same group change succeeds.
-    db.prepare('UPDATE lessons SET load_plan_id = NULL WHERE id = ?').run(lessonRow.id);
-    const allowedGroupChange = await fetch(`${context.baseUrl}/api/admin/load-plan/${planId}`, {
-        method: 'PUT',
-        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ group_id: otherGroupId })
-    });
-    assert.equal(allowedGroupChange.status, 200);
-    assert.equal((await allowedGroupChange.json()).group_id, otherGroupId);
+    const afterMove = await (await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semesterId}`, { headers: context.authHeaders })).json();
+    assert.equal(afterMove.find((row) => row.id === planId).progress.occurred_hours, 0, 'the pair stayed in the old group and no longer matches');
 
     await context.close();
 });

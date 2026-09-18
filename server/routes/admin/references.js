@@ -134,6 +134,19 @@ router.delete('/teachers/:id', (req, res) => {
         });
     }
 
+    // Every schedule pair this teacher was ever chosen for, in any semester —
+    // not just the working one. Hours are matched live against teacher_id
+    // now, so deleting a teacher who still has schedule history would either
+    // fail at the database's own foreign key (if somehow reached) or, worse,
+    // silently null it out and erase what weeks actually happened.
+    const lessonCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE teacher_id = ?').get(teacherId).c;
+
+    if (lessonCount > 0) {
+        return res.status(409).json({
+            error: `Этот преподаватель стоит в расписании — пар (включая прошлые недели): ${lessonCount}. Такого преподавателя удалить нельзя, чтобы не потерять историю занятий; можно переименовать.`
+        });
+    }
+
     db.prepare('DELETE FROM teachers WHERE id = ?').run(teacherId);
 
     writeAuditLog(db, {
@@ -253,6 +266,16 @@ router.delete('/disciplines/:id', (req, res) => {
     if (planCount > 0) {
         return res.status(409).json({
             error: `Эта дисциплина используется в ${planCount} ${pluralizePlanRows(planCount)} плана нагрузки. Удалите или измените их, затем удаляйте дисциплину.`
+        });
+    }
+
+    // Same reasoning as deleting a teacher: schedule history references this
+    // discipline by id now, in every semester, not only the working one.
+    const lessonCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE discipline_id = ?').get(disciplineId).c;
+
+    if (lessonCount > 0) {
+        return res.status(409).json({
+            error: `Эта дисциплина стоит в расписании — пар (включая прошлые недели): ${lessonCount}. Удалить нельзя, чтобы не потерять историю занятий; можно переименовать.`
         });
     }
 

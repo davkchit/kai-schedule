@@ -12,6 +12,12 @@ const DAY_NAMES = {
 
 DAY_NAMES[7] = '\u0412\u0441';
 
+// Same vocabulary the load plan uses — the hour engine matches a pair to a
+// plan row by exact lesson_type text, so a form offering a value the plan
+// never uses (an old "Лаб. работа" instead of "Лаб") would quietly create
+// pairs nothing could ever count.
+const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
+
 const DEFAULT_EDIT_FORM = {
     id: '',
     group_id: '',
@@ -22,6 +28,8 @@ const DEFAULT_EDIT_FORM = {
     room: '',
     lesson_type: 'Лекция',
     teacher: '',
+    teacher_id: null,
+    discipline_id: null,
     subgroup: 0,
     week_type: 0,
     specific_week: ''
@@ -58,6 +66,7 @@ function getCourseFromGroupName(name) {
 
 export {
     DAY_NAMES,
+    LESSON_TYPES,
     DEFAULT_EDIT_FORM,
     BUILDER_TIME_SLOTS,
     BUILDER_DAYS,

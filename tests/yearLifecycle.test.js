@@ -118,16 +118,18 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     });
 
     // L1 every Monday; L2 on Wednesdays of нечётная weeks (= semester weeks 2, 4, …, since week 1 is чётная).
+    // teacher_id/discipline_id match the plan directly — hours are matched
+    // live by identity now, no separate linking step.
     const l1 = await ok('POST', '/api/admin/lessons', {
         group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0,
-        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Качеишвили Н.В.'
+        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Качеишвили Н.В.',
+        teacher_id: teacherId, discipline_id: disciplineId
     });
     const l2 = await ok('POST', '/api/admin/lessons', {
         group_id: groupId, day_of_week: 3, time_start: '09:40', time_end: '11:10', week_type: 1,
-        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Качеишвили Н.В.'
+        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Качеишвили Н.В.',
+        teacher_id: teacherId, discipline_id: disciplineId
     });
-    await ok('PUT', `/api/admin/lessons/${l1.id}/load-plan`, { load_plan_id: autumnPlan.id });
-    await ok('PUT', `/api/admin/lessons/${l2.id}/load-plan`, { load_plan_id: autumnPlan.id });
 
     // Mid-October (week 7): cancel week 9's Monday — the ONLY pair of that
     // week — and move L2 from Wednesday to Thursday from now on.
@@ -201,10 +203,21 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         semester_id: spring.id, teacher_id: teacherId, discipline_id: springDiscipline,
         lesson_type: 'Лекция', group_id: groupId, planned_hours: 36
     });
-    await ok('PUT', `/api/admin/lessons/${databases.id}/load-plan`, { load_plan_id: springPlan.id });
+    // "Select from the dropdown" for the uploaded pair — hours are matched
+    // live by identity, no separate linking step.
+    await ok('PUT', `/api/admin/lessons/${databases.id}`, { teacher_id: teacherId, discipline_id: springDiscipline });
 
-    const crossLink = await call('PUT', `/api/admin/lessons/${l2.id}/load-plan`, { load_plan_id: springPlan.id });
-    assert.equal(crossLink.status, 409, 'an autumn pair cannot feed a spring plan row');
+    // Semester scoping alone keeps an autumn pair from feeding a spring plan
+    // row, even with the exact same identity: the matching query is always
+    // scoped to one semester_id. A raw row planted directly in autumn (the
+    // constructor itself never offers a non-working semester to write into)
+    // must not move springPlan's total.
+    const beforePlant = await planHours(spring.id, springPlan.id);
+    db.prepare(`
+        INSERT INTO lessons (group_id, subgroup, day_of_week, week_type, time_start, time_end, subject, lesson_type, teacher_id, discipline_id, semester_id)
+        VALUES (?, 0, 5, 0, '13:10', '14:40', 'Базы данных', 'Лекция', ?, ?, ?)
+    `).run(groupId, teacherId, springDiscipline, autumn.id);
+    assert.equal(await planHours(spring.id, springPlan.id), beforePlant, 'an autumn pair, even of identical identity, cannot feed a spring plan row');
 
     // A four-week view across the rollover: autumn is over, spring starts on
     // its own week 1 with its own stored parity (week 1 нечётная, although the
