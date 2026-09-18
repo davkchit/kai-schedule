@@ -4,62 +4,12 @@ import usePageAssets from '../hooks/usePageAssets';
 import { formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeForSemesterWeek } from '../lib/date';
 import { resolveTemplateLessons } from '../lib/templateResolve';
 import AdminLoadSection from './AdminLoadSection';
-
-const DAY_NAMES = {
-    1: 'Пн',
-    2: 'Вт',
-    3: 'Ср',
-    4: 'Чт',
-    5: 'Пт',
-    6: 'Сб'
-};
-
-DAY_NAMES[7] = '\u0412\u0441';
-
-
-const DEFAULT_EDIT_FORM = {
-    id: '',
-    group_id: '',
-    day_of_week: 1,
-    time_start: '',
-    time_end: '',
-    subject: '',
-    room: '',
-    lesson_type: 'Лекция',
-    teacher: '',
-    subgroup: 0,
-    week_type: 0,
-    specific_week: ''
-};
-
-const BUILDER_TIME_SLOTS = [
-    ['08:00', '09:30'],
-    ['09:40', '11:10'],
-    ['11:30', '13:00'],
-    ['13:10', '14:40'],
-    ['15:00', '16:30'],
-    ['16:40', '18:10']
-];
-
-const BUILDER_DAYS = [1, 2, 3, 4, 5, 6, 7];
-
-function getMondayOfWeek(date) {
-    const normalized = new Date(date);
-    normalized.setHours(0, 0, 0, 0);
-    const dayOfWeek = normalized.getDay();
-    const offsetToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    normalized.setDate(normalized.getDate() + offsetToMonday);
-    return normalized;
-}
-
-function formatDayMonth(date) {
-    return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function getCourseFromGroupName(name) {
-    const match = String(name).match(/^\d{2}(\d)\d{2}$/);
-    return match ? Number(match[1]) : null;
-}
+import { BUILDER_DAYS, BUILDER_TIME_SLOTS, DAY_NAMES, DEFAULT_EDIT_FORM, formatDayMonth, getMondayOfWeek } from './adminDashboard/builderUtils';
+import DashboardSidebar from './adminDashboard/DashboardSidebar';
+import SettingsSection from './adminDashboard/SettingsSection';
+import BackupsSection from './adminDashboard/BackupsSection';
+import AuditSection from './adminDashboard/AuditSection';
+import LessonEditModal from './adminDashboard/LessonEditModal';
 
 export default function AdminDashboardPage() {
     const isAssetsReady = usePageAssets({
@@ -1096,89 +1046,15 @@ export default function AdminDashboardPage() {
 
     return (
         <div className="dashboard">
-            <aside className="sidebar">
-                <div className="sidebar-header">
-                    <img src="/assets/logo.png" alt="Логотип КАИ" width="108" height="45" />
-                    <span className="sidebar-title">КАИ Расписание</span>
-                </div>
-                <nav className="sidebar-nav">
-                    <button className={`nav-item ${activeSection === 'builder' ? 'active' : ''}`} data-section="builder" id="navBuilder" onClick={() => setActiveSection('builder')}>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                            <line x1="3" y1="9" x2="21" y2="9" />
-                            <line x1="3" y1="15" x2="21" y2="15" />
-                            <line x1="9" y1="9" x2="9" y2="21" />
-                            <line x1="15" y1="9" x2="15" y2="21" />
-                        </svg>
-                        Конструктор
-                    </button>
-                    <button className={`nav-item ${activeSection === 'settings' ? 'active' : ''}`} data-section="settings" id="navSettings" onClick={() => setActiveSection('settings')}>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <circle cx="12" cy="12" r="3" />
-                            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-                        </svg>
-                        Настройки
-                    </button>
-                    <button
-                        className={`nav-item ${activeSection === 'load' ? 'active' : ''}`}
-                        data-section="load"
-                        id="navLoad"
-                        onClick={() => setActiveSection('load')}
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M12 20V10" />
-                            <path d="M18 20V4" />
-                            <path d="M6 20v-4" />
-                        </svg>
-                        Нагрузка
-                    </button>
-                    <button
-                        className={`nav-item ${activeSection === 'backup' ? 'active' : ''}`}
-                        data-section="backup"
-                        id="navBackup"
-                        onClick={() => {
-                            setActiveSection('backup');
-
-                            if (backups.length === 0) {
-                                loadBackups();
-                            }
-                        }}
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M21 8v13H3V8" />
-                            <path d="M1 3h22v5H1z" />
-                            <path d="M10 12h4" />
-                        </svg>
-                        Резервные копии
-                    </button>
-                    <button
-                        className={`nav-item ${activeSection === 'audit' ? 'active' : ''}`}
-                        data-section="audit"
-                        id="navAudit"
-                        onClick={() => {
-                            setActiveSection('audit');
-
-                            if (auditLogs.length === 0) {
-                                loadAuditLogs();
-                            }
-                        }}
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M12 8v4l3 3" />
-                            <circle cx="12" cy="12" r="9" />
-                        </svg>
-                        Журнал
-                    </button>
-                </nav>
-                <button className="nav-item logout-btn" id="logoutBtn" onClick={logout}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-                        <polyline points="16 17 21 12 16 7" />
-                        <line x1="21" y1="12" x2="9" y2="12" />
-                    </svg>
-                    Выйти
-                </button>
-            </aside>
+            <DashboardSidebar
+                activeSection={activeSection}
+                auditLogs={auditLogs}
+                backups={backups}
+                loadAuditLogs={loadAuditLogs}
+                loadBackups={loadBackups}
+                logout={logout}
+                setActiveSection={setActiveSection}
+            />
 
             <main className="main-content">
                 <section className={`content-section ${activeSection === 'builder' ? 'active' : ''}`} id="sectionBuilder">
@@ -1352,502 +1228,68 @@ export default function AdminDashboardPage() {
                     )}
                 </section>
 
-                <section className={`content-section ${activeSection === 'settings' ? 'active' : ''}`} id="sectionSettings">
-                    <h2 className="section-title">Настройки</h2>
-                    <div className="settings-form">
-                        <div className="setting-row">
-                            <label htmlFor="semesterStart">Дата начала семестра</label>
-                            <p className="setting-hint">Используется для расчёта чётной/нечётной недели</p>
-                            <input
-                                type="date"
-                                id="semesterStart"
-                                className="setting-input"
-                                value={semesterStartDate}
-                                onChange={(event) => setSemesterStartDate(event.target.value)}
-                            />
-                        </div>
-                        <div className="setting-row">
-                            <label htmlFor="termParity">Текущий семестр (осенний/весенний)</label>
-                            <p className="setting-hint">Вместе с курсом группы определяет номер семестра в шапке экспорта (I/III/V/VII — осенний, II/IV/VI/VIII — весенний)</p>
-                            <select
-                                id="termParity"
-                                className="setting-input"
-                                value={termParity}
-                                onChange={(event) => setTermParity(event.target.value)}
-                            >
-                                <option value="spring">Весенний</option>
-                                <option value="fall">Осенний</option>
-                            </select>
-                        </div>
-                        <div className="setting-row">
-                            <label htmlFor="academicYear">Учебный год</label>
-                            <p className="setting-hint">Используется в шапке при экспорте в Excel, например «2025/2026»</p>
-                            <input
-                                type="text"
-                                id="academicYear"
-                                className="setting-input"
-                                placeholder="2025/2026"
-                                value={academicYear}
-                                onChange={(event) => setAcademicYear(event.target.value)}
-                            />
-                        </div>
-                        <div className="setting-row">
-                            <label htmlFor="studyForm">Форма обучения</label>
-                            <input
-                                type="text"
-                                id="studyForm"
-                                className="setting-input"
-                                placeholder="очная форма обучения"
-                                value={studyForm}
-                                onChange={(event) => setStudyForm(event.target.value)}
-                            />
-                        </div>
-                        <div className="setting-row">
-                            <label htmlFor="directorTitle">Должность подписанта</label>
-                            <input
-                                type="text"
-                                id="directorTitle"
-                                className="setting-input"
-                                placeholder="Директор филиала"
-                                value={directorTitle}
-                                onChange={(event) => setDirectorTitle(event.target.value)}
-                            />
-                        </div>
-                        <div className="setting-row">
-                            <label htmlFor="directorName">ФИО подписанта</label>
-                            <p className="setting-hint">Появляется в шапке экспортированного расписания рядом со строкой подписи</p>
-                            <input
-                                type="text"
-                                id="directorName"
-                                className="setting-input"
-                                placeholder="А.Ф. Мустафин"
-                                value={directorName}
-                                onChange={(event) => setDirectorName(event.target.value)}
-                            />
-                        </div>
-                        <button className="btn btn-primary" id="saveSettingsBtn" onClick={saveSettings}>
-                            Сохранить настройки
-                        </button>
-                        <span className={`upload-status ${settingsStatus.type}`} id="settingsStatus">
-                            {settingsStatus.message}
-                        </span>
-                    </div>
+                <SettingsSection
+                    academicYear={academicYear}
+                    activeSection={activeSection}
+                    directorName={directorName}
+                    directorTitle={directorTitle}
+                    groupDirectionDrafts={groupDirectionDrafts}
+                    groups={groups}
+                    handleCreateGroup={handleCreateGroup}
+                    handleSaveGroupDirection={handleSaveGroupDirection}
+                    isCreatingGroup={isCreatingGroup}
+                    newGroupDirection={newGroupDirection}
+                    newGroupName={newGroupName}
+                    newGroupUniversityId={newGroupUniversityId}
+                    saveSettings={saveSettings}
+                    semesterStartDate={semesterStartDate}
+                    setAcademicYear={setAcademicYear}
+                    setDirectorName={setDirectorName}
+                    setDirectorTitle={setDirectorTitle}
+                    setGroupDirectionDrafts={setGroupDirectionDrafts}
+                    setNewGroupDirection={setNewGroupDirection}
+                    setNewGroupName={setNewGroupName}
+                    setNewGroupUniversityId={setNewGroupUniversityId}
+                    setSemesterStartDate={setSemesterStartDate}
+                    setStudyForm={setStudyForm}
+                    setTermParity={setTermParity}
+                    settingsStatus={settingsStatus}
+                    studyForm={studyForm}
+                    termParity={termParity}
+                    universities={universities}
+                />
 
-                    <h3 className="subsection-title">Группы и направления</h3>
-                    <p className="section-desc">Курс определяется автоматически по номеру группы (23<strong>1</strong>01 — 1 курс). Направление появляется в шапке при экспорте расписания.</p>
+                <BackupsSection
+                    activeSection={activeSection}
+                    backups={backups}
+                    createBackup={createBackup}
+                    isBackupsLoading={isBackupsLoading}
+                    isCreatingBackup={isCreatingBackup}
+                    loadBackups={loadBackups}
+                    restoreBackup={restoreBackup}
+                    restoreFromFile={restoreFromFile}
+                />
 
-                    <div className="add-group-row">
-                        <select
-                            className="form-input"
-                            value={newGroupUniversityId}
-                            onChange={(event) => setNewGroupUniversityId(event.target.value)}
-                        >
-                            <option value="">Вуз</option>
-                            {universities.map((university) => (
-                                <option key={university.id} value={university.id}>{university.short_name}</option>
-                            ))}
-                        </select>
-                        <input
-                            type="text"
-                            className="form-input"
-                            placeholder="Номер группы, например 23101"
-                            value={newGroupName}
-                            onChange={(event) => setNewGroupName(event.target.value)}
-                        />
-                        <input
-                            type="text"
-                            className="form-input"
-                            placeholder="Направление (необязательно)"
-                            value={newGroupDirection}
-                            onChange={(event) => setNewGroupDirection(event.target.value)}
-                        />
-                        <button type="button" className="btn btn-primary" onClick={handleCreateGroup} disabled={isCreatingGroup}>
-                            {isCreatingGroup ? 'Добавление...' : 'Добавить группу'}
-                        </button>
-                    </div>
-
-                    <div className="lessons-table-wrapper">
-                        <table className="lessons-table">
-                            <thead>
-                                <tr>
-                                    <th>Университет</th>
-                                    <th>Группа</th>
-                                    <th>Курс</th>
-                                    <th>Направление</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {groups.map((group) => {
-                                    const course = getCourseFromGroupName(group.name);
-                                    const draft = groupDirectionDrafts[group.id] ?? group.direction ?? '';
-
-                                    return (
-                                        <tr key={group.id}>
-                                            <td>{group.university}</td>
-                                            <td><strong>{group.name}</strong></td>
-                                            <td>{course ?? '—'}</td>
-                                            <td>
-                                                <input
-                                                    type="text"
-                                                    className="form-input"
-                                                    placeholder="09.03.01 Информатика и вычислительная техника"
-                                                    value={draft}
-                                                    onChange={(event) => setGroupDirectionDrafts((previous) => ({
-                                                        ...previous,
-                                                        [group.id]: event.target.value
-                                                    }))}
-                                                />
-                                            </td>
-                                            <td>
-                                                <button className="btn-edit" onClick={() => handleSaveGroupDirection(group.id)}>
-                                                    Сохранить
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                        {groups.length === 0 && (
-                            <p className="empty-message">Групп пока нет</p>
-                        )}
-                    </div>
-                </section>
-
-                <section className={`content-section ${activeSection === 'backup' ? 'active' : ''}`} id="sectionBackup">
-                    <div className="audit-header">
-                        <div>
-                            <h2 className="section-title">Резервные копии</h2>
-                            <p className="section-desc">
-                                Копия создаётся автоматически раз в день и при каждом обновлении сервера. Скачивайте копию
-                                себе время от времени: если пропадёт сам сервер, базу можно вернуть из файла.
-                            </p>
-                        </div>
-                        <div className="section-actions">
-                            <button className="btn btn-secondary" onClick={loadBackups}>
-                                Обновить список
-                            </button>
-                            <label className="btn btn-secondary">
-                                Восстановить из файла
-                                <input type="file" accept=".db" hidden onChange={restoreFromFile} />
-                            </label>
-                            <button className="btn btn-primary" onClick={createBackup} disabled={isCreatingBackup}>
-                                {isCreatingBackup ? 'Создание...' : 'Создать backup'}
-                            </button>
-                        </div>
-                    </div>
-                    <div className="lessons-table-wrapper audit-table-wrapper">
-                        <table className="lessons-table audit-table">
-                            <thead>
-                                <tr>
-                                    <th>Файл</th>
-                                    <th>Создан</th>
-                                    <th>Размер</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {backups.map((backup) => (
-                                    <tr key={backup.file_name}>
-                                        <td><strong>{backup.file_name}</strong></td>
-                                        <td>{formatAuditTimestamp(backup.created_at)}</td>
-                                        <td>{formatBytes(backup.size_bytes)}</td>
-                                        <td>
-                                            <a className="btn-link" href={`/api/admin/backups/${encodeURIComponent(backup.file_name)}/download`}>
-                                                Скачать
-                                            </a>
-                                            {' · '}
-                                            <button type="button" className="btn-link" onClick={() => restoreBackup(backup.file_name)}>
-                                                Восстановить
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        <p className="empty-message" style={{ display: backups.length === 0 ? '' : 'none' }}>
-                            {isBackupsLoading ? 'Загрузка резервных копий...' : 'Резервных копий пока нет'}
-                        </p>
-                    </div>
-                </section>
-
-                <section className={`content-section ${activeSection === 'audit' ? 'active' : ''}`} id="sectionAudit">
-                    <div className="audit-header">
-                        <div>
-                            <h2 className="section-title">Журнал действий</h2>
-                            <p className="section-desc">История изменений расписания и важных действий администратора.</p>
-                        </div>
-                        <div className="section-actions">
-                            <a className="btn btn-secondary" href="/api/admin/audit-logs/export?limit=1000">
-                                Экспорт CSV
-                            </a>
-                            <button className="btn btn-secondary" onClick={loadAuditLogs}>
-                                Обновить журнал
-                            </button>
-                        </div>
-                    </div>
-                    <div className="lessons-table-wrapper audit-table-wrapper">
-                        <table className="lessons-table audit-table">
-                            <thead>
-                                <tr>
-                                    <th>Время</th>
-                                    <th>Админ</th>
-                                    <th>Действие</th>
-                                    <th>Сущность</th>
-                                    <th>IP</th>
-                                    <th>Детали</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {auditLogs.map((log) => (
-                                    <tr key={log.id}>
-                                        <td>{formatAuditTimestamp(log.created_at)}</td>
-                                        <td>{log.admin_username || '—'}</td>
-                                        <td><strong>{formatAuditAction(log.action)}</strong></td>
-                                        <td>{formatAuditEntity(log)}</td>
-                                        <td>{log.ip_address || '—'}</td>
-                                        <td className="audit-details-cell">{formatAuditDetails(log)}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        <p className="empty-message" style={{ display: auditLogs.length === 0 ? '' : 'none' }}>
-                            {isAuditLogsLoading ? 'Загрузка журнала...' : 'Журнал пока пуст'}
-                        </p>
-                    </div>
-                </section>
+                <AuditSection
+                    activeSection={activeSection}
+                    auditLogs={auditLogs}
+                    isAuditLogsLoading={isAuditLogsLoading}
+                    loadAuditLogs={loadAuditLogs}
+                />
             </main>
 
-            <div
-                className={`modal-overlay ${isEditModalOpen ? 'active' : ''}`}
-                id="editModal"
-                aria-hidden={!isEditModalOpen}
-                onClick={(event) => {
-                    if (event.target.id === 'editModal') {
-                        setIsEditModalOpen(false);
-                    }
-                }}
-            >
-                <div className="modal-card">
-                    <h3 className="modal-title">
-                        {editMode === 'create'
-                            ? (editContext === 'template' ? 'Добавить в шаблон' : 'Добавить занятие')
-                            : 'Редактировать занятие'}
-                    </h3>
-                    {editContext === 'template' && (
-                        <p className="modal-hint">Сохранится как новая версия с текущей недели — прошлые недели не изменятся.</p>
-                    )}
-                    <form id="editForm" className="edit-form" onSubmit={handleEditSubmit}>
-                        <input type="hidden" id="editId" value={editForm.id} readOnly />
-                        <div className="form-row">
-                            <label>День недели</label>
-                            <select
-                                id="editDay"
-                                className="form-input"
-                                value={editForm.day_of_week}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, day_of_week: event.target.value }))}
-                            >
-                                <option value="1">Понедельник</option>
-                                <option value="2">Вторник</option>
-                                <option value="3">Среда</option>
-                                <option value="4">Четверг</option>
-                                <option value="5">Пятница</option>
-                                <option value="6">Суббота</option>
-                                <option value="7">{'\u0412\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u044c\u0435'}</option>
-                            </select>
-                        </div>
-                        <div className="form-row-pair">
-                            <div className="form-row">
-                                <label>Начало</label>
-                                <input
-                                    type="time"
-                                    id="editTimeStart"
-                                    className="form-input"
-                                    value={editForm.time_start}
-                                    onChange={(event) => setEditForm((previous) => ({ ...previous, time_start: event.target.value }))}
-                                />
-                            </div>
-                            <div className="form-row">
-                                <label>Конец</label>
-                                <input
-                                    type="time"
-                                    id="editTimeEnd"
-                                    className="form-input"
-                                    value={editForm.time_end}
-                                    onChange={(event) => setEditForm((previous) => ({ ...previous, time_end: event.target.value }))}
-                                />
-                            </div>
-                        </div>
-                        <div className="form-row">
-                            <label>Предмет</label>
-                            <input
-                                type="text"
-                                id="editSubject"
-                                className="form-input"
-                                required
-                                value={editForm.subject}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, subject: event.target.value }))}
-                            />
-                        </div>
-                        <div className="form-row">
-                            <label>Кабинет</label>
-                            <input
-                                type="text"
-                                id="editRoom"
-                                className="form-input"
-                                value={editForm.room}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, room: event.target.value }))}
-                            />
-                        </div>
-                        <div className="form-row">
-                            <label>Преподаватель</label>
-                            <input
-                                type="text"
-                                id="editTeacher"
-                                className="form-input"
-                                placeholder="Например: Герасимов Н.П."
-                                value={editForm.teacher}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, teacher: event.target.value }))}
-                            />
-                        </div>
-                        <div className="form-row-pair">
-                            <div className="form-row">
-                                <label>Тип</label>
-                                <select
-                                    id="editType"
-                                    className="form-input"
-                                    value={editForm.lesson_type}
-                                    onChange={(event) => setEditForm((previous) => ({ ...previous, lesson_type: event.target.value }))}
-                                >
-                                    <option value="Лекция">Лекция</option>
-                                    <option value="Практика">Практика</option>
-                                    <option value="Лаб. работа">Лаб. работа</option>
-                                </select>
-                            </div>
-                            <div className="form-row">
-                                <label>Подгруппа</label>
-                                <select
-                                    id="editSubgroup"
-                                    className="form-input"
-                                    value={editForm.subgroup}
-                                    onChange={(event) => setEditForm((previous) => ({ ...previous, subgroup: event.target.value }))}
-                                >
-                                    <option value="0">Обе</option>
-                                    <option value="1">1-я</option>
-                                    <option value="2">2-я</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div className="modal-actions">
-                            {editMode === 'edit' && (
-                                <button type="button" className="btn btn-delete" onClick={handleDeleteFromModal}>
-                                    {editContext === 'template' ? 'Убрать из шаблона' : 'Удалить'}
-                                </button>
-                            )}
-                            <button type="button" className="btn btn-secondary" id="cancelEditBtn" onClick={() => setIsEditModalOpen(false)}>
-                                Отмена
-                            </button>
-                            <button type="submit" className="btn btn-primary">
-                                {editMode === 'create'
-                                    ? 'Добавить'
-                                    : (editContext === 'template' ? 'Сохранить как новую версию' : 'Сохранить')}
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
+            <LessonEditModal
+                editContext={editContext}
+                editForm={editForm}
+                editMode={editMode}
+                handleDeleteFromModal={handleDeleteFromModal}
+                handleEditSubmit={handleEditSubmit}
+                isEditModalOpen={isEditModalOpen}
+                setEditForm={setEditForm}
+                setIsEditModalOpen={setIsEditModalOpen}
+            />
 
             <div className={`toast ${isToastVisible ? 'active' : ''}`} aria-hidden={!isToastVisible}>{toastMessage}</div>
         </div>
     );
-}
-
-function formatAuditTimestamp(value) {
-    if (!value) {
-        return '—';
-    }
-
-    const parsed = new Date(value.replace(' ', 'T'));
-
-    if (Number.isNaN(parsed.getTime())) {
-        return value;
-    }
-
-    return parsed.toLocaleString('ru-RU', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
-}
-
-function formatAuditAction(action) {
-    const labels = {
-        'login.success': 'Успешный вход',
-        'schedule.upload': 'Загрузка расписания',
-        'schedule.materialize_week': 'Первая правка недели (скопирован шаблон)',
-        'schedule.clear_week': 'Очистка недели (возврат к шаблону)',
-        'group.create': 'Добавление группы',
-        'group.update': 'Изменение направления группы',
-        'lesson.create': 'Добавление занятия',
-        'lesson.update': 'Редактирование занятия',
-        'lesson.delete': 'Удаление занятия',
-        'settings.update': 'Изменение настройки',
-        'backup.create': 'Создание backup',
-        'backup.restore': 'Восстановление базы из копии'
-    };
-
-    return labels[action] || action;
-}
-
-function formatAuditEntity(log) {
-    if (!log.entity_type) {
-        return '—';
-    }
-
-    return log.entity_id ? `${log.entity_type} #${log.entity_id}` : log.entity_type;
-}
-
-function formatAuditDetails(log) {
-    const details = log.details;
-
-    if (!details) {
-        return '—';
-    }
-
-    if (log.action === 'schedule.upload') {
-        return `${details.group || 'Группа'} · ${details.lesson_count || 0} занятий · ${details.target_week}`;
-    }
-
-    if (log.action === 'settings.update') {
-        return `semester_start_date = ${details.semester_start_date}`;
-    }
-
-    if (log.action === 'lesson.delete') {
-        return `${details.subject || '—'} · ${details.time_start || '—'}—${details.time_end || '—'}`;
-    }
-
-    if (log.action === 'lesson.update') {
-        return `${details.after?.subject || details.before?.subject || '—'} · ${details.after?.time_start || details.before?.time_start || '—'}—${details.after?.time_end || details.before?.time_end || '—'}`;
-    }
-
-    if (log.action === 'backup.create') {
-        return `${details.file_name || 'backup'} · ${formatBytes(details.size_bytes || 0)}`;
-    }
-
-    return JSON.stringify(details);
-}
-
-function formatBytes(bytes) {
-    if (!Number.isFinite(bytes) || bytes < 1024) {
-        return `${bytes || 0} Б`;
-    }
-
-    if (bytes < 1024 * 1024) {
-        return `${(bytes / 1024).toFixed(1)} КБ`;
-    }
-
-    return `${(bytes / (1024 * 1024)).toFixed(2)} МБ`;
 }
