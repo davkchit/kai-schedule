@@ -27,6 +27,12 @@ if (require.main === module) {
         console.log(`Admin:     http://localhost:${PORT}/admin`);
         console.log(`Dashboard: http://localhost:${PORT}/admin/dashboard`);
         console.log(`Frontend source: ${hasFrontendBuild ? 'dist build' : 'not built yet'}`);
+
+        // Every start is worth knowing about: after a deploy it confirms the
+        // new version is up (and that alerts actually arrive), and at 3 a.m.
+        // it is the only trace that the platform restarted a crashed process.
+        const deployment = process.env.RAILWAY_DEPLOYMENT_ID;
+        notify(`Сервер запущен${deployment ? ` (деплой ${deployment.slice(0, 8)})` : ''}`, { key: 'startup' });
     });
 }
 

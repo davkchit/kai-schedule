@@ -4,3 +4,7 @@ dist/
 data/*.db-shm
 data/*.db-wal
 
+
+# Database copies — never commit or upload them
+backups/
+data/backups/
