@@ -159,7 +159,17 @@ test('admin lessons endpoint returns 404 for unknown groups', async () => {
 
 test('admin lesson updates accept sunday as day_of_week', async () => {
     const context = await createTestContext();
-    const lesson = getDb().prepare('SELECT id FROM lessons WHERE group_id = ? ORDER BY id LIMIT 1').get(context.primaryGroupId);
+    // PUT /lessons/:id is for a week's OWN row — a template row (specific_week
+    // IS NULL) must go through the versioned POST instead, so this fixture
+    // needs its own specific-week row rather than reusing the seeded template.
+    const inserted = getDb().prepare(`
+        INSERT INTO lessons (
+            group_id, subgroup, day_of_week, week_type, specific_week,
+            time_start, time_end, subject, room, lesson_type, teacher, sort_order, semester_id
+        )
+        VALUES (?, 0, 2, 0, 3, '11:20', '12:50', 'Физика', '210 каб.', 'Лекция', 'Петров П.П.', 1, ?)
+    `).run(context.primaryGroupId, context.semesterId);
+    const lesson = { id: inserted.lastInsertRowid };
 
     const response = await fetch(`${context.baseUrl}/api/admin/lessons/${lesson.id}`, {
         method: 'PUT',
@@ -175,6 +185,26 @@ test('admin lesson updates accept sunday as day_of_week', async () => {
 
     assert.equal(response.status, 200);
     assert.equal(body.day_of_week, 7);
+
+    await context.close();
+});
+
+test('PUT /lessons/:id refuses to edit a live template row in place, only its own week', async () => {
+    const context = await createTestContext();
+    // The seeded fixture lesson is a template row (specific_week IS NULL) —
+    // editing it via PUT would rewrite it in place, changing what every week
+    // (past ones included) shows, since resolveTemplateLessons never sees a
+    // new version. That has to go through POST /lessons + replaces_lesson_id.
+    const templateLesson = getDb().prepare('SELECT id FROM lessons WHERE group_id = ? AND specific_week IS NULL LIMIT 1').get(context.primaryGroupId);
+
+    const blocked = await fetch(`${context.baseUrl}/api/admin/lessons/${templateLesson.id}`, {
+        method: 'PUT',
+        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: '999' })
+    });
+    assert.equal(blocked.status, 409);
+    assert.match((await blocked.json()).error, /шаблон/i);
+    assert.equal(getDb().prepare('SELECT room FROM lessons WHERE id = ?').get(templateLesson.id).room, '305 каб.', 'the refused PUT must not have written anything');
 
     await context.close();
 });

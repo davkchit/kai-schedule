@@ -204,8 +204,16 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         lesson_type: 'Лекция', group_id: groupId, planned_hours: 36
     });
     // "Select from the dropdown" for the uploaded pair — hours are matched
-    // live by identity, no separate linking step.
-    await ok('PUT', `/api/admin/lessons/${databases.id}`, { teacher_id: teacherId, discipline_id: springDiscipline });
+    // live by identity, no separate linking step. It's a template row, so
+    // (like the real constructor) this goes through the versioned POST, not
+    // an in-place PUT — PUT on a template row is refused (see server.test.js).
+    await ok('POST', '/api/admin/lessons', {
+        group_id: groupId, subgroup: databases.subgroup, day_of_week: databases.day_of_week,
+        week_type: databases.week_type, time_start: databases.time_start, time_end: databases.time_end,
+        subject: databases.subject, room: databases.room, lesson_type: databases.lesson_type,
+        teacher_id: teacherId, discipline_id: springDiscipline,
+        replaces_lesson_id: databases.id
+    });
 
     // Semester scoping alone keeps an autumn pair from feeding a spring plan
     // row, even with the exact same identity: the matching query is always

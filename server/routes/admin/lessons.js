@@ -296,16 +296,26 @@ router.put('/lessons/:id', (req, res) => {
         return res.status(404).json({ error: 'Занятие не найдено' });
     }
 
+    if (findClosedSemester(db, lesson.semester_id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
+    // This endpoint is for a week's own row (specific_week set) — an in-place
+    // UPDATE on a live template row (specific_week IS NULL) would rewrite what
+    // every week shows, past ones included, since resolveTemplateLessons picks
+    // by template_from_week and this endpoint never advances it. Editing a
+    // template pair has to go through POST /lessons with replaces_lesson_id,
+    // which forks a new version "from now forward" instead of mutating in place.
+    if (lesson.specific_week === null) {
+        return res.status(409).json({ error: 'Это пара из шаблона — редактируйте через версию (POST /lessons с replaces_lesson_id), не напрямую' });
+    }
+
     let updates;
 
     try {
         updates = validateLessonUpdateBody(req.body);
     } catch (error) {
         return res.status(error.statusCode || 400).json({ error: error.message });
-    }
-
-    if (findClosedSemester(db, lesson.semester_id)) {
-        return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
     let identity;
