@@ -62,7 +62,7 @@ In production, Express serves the Vite-built `dist/` and handles all `/api` rout
 | `db.js` | SQLite singleton, schema, table definitions |
 | `config.js` | Environment variable loading |
 | `routes/api.js` | Public schedule endpoints |
-| `routes/admin.js` | Protected admin CRUD (requires JWT cookie + CSRF token) |
+| `routes/admin.js` | Login/logout/session, then auth + CSRF middleware; mounts `routes/admin/*.js` (one file per area, shared helpers in `admin/shared.js`) |
 | `middleware/auth.js` | JWT cookie verification |
 | `middleware/csrf.js` | CSRF token generation and validation |
 | `utils/date.js` | Week number calculation relative to `semester_start_date` |
