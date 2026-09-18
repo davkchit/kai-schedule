@@ -864,8 +864,21 @@ export default function AdminDashboardPage() {
 
             setIsEditModalOpen(false);
             setEditForm(DEFAULT_EDIT_FORM);
-            setToastMessage(ownWeeks.length > 0
-                ? `Шаблон изменён. Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них изменение не появится, поправьте их на вкладке недели`
+
+            // Subject or teacher changed on a slot that was linked to a plan
+            // row — that link was just dropped (a substitute or a one-off
+            // consultation is not the original teacher's hours) rather than
+            // silently kept, so say so: otherwise this pair simply stops
+            // counting toward anyone's plan and nothing explains why.
+            const messages = [];
+            if (saved.link_dropped) {
+                messages.push('Предмет или преподаватель изменились, поэтому привязка к плану снята — часы за эту пару не считаются, пока её не привяжут заново.');
+            }
+            if (ownWeeks.length > 0) {
+                messages.push(`Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них это изменение не появится, поправьте их на вкладке недели.`);
+            }
+            setToastMessage(messages.length > 0
+                ? messages.join(' ')
                 : (editMode === 'create' ? 'Занятие добавлено' : 'Занятие обновлено'));
             loadLessons(selectedGroupId);
         } catch (error) {

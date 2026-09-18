@@ -165,6 +165,22 @@ router.post('/lessons', (req, res) => {
     `);
     const slotKey = (row) => [row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type].join('|');
 
+    // A version "inherits" the row it replaces only while it is plausibly the
+    // same teaching assignment — subject and teacher unchanged, everything
+    // else (room, time, day, type) is fair game as a correction. The moment
+    // either identity changes — a substitute covering the class, a
+    // consultation standing in for the lecture — carrying the old link
+    // forward would count those hours toward the ORIGINAL teacher's ORIGINAL
+    // discipline while students see something else, with nothing anywhere
+    // saying so. So the link resets instead, same as any freshly created
+    // pair, and the specialist re-links it deliberately if it should count.
+    let linkDropped = false;
+    const inheritedLoadPlanId = (source) => {
+        const sameAssignment = source.subject === payload.subject && source.teacher === payload.teacher;
+        if (!sameAssignment && source.load_plan_id) linkDropped = true;
+        return sameAssignment ? source.load_plan_id : null;
+    };
+
     const createdId = db.transaction(() => {
         if (replaced && !payload.is_removed && replaced.template_from_week >= templateFromWeek && !replaced.is_removed) {
             // Not live in any earlier week yet: nothing in the past depends on
@@ -172,11 +188,12 @@ router.post('/lessons', (req, res) => {
             db.prepare(`
                 UPDATE lessons SET
                     subgroup = ?, day_of_week = ?, week_type = ?, time_start = ?, time_end = ?,
-                    subject = ?, room = ?, lesson_type = ?, teacher = ?, kind = ?, updated_at = CURRENT_TIMESTAMP
+                    subject = ?, room = ?, lesson_type = ?, teacher = ?, kind = ?, load_plan_id = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             `).run(
                 payload.subgroup, payload.day_of_week, payload.week_type, payload.time_start, payload.time_end,
-                payload.subject, payload.room, payload.lesson_type, payload.teacher, payload.kind, replaced.id
+                payload.subject, payload.room, payload.lesson_type, payload.teacher, payload.kind,
+                inheritedLoadPlanId(replaced), replaced.id
             );
             return replaced.id;
         }
@@ -221,7 +238,7 @@ router.post('/lessons', (req, res) => {
             payload.teacher,
             payload.sort_order,
             replaced ? replaced.kind : payload.kind,
-            replaced ? replaced.load_plan_id : null,
+            replaced ? inheritedLoadPlanId(replaced) : null,
             semester.id
         ).lastInsertRowid;
     })();
@@ -255,7 +272,7 @@ router.post('/lessons', (req, res) => {
         }
     });
 
-    res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead });
+    res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead, link_dropped: linkDropped });
 });
 
 router.put('/lessons/:id', (req, res) => {

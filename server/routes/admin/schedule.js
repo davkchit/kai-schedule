@@ -693,12 +693,30 @@ router.post('/schedule/materialize-week', (req, res) => {
 
     const finalLessons = [];
     let touchedHandled = false;
+    let linkDropped = false;
 
     for (const lesson of resolved) {
         if (slotKey(lesson) === touchedKey) {
             touchedHandled = true;
 
             if (payload.action === 'upsert') {
+                // Editing a slot in place (room, time-of-day details, a typo in
+                // the teacher's name) keeps whatever the template row was linked
+                // to — otherwise the first week edit would silently detach the
+                // lesson from its load plan and drop its hours.
+                //
+                // But when the subject or teacher actually changes — a substitute
+                // covering the class, a consultation standing in for the lecture,
+                // an exam replacing it for one week — this is no longer the same
+                // teaching assignment. Carrying the old link forward would count
+                // that week's hours toward the ORIGINAL teacher's ORIGINAL
+                // discipline while students see something else entirely, with no
+                // sign anything is wrong. Reset it instead: the week counts
+                // nothing until someone deliberately links it, same as any other
+                // freshly created pair.
+                const sameAssignment = lesson.subject === payload.subject && lesson.teacher === payload.teacher;
+                if (!sameAssignment && lesson.load_plan_id) linkDropped = true;
+
                 finalLessons.push({
                     day_of_week: payload.day_of_week,
                     time_start: payload.time_start,
@@ -708,11 +726,8 @@ router.post('/schedule/materialize-week', (req, res) => {
                     room: payload.room,
                     lesson_type: payload.lesson_type,
                     teacher: payload.teacher,
-                    // Editing a slot in place keeps whatever the template row was
-                    // linked to — otherwise the first week edit would silently
-                    // detach the lesson from its load plan and drop its hours.
                     kind: lesson.kind,
-                    load_plan_id: lesson.load_plan_id
+                    load_plan_id: sameAssignment ? lesson.load_plan_id : null
                 });
             } else {
                 // action === 'remove': kept as a removed marker, never just left
@@ -814,7 +829,7 @@ router.post('/schedule/materialize-week', (req, res) => {
             details: { group_id: payload.group_id, week_number: payload.week_number, lesson_count: count }
         });
 
-        res.status(201).json({ success: true, count });
+        res.status(201).json({ success: true, count, link_dropped: linkDropped });
     } catch (error) {
         console.error('Materialize week error:', error);
         res.status(500).json({ error: 'Не удалось сохранить неделю' });

@@ -1277,19 +1277,7 @@ const PlanRow = memo(function PlanRow({
                         {linkGroupLessons.length === 0 ? (
                             <span className="empty-message">У этой группы нет пар в шаблоне расписания.</span>
                         ) : (
-                            <div className="load-link-options">
-                                {linkGroupLessons.map((lesson) => (
-                                    <button
-                                        type="button"
-                                        key={lesson.id}
-                                        className={`load-link-option ${lesson.load_plan_id === row.id ? 'selected' : ''}`}
-                                        onClick={() => onToggleLessonLink(row.id, lesson)}
-                                    >
-                                        {DAY_NAMES[lesson.day_of_week] || lesson.day_of_week}, {lesson.time_start}–{lesson.time_end} · {lesson.subject}
-                                        {lesson.load_plan_id === row.id ? ' ✓' : ''}
-                                    </button>
-                                ))}
-                            </div>
+                            <LinkPicker planRow={row} lessons={linkGroupLessons} onToggle={onToggleLessonLink} />
                         )}
                     </td>
                 </tr>
@@ -1297,6 +1285,73 @@ const PlanRow = memo(function PlanRow({
         </Fragment>
     );
 });
+
+/**
+ * Why a plan row (teacher + discipline + group) links to a specific day/time,
+ * not just "this discipline": one row can be taught in more than one weekly
+ * slot (a lecture Monday AND Wednesday, or a lecture plus a separate lab), so
+ * the system has to know exactly which calendar slots to watch — hours are
+ * counted per occurrence of a linked slot, not per discipline name.
+ *
+ * The picker used to list every pair of the group in one flat list — fine for
+ * a group with a handful of subjects, unusable for one with twenty. This
+ * pulls pairs whose subject matches the row's discipline (plus anything
+ * already linked here) to the top, so the two or three real candidates are
+ * the first thing the specialist sees instead of the last.
+ */
+function LinkPicker({ planRow, lessons, onToggle }) {
+    const disciplineKey = normalizeForMatch(planRow.discipline_name);
+
+    const { matches, others } = useMemo(() => {
+        const isMatch = (lesson) => lesson.load_plan_id === planRow.id || subjectsLikelyMatch(lesson.subject, disciplineKey);
+        return {
+            matches: lessons.filter(isMatch),
+            others: lessons.filter((lesson) => !isMatch(lesson))
+        };
+    }, [lessons, planRow.id, disciplineKey]);
+
+    const renderOption = (lesson) => (
+        <button
+            type="button"
+            key={lesson.id}
+            className={`load-link-option ${lesson.load_plan_id === planRow.id ? 'selected' : ''}`}
+            onClick={() => onToggle(planRow.id, lesson)}
+        >
+            {DAY_NAMES[lesson.day_of_week] || lesson.day_of_week}, {lesson.time_start}–{lesson.time_end} · {lesson.subject}
+            {lesson.load_plan_id === planRow.id ? ' ✓' : ''}
+        </button>
+    );
+
+    return (
+        <div className="load-link-picker">
+            {matches.length > 0 && (
+                <div className="load-link-options">{matches.map(renderOption)}</div>
+            )}
+            {matches.length === 0 && (
+                <p className="load-link-hint">
+                    Ни одна пара в расписании группы не называется похоже на «{planRow.discipline_name}» — возможно,
+                    в расписании она записана под другим названием. Ищите нужную пару ниже, среди всех пар группы.
+                </p>
+            )}
+            {others.length > 0 && (
+                <details className="load-link-others">
+                    <summary>Остальные пары группы ({others.length})</summary>
+                    <div className="load-link-options">{others.map(renderOption)}</div>
+                </details>
+            )}
+        </div>
+    );
+}
+
+function normalizeForMatch(text) {
+    return String(text || '').toLowerCase().replace(/ё/g, 'е').trim();
+}
+
+function subjectsLikelyMatch(subject, disciplineKey) {
+    if (!disciplineKey) return false;
+    const subjectKey = normalizeForMatch(subject);
+    return subjectKey === disciplineKey || subjectKey.includes(disciplineKey) || disciplineKey.includes(subjectKey);
+}
 
 /**
  * Turns "18 недель" into the dates it actually means, shown right next to the
