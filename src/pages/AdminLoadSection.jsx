@@ -45,7 +45,15 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     // to check a number must not switch what everyone else is working in.
     const activeSemester = semesters.find((semester) => semester.is_active) || null;
     const [viewedSemesterId, setViewedSemesterId] = useState(null);
-    const viewedSemester = semesters.find((semester) => semester.id === viewedSemesterId) || activeSemester;
+    // Falling back to the first semester matters when none is the working one
+    // — right after the very first one is created. Without it the select shows
+    // that semester (the browser picks the first option) while the page holds
+    // none, and re-picking the option fires no change event: the plan stays
+    // behind "выберите семестр" with no way forward.
+    const viewedSemester = semesters.find((semester) => semester.id === viewedSemesterId)
+        || activeSemester
+        || semesters[0]
+        || null;
 
     useEffect(() => {
         loadAll();
@@ -377,6 +385,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             }
 
             setSemesters((previous) => [data, ...previous]);
+            setViewedSemesterId(data.id);
             setNewSemester({ label: '', start_date: '', weeks_count: 18, first_week_parity: '' });
             setToastMessage(activeSemester
                 ? `Семестр создан. Рабочим остаётся «${activeSemester.label}» — переключите, когда начнёте вносить новое расписание`
