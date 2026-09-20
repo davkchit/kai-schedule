@@ -27,6 +27,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
 
     // Past weeks nobody entered: their hours came from the template.
     const [unconfirmedWeeks, setUnconfirmedWeeks] = useState([]);
+    // Pairs the schedule shows that no plan row claims — their hours are lost silently.
+    const [unmatchedPairs, setUnmatchedPairs] = useState([]);
     const [isEditingSemester, setIsEditingSemester] = useState(false);
     const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18, first_week_parity: 1 });
 
@@ -91,6 +93,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
 
             const coverage = await (await api(`/api/admin/semesters/${semesterId}/week-coverage`)).json();
             setUnconfirmedWeeks(Array.isArray(coverage.unconfirmed_weeks) ? coverage.unconfirmed_weeks : []);
+
+            const unmatched = await (await api(`/api/admin/load-plan/unmatched?semester_id=${semesterId}`)).json();
+            setUnmatchedPairs(Array.isArray(unmatched.items) ? unmatched.items : []);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Не удалось загрузить план нагрузки');
@@ -887,6 +892,28 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                         </p>
                     )}
 
+                    {unmatchedPairs.length > 0 && (
+                        <div className="load-unmatched-note">
+                            <p className="load-unmatched-title">
+                                Часы по этим парам не идут никому — {unmatchedPairs.length} {pluralizeKinds(unmatchedPairs.length)}:
+                            </p>
+                            <ul className="load-unmatched-list">
+                                {unmatchedPairs.map((item) => (
+                                    <li key={`${item.group_id}|${item.subject}|${item.teacher}|${item.lesson_type}|${item.subgroup}|${item.reason}`}>
+                                        <b>{item.group_name}</b> · {item.subject || 'без предмета'} · {item.teacher || 'без преподавателя'}
+                                        {item.lesson_type ? ` · ${item.lesson_type}` : ''}
+                                        {item.subgroup > 0 ? `, ${item.subgroup}-я подгруппа` : ''}
+                                        {' — '}
+                                        {item.reason === 'no_plan_row'
+                                            ? 'в плане нет строки с таким преподавателем, предметом, типом и группой'
+                                            : 'предмет или преподаватель вписаны вручную, а не выбраны из списка'}
+                                        {` (${item.lessons_count} ${pluralizePairs(item.lessons_count)} в расписании)`}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
                     {viewedSemester.closed && (
                         <p className="empty-message">
                             Семестр закрыт {viewedSemester.closed_at}: часы зафиксированы, изменения выключены.
@@ -1226,6 +1253,22 @@ function resolveNewSemesterParity(form) {
 
     const [year, month, day] = form.start_date.split('-').map(Number);
     return getWeekTypeNumber(new Date(year, month - 1, day));
+}
+
+function pluralizeKinds(count) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'случай';
+    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'случая';
+    return 'случаев';
+}
+
+function pluralizePairs(count) {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'пара';
+    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'пары';
+    return 'пар';
 }
 
 function pluralizeRecords(count) {

@@ -20,6 +20,15 @@ const CALENDAR_HEADERS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'
 const BRAND_LOGO_SRC = '/assets/logo.png';
 const REST_DAY_GIF_SRC = '/assets/party-confetti.gif';
 
+// Display only: the stored lesson_type 'Лаб' must stay as is, it's part of how a pair matches its load-plan row.
+const LESSON_TYPE_LABELS = { 'Лаб': 'Лаб.' };
+
+// A bare number is a room; named places like "с/з" or "КАМАЗ" are shown as they are.
+function formatRoom(room) {
+    const trimmed = room.trim();
+    return /^\d+[а-яa-z]?$/i.test(trimmed) ? `${trimmed} каб.` : trimmed;
+}
+
 export default function SchedulePage() {
     const isAssetsReady = usePageAssets({
         title: 'Расписание занятий',
@@ -364,10 +373,10 @@ export default function SchedulePage() {
             ? <span className={mobile ? 'mobile-tag-subgroup' : 'tag-subgroup'}>{lesson.subgroup} подгр.</span>
             : null;
         const roomTag = lesson.room
-            ? <span className={mobile ? 'mobile-tag-room' : 'tag-room'}>{lesson.room}</span>
+            ? <span className={mobile ? 'mobile-tag-room' : 'tag-room'}>{formatRoom(lesson.room)}</span>
             : null;
         const typeTag = lesson.lesson_type
-            ? <span className={mobile ? 'mobile-tag-type' : 'tag-type'}>{lesson.lesson_type}</span>
+            ? <span className={mobile ? 'mobile-tag-type' : 'tag-type'}>{LESSON_TYPE_LABELS[lesson.lesson_type] || lesson.lesson_type}</span>
             : null;
 
         if (mobile) {
@@ -400,13 +409,24 @@ export default function SchedulePage() {
     function renderRestDayState(mobile = false) {
         return (
             <div className={`rest-day ${mobile ? 'mobile' : ''}`}>
-                <span className="rest-day-title">Отдыхаем</span>
-                <img
-                    className="rest-day-confetti"
-                    src={REST_DAY_GIF_SRC}
-                    alt=""
-                    aria-hidden="true"
-                />
+                <svg className="rest-day-sparkle rest-day-sparkle-left" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 2L14.2 9.8L22 12L14.2 14.2L12 22L9.8 14.2L2 12L9.8 9.8L12 2Z" />
+                </svg>
+                <svg className="rest-day-sparkle rest-day-sparkle-right" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 2L14.2 9.8L22 12L14.2 14.2L12 22L9.8 14.2L2 12L9.8 9.8L12 2Z" />
+                </svg>
+                <span className="rest-day-icon">
+                    <img
+                        className="rest-day-confetti"
+                        src={REST_DAY_GIF_SRC}
+                        alt=""
+                        aria-hidden="true"
+                    />
+                </span>
+                <span className="rest-day-text">
+                    <span className="rest-day-title">Отдыхаем</span>
+                    <span className="rest-day-subtitle">Занятий нет</span>
+                </span>
             </div>
         );
     }

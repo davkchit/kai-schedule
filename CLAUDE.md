@@ -107,6 +107,8 @@ Hours are never stored — they're computed live from whichever schedule rows cu
 
 `lessons.teacher_id`/`discipline_id` are nullable FKs into those dictionaries. `lessons.subject`/`teacher` (text) are kept for display, exports, `kind='event'` rows, and untracked one-offs — but whenever an id is supplied, the server always derives the text from the dictionary and ignores client-sent text alongside it (`resolveTeacherDiscipline` in `routes/admin/shared.js`), so text and id can never drift apart. A pair typed free-text with no dictionary match is shown to students like any other pair but doesn't count toward anyone's hours — expected, not a bug: a one-off substitute costs two extra clicks to add to the dictionary if it should count.
 
+Matching is exact, so one wrong field (type, subgroup) or a teacher typed by hand instead of picked is enough for a pair to stop counting — silently. `GET /api/admin/load-plan/unmatched` (`routes/admin/loadPlan.js`) names those pairs and the load page lists them; it considers only what the schedule currently shows, skipping retired template versions, removed rows and events.
+
 Because matching is live, editing a past week's identity (e.g., swapping the teacher) immediately moves hours between teachers with no extra step — the old teacher's count drops, the new one's rises, next time either is computed. Deleting a teacher or discipline is refused while **any** lesson (any semester, not just `load_plan` rows) still references it — checked in `routes/admin/references.js`. Renaming in the dictionary doesn't touch history, since lessons reference the row by id, not text.
 
 ### Bulk Schedule Upload

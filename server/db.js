@@ -321,6 +321,55 @@ function initTables() {
     migrateSemesterScoping();
     migrateSemesterClosing();
     migrateLessonsTeacherDiscipline();
+    clearRoomsHoldingTheWholeCell();
+}
+
+// Real rooms for the joint lectures below, read from the source sheets (the
+// first "Ауд." column after the merged cell): [group, day_of_week, time_start, subject, room].
+const IMPORTED_JOINT_LECTURE_ROOMS = [
+    ['23103', 1, '08:00', 'Информатика и основы информационных технологий', '105'],
+    ['23203', 1, '15:00', 'Проектная деятельность', '103'],
+    ['23203', 2, '13:10', 'Математическая логика и теория алгоритмов', '104'],
+    ['23203', 2, '15:00', 'Программирование и основы алгоритмизации', '104'],
+    ['23203', 2, '16:40', 'Программирование и основы алгоритмизации', '104'],
+    ['23203', 4, '11:30', 'Теория вероятностей и математическая статистика', '104'],
+    ['23203', 4, '13:10', 'Физика', '104'],
+    ['23203', 4, '15:00', 'Проектная деятельность', '103'],
+    ['23203', 5, '13:10', 'Личностное развитие', '104'],
+    ['23203', 5, '13:10', 'Культурология и социология', '105'],
+    ['23203', 5, '15:00', 'Личностное развитие', '104'],
+    ['23203', 5, '15:00', 'Культурология и социология', '105'],
+    ['23403', 3, '13:10', 'Моделирование информационных систем', '104'],
+    ['23403', 3, '15:00', 'Защита информации', '104'],
+    ['23403', 3, '16:40', 'Защита информации', '104'],
+    ['23403', 5, '13:10', 'Проектная деятельность', '103'],
+    ['23403', 5, '15:00', 'Проектная деятельность', '103']
+];
+
+/**
+ * The one-time Excel import read a joint lecture's room from the first
+ * "Ауд." column after its cell — but that cell was merged across two groups
+ * and covered the column, so room got the cell text itself ("Физика (лек.)
+ * Акст Е.Р."). The real room sits after the merge; this puts it back, and
+ * clears any such room with no known replacement. Matches only a room that
+ * starts with the row's own subject followed by " (", which no real room
+ * does — so once fixed a row is never touched again, even if later edited.
+ */
+function clearRoomsHoldingTheWholeCell() {
+    const isWholeCell = `room IS NOT NULL AND subject IS NOT NULL AND TRIM(subject) != ''
+          AND substr(room, 1, length(subject) + 2) = subject || ' ('`;
+    const restore = db.prepare(`
+        UPDATE lessons SET room = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE group_id IN (SELECT id FROM groups_ WHERE name = ?)
+          AND day_of_week = ? AND time_start = ? AND subject = ? AND ${isWholeCell}
+    `);
+
+    db.transaction(() => {
+        for (const [group, day, timeStart, subject, room] of IMPORTED_JOINT_LECTURE_ROOMS) {
+            restore.run(room, group, day, timeStart, subject);
+        }
+        db.exec(`UPDATE lessons SET room = NULL, updated_at = CURRENT_TIMESTAMP WHERE ${isWholeCell}`);
+    })();
 }
 
 /**

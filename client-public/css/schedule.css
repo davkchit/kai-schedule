@@ -157,7 +157,7 @@ body {
 .day-badge { background-color: var(--primary-blue); color: white; font-size: 12px; padding: 4px 12px; border-radius: 12px; display: table; width: fit-content; margin-bottom: 8px; }
 .day-badge.hidden { visibility: hidden; }
 .day-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; letter-spacing: -0.01em; }
-.day-time { font-size: 13px; color: var(--text-secondary); }
+.day-time { font-size: 13px; line-height: 16px; min-height: 16px; color: var(--text-secondary); }
 
 .class-card { background-color: var(--card-bg); border-radius: 16px; padding: 16px; border: 1px solid transparent; transition: all 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .class-card:hover { border-color: var(--tag-bg); box-shadow: 0 4px 12px rgba(59,130,246,0.1); }
@@ -185,9 +185,16 @@ body {
 .close-cookie { background: none; border: none; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; transition: color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 0.1s ease-out; }
 .close-cookie:hover { color: var(--text-main); }
 
-.rest-day { text-align: left; padding: 8px 0 0; background-color: transparent; border-radius: 0; color: var(--primary-blue); display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 12px; height: auto; min-height: 0; width: 100%; }
-.rest-day-title { font-weight: 600; font-size: 18px; line-height: 1.2; letter-spacing: -0.01em; }
-.rest-day-confetti { width: 136px; max-width: 100%; height: auto; display: block; }
+/* min-height matches a lesson card (time + subject + tags), so a rest day lines up with its neighbours */
+.rest-day { position: relative; overflow: hidden; text-align: left; padding: 16px 20px; background-color: var(--card-bg); border-radius: 16px; border: 1px solid transparent; color: var(--primary-blue); display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 16px; height: auto; min-height: 113px; width: 100%; }
+.rest-day-sparkle { position: absolute; color: var(--primary-blue); opacity: 0.3; pointer-events: none; }
+.rest-day-sparkle-left { top: 12px; left: 14px; }
+.rest-day-sparkle-right { top: 14px; right: 16px; }
+.rest-day-icon { display: flex; align-items: center; justify-content: center; width: 60px; height: 60px; flex-shrink: 0; }
+.rest-day-text { display: flex; flex-direction: column; gap: 4px; }
+.rest-day-title { font-weight: 600; font-size: 16px; line-height: 1.3; letter-spacing: -0.005em; }
+.rest-day-subtitle { font-size: 14px; font-weight: 400; color: var(--text-secondary); }
+.rest-day-confetti { width: 60px; height: 60px; max-width: 60px; object-fit: contain; display: block; }
 .schedule-stale { margin: 0 0 10px; padding: 8px 14px; border-radius: 10px; background: rgba(245, 158, 11, 0.12); color: #92400e; font-size: 14px; }
 [data-theme="dark"] .schedule-stale { background: rgba(245, 158, 11, 0.16); color: #fcd34d; }
 .schedule-loading { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--text-secondary); font-size: 16px; gap: 12px; }
@@ -223,9 +230,15 @@ body {
     .tag-room, .tag-type { background-color: var(--tag-bg); color: var(--tag-text); font-size: 12px; padding: 6px 10px; border-radius: 6px; }
     .support-widget { bottom: 70px; right: 20px; padding: 10px 16px; }
     .support-text { display: none; }
-    .rest-day.mobile, .day-column .rest-day { background-color: transparent; padding: 16px 0 4px; min-height: auto; height: auto; justify-content: center; align-items: center; text-align: center; color: var(--primary-blue); margin-top: 0; gap: 10px; }
-    .rest-day.mobile .rest-day-title, .day-column .rest-day .rest-day-title { font-size: 22px; letter-spacing: -0.015em; }
-    .rest-day.mobile .rest-day-confetti, .day-column .rest-day .rest-day-confetti { width: 168px; }
+    .rest-day.mobile, .day-column .rest-day { background-color: #F0F7FF; padding: 20px; min-height: auto; height: auto; flex-direction: row; justify-content: flex-start; align-items: center; text-align: left; color: var(--primary-blue); margin-top: 0; gap: 14px; }
+    /* Each rest-day card takes the look of the lesson cards around it: white in the day view, tinted in the list view. */
+    .rest-day.mobile { background-color: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    [data-theme="dark"] .rest-day.mobile { background-color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+    [data-theme="dark"] .day-column .rest-day { background-color: #334155; }
+    .rest-day.mobile .rest-day-title, .day-column .rest-day .rest-day-title { font-size: 17px; font-weight: 700; letter-spacing: -0.005em; }
+    .rest-day.mobile .rest-day-subtitle, .day-column .rest-day .rest-day-subtitle { font-size: 14px; }
+    .rest-day.mobile .rest-day-icon, .day-column .rest-day .rest-day-icon { width: 60px; height: 60px; }
+    .rest-day.mobile .rest-day-confetti, .day-column .rest-day .rest-day-confetti { width: 60px; height: 60px; max-width: 60px; }
 
     /* Date picker becomes a bottom sheet on mobile, with a dimming scrim behind it */
     .dp-scrim {

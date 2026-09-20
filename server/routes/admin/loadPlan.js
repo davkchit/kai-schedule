@@ -8,6 +8,9 @@ const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { buildLoadWorkbook } = require('../../exportLoad');
 const { computePlanRowProgress } = require('../../utils/planProgress');
+const { formatLocalDate, getSemesterWeekMeta } = require('../../utils/date');
+const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
+const { resolveTemplateLessons } = require('../../utils/templateResolve');
 const { validateLoadPlanCreateBody, validateLoadPlanUpdateBody } = require('../../validation');
 const { SEMESTER_CLOSED, findClosedSemester, getClientAddress } = require('./shared');
 
@@ -56,6 +59,116 @@ router.get('/load-plan', (req, res) => {
     // be reflected on the very next read, not after some cache expires.
     const exceptionWeeksCache = new Map();
     res.json(rows.map((row) => attachLoadProgress(db, row, exceptionWeeksCache)));
+});
+
+const identityKey = (row) => [row.teacher_id, row.discipline_id, row.lesson_type, row.group_id, row.subgroup].join('|');
+
+/**
+ * Pairs whose hours go nowhere. Matching is exact on all five identity
+ * fields, so one wrong type or subgroup — or a teacher typed by hand instead
+ * of picked from the dictionary — is enough for a pair to stop counting, and
+ * nothing else in the app would say a word about it: the plan row just sits
+ * at fewer hours than it should. This is the one place that names them.
+ *
+ * Only what the schedule actually shows counts as a problem: retired template
+ * versions and removed pairs are nobody's hours. Events never count by design.
+ */
+router.get('/load-plan/unmatched', (req, res) => {
+    const db = getDb();
+    const raw = req.query.semester_id;
+    let semester;
+
+    if (raw === undefined || raw === '') {
+        semester = getActiveSemester(db);
+    } else {
+        const semesterId = Number.parseInt(raw, 10);
+
+        if (!Number.isInteger(semesterId) || semesterId <= 0) {
+            return res.status(400).json({ error: 'Некорректный semester_id' });
+        }
+
+        semester = getSemesterById(db, semesterId);
+
+        if (!semester) {
+            return res.status(404).json({ error: 'Семестр не найден' });
+        }
+    }
+
+    if (!semester) {
+        return res.json({ semester_id: null, current_week: null, items: [] });
+    }
+
+    const currentWeek = Math.max(getSemesterWeekMeta(semester, formatLocalDate()).weekNumber, 1);
+    const lessons = db.prepare(`
+        SELECT l.*, g.name AS group_name
+        FROM lessons l
+        JOIN groups_ g ON g.id = l.group_id
+        WHERE l.semester_id = ? AND l.is_removed = 0 AND l.kind = 'lesson'
+    `).all(semester.id);
+
+    const templatesByGroup = new Map();
+    const shown = [];
+
+    for (const lesson of lessons) {
+        if (lesson.specific_week === null) {
+            const candidates = templatesByGroup.get(lesson.group_id) || [];
+            candidates.push(lesson);
+            templatesByGroup.set(lesson.group_id, candidates);
+        } else {
+            shown.push(lesson);
+        }
+    }
+
+    for (const candidates of templatesByGroup.values()) {
+        shown.push(...resolveTemplateLessons(candidates, currentWeek));
+    }
+
+    const planned = new Set(db.prepare(`
+        SELECT teacher_id, discipline_id, lesson_type, group_id, subgroup FROM load_plan WHERE semester_id = ?
+    `).all(semester.id).map(identityKey));
+
+    const byIdentity = new Map();
+
+    for (const lesson of shown) {
+        const untracked = !lesson.teacher_id || !lesson.discipline_id || !lesson.lesson_type;
+
+        if (!untracked && planned.has(identityKey(lesson))) {
+            continue;
+        }
+
+        const key = untracked
+            ? `text|${lesson.group_id}|${lesson.subject}|${lesson.teacher}|${lesson.lesson_type}|${lesson.subgroup}`
+            : identityKey(lesson);
+        const entry = byIdentity.get(key);
+
+        if (entry) {
+            entry.lessons_count += 1;
+            continue;
+        }
+
+        byIdentity.set(key, {
+            group_id: lesson.group_id,
+            group_name: lesson.group_name,
+            subject: lesson.subject,
+            teacher: lesson.teacher,
+            lesson_type: lesson.lesson_type,
+            subgroup: lesson.subgroup,
+            // "Picked from the dictionary but no plan row" and "typed by hand"
+            // are different mistakes: the first needs a plan row, the second
+            // needs the pair re-picked from the list.
+            reason: untracked ? 'not_in_dictionary' : 'no_plan_row',
+            day_of_week: lesson.day_of_week,
+            time_start: lesson.time_start,
+            lessons_count: 1
+        });
+    }
+
+    const items = [...byIdentity.values()].sort((a, b) =>
+        a.group_name.localeCompare(b.group_name, 'ru')
+        || (a.subject || '').localeCompare(b.subject || '', 'ru')
+        || (a.lesson_type || '').localeCompare(b.lesson_type || '', 'ru'));
+
+    res.json({ semester_id: semester.id, current_week: currentWeek, items });
 });
 
 // Excel report: summary + per-discipline breakdown + per-date ledger. Can be

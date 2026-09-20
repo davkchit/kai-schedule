@@ -1391,6 +1391,110 @@ test('teachers and disciplines: rename fixes a typo, delete is blocked while a l
     await context.close();
 });
 
+test('unmatched pairs: the schedule shows them, no plan row claims their hours', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+    db.exec('DELETE FROM lessons');
+
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Несовпадов Н.Н.')").run().lastInsertRowid;
+    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Дисциплина без плана')").run().lastInsertRowid;
+    db.prepare(`
+        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, subgroup, planned_hours)
+        VALUES (?, ?, ?, 'Лекция', ?, 0, 40)
+    `).run(context.semesterId, teacherId, disciplineId, context.primaryGroupId);
+
+    const insert = db.prepare(`
+        INSERT INTO lessons (
+            group_id, semester_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
+            time_start, time_end, subject, lesson_type, teacher, teacher_id, discipline_id, kind
+        )
+        VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const lesson = (overrides) => {
+        const row = {
+            subgroup: 0, day_of_week: 1, specific_week: null, template_from_week: 1, is_removed: 0,
+            time_start: '08:00', time_end: '09:30', subject: 'Дисциплина без плана', lesson_type: 'Лекция',
+            teacher: 'Несовпадов Н.Н.', teacher_id: teacherId, discipline_id: disciplineId, kind: 'lesson',
+            ...overrides
+        };
+        return insert.run(
+            context.primaryGroupId, context.semesterId, row.subgroup, row.day_of_week, row.specific_week,
+            row.template_from_week, row.is_removed, row.time_start, row.time_end, row.subject,
+            row.lesson_type, row.teacher, row.teacher_id, row.discipline_id, row.kind
+        ).lastInsertRowid;
+    };
+
+    lesson({ day_of_week: 1 });                                            // matches the plan row
+    lesson({ day_of_week: 2, lesson_type: 'Практика' });                   // one field off: hours go nowhere
+    lesson({ day_of_week: 3, teacher_id: null, discipline_id: null, teacher: 'Гость Г.Г.', subject: 'Разовая пара' });
+    lesson({ day_of_week: 4, kind: 'event', subject: 'Линейка', lesson_type: null, teacher_id: null, discipline_id: null });
+    lesson({ day_of_week: 5, lesson_type: 'Зачёт', specific_week: 3, is_removed: 1 }); // a week's own removal marker: nobody's hours
+    // An old template version, replaced later by one that does match: the
+    // retired row is not a problem, only what the schedule shows now is.
+    lesson({ day_of_week: 6, lesson_type: 'Консультация', template_from_week: 1 });
+    lesson({ day_of_week: 6, template_from_week: 2 });
+
+    const response = await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+
+    const listed = body.items.map((item) => `${item.reason}:${item.subject}:${item.lesson_type}`).sort();
+    assert.deepEqual(listed, [
+        'no_plan_row:Дисциплина без плана:Практика',
+        'not_in_dictionary:Разовая пара:Лекция'
+    ]);
+    assert.equal(body.items.find((item) => item.reason === 'no_plan_row').lessons_count, 1);
+    assert.equal(body.items.find((item) => item.reason === 'no_plan_row').group_name, '23113');
+
+    // Give the stray pair a plan row of its own and it stops being listed.
+    db.prepare(`
+        INSERT INTO load_plan (semester_id, teacher_id, discipline_id, lesson_type, group_id, subgroup, planned_hours)
+        VALUES (?, ?, ?, 'Практика', ?, 0, 20)
+    `).run(context.semesterId, teacherId, disciplineId, context.primaryGroupId);
+
+    const after = await (await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders })).json();
+    assert.deepEqual(after.items.map((item) => item.reason), ['not_in_dictionary']);
+
+    await context.close();
+});
+
+test('a room holding the whole imported cell gets its real room back from the source sheet, or is cleared; real rooms are kept', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-rooms-'));
+    process.env.DB_PATH = path.join(tempDir, 'schedule.db');
+
+    closeDb();
+    let db = getDb();
+    db.exec('DELETE FROM lessons');
+    const universityId = db.prepare('INSERT INTO universities (name, short_name) VALUES (?, ?)').run('U', 'U').lastInsertRowid;
+    const groupId = db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, 'G').lastInsertRowid;
+    const insert = db.prepare(`
+        INSERT INTO lessons (group_id, day_of_week, time_start, time_end, subject, room)
+        VALUES (?, 1, '08:00', '09:30', ?, ?)
+    `);
+    const garbage = insert.run(groupId, 'Физика', 'Физика (лек.) Акст Е.Р.').lastInsertRowid;
+    const knownGroupId = db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, '23203').lastInsertRowid;
+    const recoverable = db.prepare(`
+        INSERT INTO lessons (group_id, day_of_week, time_start, time_end, subject, room)
+        VALUES (?, 4, '13:10', '14:40', 'Физика', 'Физика (лек.) Акст Е.Р.')
+    `).run(knownGroupId).lastInsertRowid;
+    const realRoom = insert.run(groupId, 'Физика', '206').lastInsertRowid;
+    const namedPlace = insert.run(groupId, 'Физическая культура', 'с/з').lastInsertRowid;
+    const otherSubjectsText = insert.run(groupId, 'Химия', 'Физика (лек.) Акст Е.Р.').lastInsertRowid;
+    closeDb();
+
+    db = getDb(); // reopening re-runs the migrations
+    const roomOf = (id) => db.prepare('SELECT room FROM lessons WHERE id = ?').get(id).room;
+    assert.equal(roomOf(garbage), null, 'no known room for this one: cleared');
+    assert.equal(roomOf(recoverable), '104', 'a joint lecture gets the room from after the merged cell');
+    assert.equal(roomOf(realRoom), '206');
+    assert.equal(roomOf(namedPlace), 'с/з');
+    assert.equal(roomOf(otherSubjectsText), 'Физика (лек.) Акст Е.Р.', 'only a room echoing the row\'s own subject is touched');
+
+    closeDb();
+    delete process.env.DB_PATH;
+    await fs.rm(tempDir, { recursive: true, force: true });
+});
+
 test('a legacy load_plan table (planned_hours NOT NULL CHECK > 0) is migrated to allow NULL, without losing existing rows', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-legacy-load-plan-'));
     process.env.DB_PATH = path.join(tempDir, 'schedule.db');
