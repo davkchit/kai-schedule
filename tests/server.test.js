@@ -1458,6 +1458,80 @@ test('unmatched pairs: the schedule shows them, no plan row claims their hours',
     await context.close();
 });
 
+test('a lecture two groups attend together is restored for the second group, copied from the first', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-joint-'));
+    process.env.DB_PATH = path.join(tempDir, 'schedule.db');
+
+    closeDb();
+    let db = getDb();
+    db.exec('DELETE FROM lessons; DELETE FROM load_plan; DELETE FROM semesters; DELETE FROM groups_; DELETE FROM universities;');
+    const universityId = db.prepare('INSERT INTO universities (name, short_name) VALUES (?, ?)').run('КНИТУ-КАИ', 'КНИТУ-КАИ').lastInsertRowid;
+    const firstGroupId = db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, '23203').lastInsertRowid;
+    const secondGroupId = db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, '23204').lastInsertRowid;
+    const semesterId = db.prepare(`
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES ('Осень', '2026-08-31', 18, 1, 2)
+    `).run().lastInsertRowid;
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Акст Е.Р.')").run().lastInsertRowid;
+    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Физика')").run().lastInsertRowid;
+
+    const insert = db.prepare(`
+        INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, specific_week, template_from_week,
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    // The first group's own rows for the joint lecture: the template and the
+    // copy in week 1, which was entered by hand.
+    insert.run(firstGroupId, semesterId, 4, 2, null, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Акст Е.Р.', teacherId, disciplineId);
+    insert.run(firstGroupId, semesterId, 4, 0, 1, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Акст Е.Р.', teacherId, disciplineId);
+    // Week 3 is the first group's own week, but not the second group's: there
+    // the template still rules, so copying a row into week 3 would duplicate it.
+    insert.run(firstGroupId, semesterId, 4, 0, 3, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Акст Е.Р.', teacherId, disciplineId);
+    // …and one more joint lecture whose cell the second group already fills.
+    insert.run(firstGroupId, semesterId, 2, 2, null, 1, '15:00', '16:30', 'Программирование и основы алгоритмизации', '104', 'Лекция', 'Хамидуллин М.Р.', null, null);
+
+    // The second group: an odd-week pair shares the cell (parities may), week 1
+    // is entered by hand, and one cell is already taken every week.
+    insert.run(secondGroupId, semesterId, 4, 1, null, 1, '13:10', '14:40', 'Другая пара по нечётным', '206', 'Практика', 'Кто-то К.К.', null, null);
+    insert.run(secondGroupId, semesterId, 1, 0, 1, 1, '08:00', '09:30', 'Что-то в первой неделе', '206', 'Практика', 'Кто-то К.К.', null, null);
+    insert.run(secondGroupId, semesterId, 2, 0, null, 1, '15:00', '16:30', 'Занятая ячейка', '206', 'Практика', 'Кто-то К.К.', null, null);
+
+    closeDb();
+    db = getDb(); // reopening re-runs the migrations
+
+    const restored = db.prepare(`
+        SELECT * FROM lessons WHERE group_id = ? AND day_of_week = 4 AND time_start = '13:10' AND subject = 'Физика'
+    `).all(secondGroupId);
+    assert.equal(restored.length, 2, 'the template row and the week-1 row');
+
+    const template = restored.find((row) => row.specific_week === null);
+    assert.equal(template.week_type, 2, "copied from the first group's row, parity and all");
+    assert.equal(template.template_from_week, 1, 'from the start: the past weeks showed a gap, not an edit');
+    assert.equal(template.room, '104');
+    assert.equal(template.teacher_id, teacherId, 'linked to the dictionary, so its hours count');
+    assert.equal(template.discipline_id, disciplineId);
+    assert.equal(restored.find((row) => row.specific_week === 1).week_type, 0, "a week's own row is concrete");
+    assert.equal(restored.filter((row) => row.specific_week === 3).length, 0, 'week 3 has no rows of its own here, so the template covers it');
+
+    assert.equal(
+        db.prepare("SELECT COUNT(*) c FROM lessons WHERE group_id = ? AND day_of_week = 2 AND time_start = '15:00'").get(secondGroupId).c,
+        1,
+        'a cell the group already fills is left alone entirely'
+    );
+
+    closeDb();
+    db = getDb(); // migrations run on every boot: they must not insert twice
+    assert.equal(
+        db.prepare("SELECT COUNT(*) c FROM lessons WHERE group_id = ? AND subject = 'Физика'").get(secondGroupId).c,
+        2,
+        'running again inserts nothing new'
+    );
+
+    closeDb();
+    delete process.env.DB_PATH;
+    await fs.rm(tempDir, { recursive: true, force: true });
+});
+
 test('a room holding the whole imported cell gets its real room back from the source sheet, or is cleared; real rooms are kept', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-rooms-'));
     process.env.DB_PATH = path.join(tempDir, 'schedule.db');

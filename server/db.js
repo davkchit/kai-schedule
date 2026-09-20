@@ -322,6 +322,7 @@ function initTables() {
     migrateSemesterClosing();
     migrateLessonsTeacherDiscipline();
     clearRoomsHoldingTheWholeCell();
+    restoreJointLecturesForSecondGroup();
 }
 
 // Real rooms for the joint lectures below, read from the source sheets (the
@@ -421,6 +422,113 @@ function migrateLessonsTeacherDiscipline() {
 
     // The one index the hour engine's live match leans on every read.
     db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_teacher_discipline ON lessons(teacher_id, discipline_id, lesson_type, group_id, subgroup)');
+}
+
+// A lecture two groups attend together: the source sheet writes it as one
+// cell spanning both groups' columns, and the import gave it to the first
+// group only. [first group, second group, day_of_week, time_start]
+const IMPORTED_JOINT_LECTURES = [
+    ['23203', '23204', 2, '13:10'],
+    ['23203', '23204', 2, '15:00'],
+    ['23203', '23204', 2, '16:40'],
+    ['23203', '23204', 4, '13:10'],
+    ['23203', '23204', 4, '15:00'],
+    ['23203', '23204', 5, '13:10'],
+    ['23203', '23204', 5, '15:00'],
+    ['23403', '23404', 3, '13:10'],
+    ['23403', '23404', 3, '15:00'],
+    ['23403', '23404', 3, '16:40'],
+    ['23403', '23404', 5, '13:10'],
+    ['23403', '23404', 5, '15:00'],
+    ['23103', '23104', 1, '08:00'],
+    ['23203', '23204', 1, '15:00'],
+    ['23203', '23204', 4, '11:30'],
+    ['23203', '23204', 5, '13:10'],
+    ['23203', '23204', 5, '15:00'],
+    ['23403', '23404', 5, '13:10'],
+    ['23403', '23404', 5, '15:00']
+];
+
+/**
+ * Puts the lecture back into the second group's schedule, by copying the
+ * first group's own rows for that slot — which carry the semester, the week
+ * parity, the dictionary ids and (since the migration above) the right room.
+ * Nothing here is dated or hard-coded: the pair itself says what it is.
+ *
+ * The copy keeps the original template_from_week, so it applies from the
+ * start of the semester. An edit made in the constructor may only take
+ * effect from the current week forward, which keeps it from rewriting what a
+ * past week showed; here the past weeks showed a gap where a lecture really
+ * took place, and that is what is being corrected.
+ *
+ * A week that holds rows of its own ignores the template, so the first
+ * group's rows for those weeks are copied too. If the second group's cell
+ * already holds a pair of the same parity, its schedule disagrees with the
+ * sheet — the whole lecture is then left alone rather than half applied, so
+ * this neither runs twice nor overwrites anything entered by hand.
+ */
+function restoreJointLecturesForSecondGroup() {
+    const groupIdOf = db.prepare('SELECT id FROM groups_ WHERE name = ?');
+    const siblingRows = db.prepare(`
+        SELECT * FROM lessons
+        WHERE group_id = ? AND day_of_week = ? AND time_start = ? AND is_removed = 0
+        ORDER BY specific_week IS NOT NULL, template_from_week
+    `);
+    const templateSlotTaken = db.prepare(`
+        SELECT 1 FROM lessons
+        WHERE group_id = ? AND semester_id IS ? AND day_of_week = ? AND time_start = ?
+          AND specific_week IS NULL AND is_removed = 0 AND week_type IN (0, ?)
+    `);
+    const weekSlotTaken = db.prepare(`
+        SELECT 1 FROM lessons
+        WHERE group_id = ? AND semester_id IS ? AND day_of_week = ? AND time_start = ?
+          AND specific_week = ? AND is_removed = 0
+    `);
+    const ownWeekExists = db.prepare('SELECT 1 FROM lessons WHERE group_id = ? AND semester_id IS ? AND specific_week = ? LIMIT 1');
+    const insert = db.prepare(`
+        INSERT INTO lessons (
+            group_id, semester_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, kind
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    db.transaction(() => {
+        for (const [firstGroup, secondGroup, day, timeStart] of IMPORTED_JOINT_LECTURES) {
+            const first = groupIdOf.get(firstGroup);
+            const second = groupIdOf.get(secondGroup);
+
+            if (!first || !second) {
+                continue;
+            }
+
+            const siblings = siblingRows.all(first.id, day, timeStart);
+            const template = siblings.find((row) => row.specific_week === null);
+
+            if (!template || templateSlotTaken.get(second.id, template.semester_id, day, timeStart, template.week_type)) {
+                continue;
+            }
+
+            for (const sibling of siblings) {
+                if (sibling.semester_id !== template.semester_id) {
+                    continue;
+                }
+
+                if (sibling.specific_week !== null
+                    && (!ownWeekExists.get(second.id, sibling.semester_id, sibling.specific_week)
+                        || weekSlotTaken.get(second.id, sibling.semester_id, day, timeStart, sibling.specific_week))) {
+                    continue;
+                }
+
+                insert.run(
+                    second.id, sibling.semester_id, sibling.subgroup, sibling.day_of_week, sibling.week_type,
+                    sibling.specific_week, sibling.template_from_week, sibling.time_start, sibling.time_end,
+                    sibling.subject, sibling.room, sibling.lesson_type, sibling.teacher,
+                    sibling.teacher_id, sibling.discipline_id, sibling.kind
+                );
+            }
+        }
+    })();
 }
 
 /**
