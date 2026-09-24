@@ -321,8 +321,29 @@ function initTables() {
     migrateSemesterScoping();
     migrateSemesterClosing();
     migrateLessonsTeacherDiscipline();
-    clearRoomsHoldingTheWholeCell();
-    restoreJointLecturesForSecondGroup();
+    runDataFixOnce('joint_lecture_rooms', clearRoomsHoldingTheWholeCell);
+    runDataFixOnce('joint_lectures_second_group', restoreJointLecturesForSecondGroup);
+    runDataFixOnce('unlabelled_rooms_23301_23401', fillUnlabelledImportedRooms);
+}
+
+/**
+ * Runs a one-off correction of imported data once per database, remembered
+ * in settings. Unlike a schema change these rewrite schedule rows, and on
+ * every boot they would keep "correcting" the specialist's own later edits:
+ * re-upload the second group's template without a joint lecture, and the
+ * next restart copied it back in. Once applied, the schedule is hers.
+ */
+function runDataFixOnce(name, fix) {
+    const key = `data_fix.${name}`;
+
+    if (db.prepare('SELECT 1 FROM settings WHERE key = ?').get(key)) {
+        return;
+    }
+
+    db.transaction(() => {
+        fix();
+        db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, new Date().toISOString());
+    })();
 }
 
 // Real rooms for the joint lectures below, read from the source sheets (the
@@ -351,7 +372,7 @@ const IMPORTED_JOINT_LECTURE_ROOMS = [
  * The one-time Excel import read a joint lecture's room from the first
  * "Ауд." column after its cell — but that cell was merged across two groups
  * and covered the column, so room got the cell text itself ("Физика (лек.)
- * Акст Е.Р."). The real room sits after the merge; this puts it back, and
+ * Орлов Е.Р."). The real room sits after the merge; this puts it back, and
  * clears any such room with no known replacement. Matches only a room that
  * starts with the row's own subject followed by " (", which no real room
  * does — so once fixed a row is never touched again, even if later edited.
@@ -529,6 +550,86 @@ function restoreJointLecturesForSecondGroup() {
             }
         }
     })();
+}
+
+// Rooms for the two groups whose source sheets leave the "Ауд." column
+// header without a group number: the import matched a room column by group
+// and found none, so every pair of theirs came in with no room. Read from the
+// "Ауд." column right after each group's own "Дисциплина" column.
+// [group, week parity (1 odd / 2 even), day_of_week, time_start, subject, room]
+const IMPORTED_UNLABELLED_ROOMS = [
+    ['23301', 1, 1, '08:00', 'Иностранный язык в профессиональной деятельности', '206'],
+    ['23301', 1, 1, '09:40', 'Лазерные технологии обработки материалов', '227'],
+    ['23301', 1, 1, '11:30', 'Лазерные технологии обработки материалов', '227'],
+    ['23301', 1, 2, '09:40', 'Физическая культура и спорт', 'с/з'],
+    ['23301', 1, 2, '11:30', 'Гидропневмоавтоматика', '227'],
+    ['23301', 1, 3, '09:40', 'Электротехника и электроника', '104'],
+    ['23301', 1, 3, '11:30', 'Иностранный язык в профессиональной деятельности', '206'],
+    ['23301', 1, 4, '08:00', 'Основы технологии машиностроения', '133'],
+    ['23301', 1, 4, '09:40', 'Основы технологии машиностроения', '133'],
+    ['23301', 1, 4, '11:30', 'Основы технологии машиностроения', '133'],
+    ['23301', 1, 5, '08:00', 'Управление качеством', '104'],
+    ['23301', 1, 5, '09:40', 'Управление качеством', '104'],
+    ['23401', 1, 1, '13:10', 'Экономика технологии машиностроения', '227'],
+    ['23401', 1, 1, '15:00', 'Экономика технологии машиностроения', '227'],
+    ['23401', 1, 2, '13:10', 'Технология машиностроения', '106'],
+    ['23401', 1, 2, '15:00', 'Технология машиностроения', '106'],
+    ['23401', 1, 4, '13:10', 'Аддитивные технологии', '106'],
+    ['23401', 1, 4, '15:00', 'Аддитивные технологии', '106'],
+    ['23401', 1, 5, '13:10', 'Оборудование машиностроительных производств', '106'],
+    ['23401', 1, 5, '15:00', 'Оборудование машиностроительных производств', '106'],
+    ['23401', 1, 5, '16:40', 'Оборудование машиностроительных производств', '124'],
+    ['23401', 1, 6, '09:40', 'Метрологическое обеспечение машиностроительных производств', '133'],
+    ['23401', 1, 6, '11:30', 'Метрологическое обеспечение машиностроительных производств', '133'],
+    ['23301', 2, 2, '09:40', 'Гидропневмоавтоматика', '227'],
+    ['23301', 2, 2, '11:30', 'Гидропневмоавтоматика', '227'],
+    ['23301', 2, 3, '09:40', 'Иностранный язык в профессиональной деятельности', '206'],
+    ['23301', 2, 3, '11:30', 'Физическая культура и спорт', 'с/з'],
+    ['23301', 2, 4, '08:00', 'Детали машин и основы конструирования', '133'],
+    ['23301', 2, 4, '09:40', 'Детали машин и основы конструирования', '133'],
+    ['23301', 2, 4, '11:30', 'Детали машин и основы конструирования', '133'],
+    ['23301', 2, 5, '08:00', 'Электротехника и электроника', '231'],
+    ['23301', 2, 5, '09:40', 'Электротехника и электроника', '231'],
+    ['23301', 2, 6, '09:40', 'Основы физико-технических методов обработки', '105'],
+    ['23301', 2, 6, '11:30', 'Основы физико-технических методов обработки', '105'],
+    ['23301', 2, 6, '13:10', 'Основы физико-технических методов обработки', '103'],
+    ['23401', 2, 2, '13:10', 'Технологическое оборудование лазерной обработки', '227'],
+    ['23401', 2, 2, '15:00', 'Технологическое оборудование лазерной обработки', '227'],
+    ['23401', 2, 3, '13:10', 'Технология машиностроения', '106'],
+    ['23401', 2, 3, '15:00', 'Технология машиностроения', '106'],
+    ['23401', 2, 4, '13:10', 'Экономика технологии машиностроения', '227'],
+    ['23401', 2, 4, '15:00', 'Экономика технологии машиностроения', '227'],
+    ['23401', 2, 5, '13:10', 'Метрологическое обеспечение машиностроительных производств', '133'],
+    ['23401', 2, 5, '15:00', 'Метрологическое обеспечение машиностроительных производств', '133'],
+    ['23401', 2, 6, '11:30', 'Автоматизация подготовки производства', '106'],
+    ['23401', 2, 6, '13:10', 'Автоматизация подготовки производства', '106'],
+    ['23401', 2, 6, '15:00', 'Автоматизация подготовки производства', '106']
+];
+
+/**
+ * Fills those rooms in — only where a room is still empty, so a room the
+ * specialist has since typed by hand is never overwritten. A template row
+ * takes the room of its own week parity; a week's own row takes the room of
+ * that week's parity in its semester.
+ */
+function fillUnlabelledImportedRooms() {
+    const fill = db.prepare(`
+        UPDATE lessons SET room = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE group_id IN (SELECT id FROM groups_ WHERE name = ?)
+          AND day_of_week = ? AND time_start = ? AND subject = ?
+          AND (room IS NULL OR TRIM(room) = '')
+          AND (
+                (specific_week IS NULL AND week_type IN (0, ?))
+             OR (specific_week IS NOT NULL AND ? = (
+                    SELECT CASE WHEN lessons.specific_week % 2 = 1 THEN s.first_week_parity ELSE 3 - s.first_week_parity END
+                    FROM semesters s WHERE s.id = lessons.semester_id
+                ))
+          )
+    `);
+
+    for (const [group, parity, day, timeStart, subject, room] of IMPORTED_UNLABELLED_ROOMS) {
+        fill.run(room, group, day, timeStart, subject, parity, parity);
+    }
 }
 
 /**

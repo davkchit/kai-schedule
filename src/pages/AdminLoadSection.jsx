@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getWeekTypeNumber } from '../lib/date';
 
-const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
+const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб'];
 const REF_PREVIEW_COUNT = 5;
 
 // The teaching-load admin window — kept as its own component (rather than
@@ -30,6 +30,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     // Pairs the schedule shows that no plan row claims — their hours are lost silently.
     const [unmatchedPairs, setUnmatchedPairs] = useState([]);
     const [isEditingSemester, setIsEditingSemester] = useState(false);
+    const [isAddingSemester, setIsAddingSemester] = useState(false);
     const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18, first_week_parity: 1 });
 
     const [showAllTeachers, setShowAllTeachers] = useState(false);
@@ -387,6 +388,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             setSemesters((previous) => [data, ...previous]);
             setViewedSemesterId(data.id);
             setNewSemester({ label: '', start_date: '', weeks_count: 18, first_week_parity: '' });
+            setIsAddingSemester(false);
             setToastMessage(activeSemester
                 ? `Семестр создан. Рабочим остаётся «${activeSemester.label}» — переключите, когда начнёте вносить новое расписание`
                 : 'Семестр создан');
@@ -683,115 +685,167 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             </p>
 
             <h3 className="subsection-title">Семестр</h3>
-            <div className="load-semester-bar">
-                <div className="load-semester-select-wrap">
-                    <select
-                        className="form-input load-semester-select"
-                        value={viewedSemester ? String(viewedSemester.id) : ''}
-                        onChange={(event) => setViewedSemesterId(Number(event.target.value) || null)}
-                    >
-                        {semesters.length === 0 && <option value="">Семестров пока нет</option>}
-                        {semesters.map((semester) => (
-                            <option key={semester.id} value={semester.id}>
-                                {semester.label}{semester.is_active ? ' (рабочий)' : ''}{semester.closed ? ' (закрыт)' : ''}
-                            </option>
-                        ))}
-                    </select>
-                    {viewedSemester && !isEditingSemester && (
-                        <>
-                            <span className="load-semester-meta">
-                                {viewedSemester.start_date} · {viewedSemester.weeks_count} нед. ·
-                                {' '}1-я неделя {parityLabel(viewedSemester.first_week_parity)} ·
-                                {' '}последняя неделя {formatWeekRange(viewedSemester.start_date, viewedSemester.weeks_count)}
-                            </span>
+            <div className="sem-card">
+                <div className="sem-head">
+                    <label className="sem-picker">
+                        <span className="sem-field-label">Просматриваемый семестр</span>
+                        <select
+                            className="form-input sem-select"
+                            value={viewedSemester ? String(viewedSemester.id) : ''}
+                            onChange={(event) => {
+                                setViewedSemesterId(Number(event.target.value) || null);
+                                setIsEditingSemester(false);
+                            }}
+                        >
+                            {semesters.length === 0 && <option value="">Семестров пока нет</option>}
+                            {semesters.map((semester) => (
+                                <option key={semester.id} value={semester.id}>
+                                    {semester.label}{semester.is_active ? ' — рабочий' : ''}{semester.closed ? ' — закрыт' : ''}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    {viewedSemester && (
+                        <div className="sem-badges">
+                            {viewedSemester.is_active && <span className="sem-badge is-active">Рабочий</span>}
+                            {viewedSemester.closed && <span className="sem-badge is-closed">Закрыт {viewedSemester.closed_at}</span>}
+                        </div>
+                    )}
+                    {!isAddingSemester && semesters.length > 0 && (
+                        <button type="button" className="btn btn-secondary btn-sm sem-new-btn" onClick={() => setIsAddingSemester(true)}>
+                            + Новый семестр
+                        </button>
+                    )}
+                </div>
+
+                {viewedSemester && !isEditingSemester && (
+                    <>
+                        <dl className="sem-facts">
+                            <div><dt>Начало</dt><dd>{formatIsoDay(viewedSemester.start_date)}</dd></div>
+                            <div><dt>Длительность</dt><dd>{viewedSemester.weeks_count} нед.</dd></div>
+                            <div><dt>1-я неделя</dt><dd>{parityLabel(viewedSemester.first_week_parity)}</dd></div>
+                            <div><dt>Последняя неделя</dt><dd>{formatWeekRange(viewedSemester.start_date, viewedSemester.weeks_count)}</dd></div>
+                        </dl>
+                        <div className="sem-actions">
                             {!viewedSemester.closed && (
-                                <button type="button" className="btn-link" onClick={startEditSemester}>изменить</button>
-                            )}
-                            {viewedSemester.is_active && (
-                                <span className="load-semester-meta"><strong>рабочий</strong></span>
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={startEditSemester}>Изменить даты</button>
                             )}
                             {!viewedSemester.is_active && !viewedSemester.closed && (
-                                <button type="button" className="btn-link" onClick={() => activateSemester(viewedSemester)}>
-                                    сделать рабочим
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => activateSemester(viewedSemester)}>
+                                    Сделать рабочим
                                 </button>
                             )}
                             {viewedSemester.closed ? (
-                                <>
-                                    <span className="load-semester-closed">закрыт {viewedSemester.closed_at}</span>
-                                    <button type="button" className="btn-link" onClick={reopenSemester}>открыть заново</button>
-                                </>
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={reopenSemester}>Открыть заново</button>
                             ) : (
-                                <button type="button" className="btn-link" onClick={closeSemester}>закрыть семестр</button>
+                                <button type="button" className="btn btn-delete btn-sm sem-close-btn" onClick={closeSemester}>Закрыть семестр</button>
                             )}
-                        </>
-                    )}
-                    {viewedSemester && isEditingSemester && !viewedSemester.closed && (
-                        <form className="load-semester-edit" onSubmit={saveSemesterEdit}>
-                            <input
-                                type="date"
-                                className="form-input"
-                                value={semesterEdit.start_date}
-                                onChange={(event) => setSemesterEdit((previous) => ({ ...previous, start_date: event.target.value }))}
-                            />
-                            <input
-                                type="number"
-                                min="1"
-                                max="52"
-                                className="form-input load-weeks-input"
-                                value={semesterEdit.weeks_count}
-                                onChange={(event) => setSemesterEdit((previous) => ({ ...previous, weeks_count: event.target.value }))}
-                            />
-                            <select
-                                className="form-input"
-                                title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
-                                value={String(semesterEdit.first_week_parity)}
-                                onChange={(event) => setSemesterEdit((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
-                            >
-                                <option value="1">1-я неделя нечётная</option>
-                                <option value="2">1-я неделя чётная</option>
-                            </select>
-                            <span className="load-semester-meta">
-                                → последняя неделя {formatWeekRange(semesterEdit.start_date, Number(semesterEdit.weeks_count))}
-                            </span>
-                            <button type="submit" className="btn btn-primary load-edit-save">Сохранить</button>
-                            <button type="button" className="btn-link" onClick={() => setIsEditingSemester(false)}>Отмена</button>
-                        </form>
-                    )}
-                </div>
-                <form className="load-semester-add" onSubmit={addSemester}>
-                    <input
-                        type="text"
-                        className="form-input"
-                        placeholder="Например Осень 2026-2027"
-                        value={newSemester.label}
-                        onChange={(event) => setNewSemester((previous) => ({ ...previous, label: event.target.value }))}
-                    />
-                    <input
-                        type="date"
-                        className="form-input"
-                        value={newSemester.start_date}
-                        onChange={(event) => setNewSemester((previous) => ({ ...previous, start_date: event.target.value }))}
-                    />
-                    <input
-                        type="number"
-                        min="1"
-                        max="52"
-                        className="form-input load-weeks-input"
-                        value={newSemester.weeks_count}
-                        onChange={(event) => setNewSemester((previous) => ({ ...previous, weeks_count: event.target.value }))}
-                    />
-                    <select
-                        className="form-input"
-                        title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
-                        value={String(resolveNewSemesterParity(newSemester) || '')}
-                        onChange={(event) => setNewSemester((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
-                    >
-                        {!resolveNewSemesterParity(newSemester) && <option value="">Чётность 1-й недели</option>}
-                        <option value="1">1-я неделя нечётная</option>
-                        <option value="2">1-я неделя чётная</option>
-                    </select>
-                    <button type="submit" className="btn btn-secondary">Добавить семестр</button>
-                </form>
+                        </div>
+                    </>
+                )}
+
+                {viewedSemester && isEditingSemester && !viewedSemester.closed && (
+                    <form className="sem-form" onSubmit={saveSemesterEdit}>
+                        <div className="sem-form-grid">
+                            <label>
+                                <span className="sem-field-label">Начало</span>
+                                <input
+                                    type="date"
+                                    className="form-input"
+                                    value={semesterEdit.start_date}
+                                    onChange={(event) => setSemesterEdit((previous) => ({ ...previous, start_date: event.target.value }))}
+                                />
+                            </label>
+                            <label>
+                                <span className="sem-field-label">Недель</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="52"
+                                    className="form-input"
+                                    value={semesterEdit.weeks_count}
+                                    onChange={(event) => setSemesterEdit((previous) => ({ ...previous, weeks_count: event.target.value }))}
+                                />
+                            </label>
+                            <label>
+                                <span className="sem-field-label">1-я неделя</span>
+                                <select
+                                    className="form-input"
+                                    title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
+                                    value={String(semesterEdit.first_week_parity)}
+                                    onChange={(event) => setSemesterEdit((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
+                                >
+                                    <option value="1">нечётная</option>
+                                    <option value="2">чётная</option>
+                                </select>
+                            </label>
+                        </div>
+                        <p className="sem-hint">
+                            Последняя неделя: {formatWeekRange(semesterEdit.start_date, Number(semesterEdit.weeks_count))}
+                        </p>
+                        <div className="sem-actions">
+                            <button type="submit" className="btn btn-primary btn-sm">Сохранить</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsEditingSemester(false)}>Отмена</button>
+                        </div>
+                    </form>
+                )}
+
+                {(isAddingSemester || semesters.length === 0) && (
+                    <form className="sem-form sem-add" onSubmit={addSemester}>
+                        <p className="sem-form-title">Новый семестр</p>
+                        <div className="sem-form-grid is-four">
+                            <label>
+                                <span className="sem-field-label">Название</span>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    placeholder="Например Осень 2026-2027"
+                                    value={newSemester.label}
+                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, label: event.target.value }))}
+                                />
+                            </label>
+                            <label>
+                                <span className="sem-field-label">Начало (понедельник)</span>
+                                <input
+                                    type="date"
+                                    className="form-input"
+                                    value={newSemester.start_date}
+                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, start_date: event.target.value }))}
+                                />
+                            </label>
+                            <label>
+                                <span className="sem-field-label">Недель</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    max="52"
+                                    className="form-input"
+                                    value={newSemester.weeks_count}
+                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, weeks_count: event.target.value }))}
+                                />
+                            </label>
+                            <label>
+                                <span className="sem-field-label">1-я неделя</span>
+                                <select
+                                    className="form-input"
+                                    title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
+                                    value={String(resolveNewSemesterParity(newSemester) || '')}
+                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
+                                >
+                                    {!resolveNewSemesterParity(newSemester) && <option value="">выберите</option>}
+                                    <option value="1">нечётная</option>
+                                    <option value="2">чётная</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div className="sem-actions">
+                            <button type="submit" className="btn btn-primary btn-sm">Добавить семестр</button>
+                            {semesters.length > 0 && (
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsAddingSemester(false)}>Отмена</button>
+                            )}
+                        </div>
+                    </form>
+                )}
             </div>
 
             <h3 className="subsection-title">Преподаватели и дисциплины</h3>
@@ -1244,6 +1298,12 @@ function formatWeekRange(startDate, weeksCount) {
     const short = (d) => `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 
     return `${short(monday)}–${short(saturday)}.${saturday.getUTCFullYear()}`;
+}
+
+/** 2026-09-01 → 01.09.2026 */
+function formatIsoDay(isoDate) {
+    const [year, month, day] = isoDate.split('-');
+    return `${day}.${month}.${year}`;
 }
 
 function parityLabel(parity) {

@@ -108,7 +108,7 @@ export default function LessonEditModal({
                     <DictionaryPicker
                         id="editTeacher"
                         label="Преподаватель"
-                        placeholder="Например: Герасимов Н.П."
+                        placeholder="Например: Кузнецов Н.П."
                         options={teacherOptions}
                         valueId={editForm.teacher_id}
                         valueText={editForm.teacher}

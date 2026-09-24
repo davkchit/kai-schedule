@@ -554,7 +554,7 @@ function validateSemesterUpdateBody(body) {
     return result;
 }
 
-const LOAD_PLAN_LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
+const LOAD_PLAN_LESSON_TYPES = ['Лекция', 'Практика', 'Лаб'];
 
 function validateLoadPlanCreateBody(body) {
     assertPlainObject(body, 'Тело запроса должно быть объектом');

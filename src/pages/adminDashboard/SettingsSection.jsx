@@ -102,7 +102,7 @@ export default function SettingsSection({
                         type="text"
                         id="directorName"
                         className="setting-input"
-                        placeholder="А.Ф. Мустафин"
+                        placeholder="А.Ф. Федоров"
                         value={directorName}
                         onChange={(event) => setDirectorName(event.target.value)}
                     />

@@ -16,7 +16,7 @@ DAY_NAMES[7] = '\u0412\u0441';
 // plan row by exact lesson_type text, so a form offering a value the plan
 // never uses (an old "Лаб. работа" instead of "Лаб") would quietly create
 // pairs nothing could ever count.
-const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб', 'Консультация', 'Зачёт', 'Экзамен'];
+const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб'];
 
 const DEFAULT_EDIT_FORM = {
     id: '',

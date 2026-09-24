@@ -259,7 +259,11 @@ export default function WelcomePage() {
     }
 
     return (
-        <div>
+        <div className="page-stack">
+            <header className="page-logo">
+                <img src="/assets/logo.png" alt="Логотип КАИ" width="148" height="62" />
+            </header>
+
             <div className="background-circles">
                 <div className="circle circle-1"></div>
                 <div className="circle circle-2"></div>
@@ -269,10 +273,6 @@ export default function WelcomePage() {
 
             <div className="container">
                 <div className="card">
-                    <div className="icon">
-                        <img src="/assets/logo.png" alt="Логотип КАИ" width="180" height="75" />
-                    </div>
-
                     <h1 className="title">Найдите своё расписание</h1>
 
                     <p className={`subtitle ${subtitleAnimationClass}`} id="subtitle">

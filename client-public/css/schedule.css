@@ -113,6 +113,21 @@ body {
 @media (max-width: 768px) {
     .mobile-only { display: block; }
     .desktop-only { display: none !important; }
+
+    /* Group chip in the phone header — same white, softly bordered shape as
+       the day tabs right under it, so it reads as part of the same set. */
+    .header-group.mobile-only {
+        display: inline-flex; align-items: center; gap: 8px; justify-self: center;
+        margin: 0; padding: 8px 16px; max-width: 100%; overflow: hidden; white-space: nowrap;
+        background: #ffffff; border: 1px solid var(--border-color); border-radius: 999px;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+        font-size: 15px; line-height: 1.2;
+    }
+    /* Slate rather than near-black: a label, quieter than the lesson titles. */
+    .header-group-name { font-weight: 600; color: #334155; letter-spacing: -0.01em; }
+    .header-group-sub { font-size: 12px; font-weight: 500; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
+    [data-theme="dark"] .header-group-name { color: #e2e8f0; }
+    [data-theme="dark"] .header-group.mobile-only { background: var(--card-bg); }
 }
 
 .date-selector {
@@ -148,8 +163,8 @@ body {
 }
 .date-selector svg { color: #334155; flex-shrink: 0; }
 
-.schedule-grid-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-bottom: var(--grid-bottom-gap, 28px); box-sizing: border-box; }
-.schedule-grid { flex: 1; min-height: 0; display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; cursor: grab; user-select: none; }
+.schedule-grid-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-bottom: 24px; box-sizing: border-box; }
+.schedule-grid { flex: 1; min-height: 0; display: flex; flex-wrap: nowrap; overflow-anchor: none; overflow-x: auto; scrollbar-width: none; cursor: grab; user-select: none; }
 .schedule-grid::-webkit-scrollbar { display: none; }
 .day-column { border-right: 2px solid var(--border-color); padding: 20px; display: flex; flex-direction: column; gap: 16px; flex: 0 0 20%; min-width: 300px; }
 .day-column:last-child { border-right: none; }
@@ -210,7 +225,7 @@ body {
 @media (max-width: 768px) {
     body { background-color: #f3f8ff; overflow-y: auto; }
     .app-container { padding: 0 16px; overflow-y: visible; height: auto; }
-    .main-header { padding: 16px 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 10px; }
+    .main-header { padding: 16px 0; display: grid; grid-template-columns: minmax(max-content, 1fr) minmax(0, max-content) minmax(max-content, 1fr); align-items: center; column-gap: 10px; }
     .logo-area { justify-self: start; }
     .logo-area img { width: 70px; }
     .page-title { font-size: 16px; position: static; left: auto; transform: none; width: 100%; text-align: center; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -450,3 +465,39 @@ body {
 [data-theme="dark"] .toggle-thumb { transform: translateX(16px); }
 .theme-dropdown-item { justify-content: space-between !important; cursor: pointer; }
 .theme-dropdown-left { display: flex; align-items: center; gap: 12px; }
+
+/* Reduced motion: people who turn motion down in their OS get instant state
+   changes instead of slides, springs and the endlessly floating circles. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* Live update: a cancelled pair fades and shrinks a touch, then its place
+   closes so the pairs below glide up; a new pair opens its place, then fades
+   in. The wrapper's height and the card's fade are separate animations, so
+   nothing jumps. The negative margin also closes the container's flex gap
+   the pair leaves behind. Reduced motion collapses all of this to instant
+   (see the rule above). Timing must fit LESSON_MOTION_MS in SchedulePage. */
+.day-column { --stack-gap: 16px; }
+.day-schedule { --stack-gap: 12px; }
+.lesson-motion { display: grid; grid-template-rows: 1fr; }
+.lesson-motion-inner { min-height: 0; overflow: hidden; }
+.lesson-motion.is-leaving { animation: lessonCollapse 0.3s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both; }
+.lesson-motion.is-leaving .lesson-motion-inner { animation: lessonFadeOut 0.2s ease-out both; }
+.lesson-motion.is-entering { animation: lessonExpand 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.lesson-motion.is-entering .lesson-motion-inner { animation: lessonFadeIn 0.25s ease-out 0.15s both; }
+@keyframes lessonCollapse {
+    from { grid-template-rows: 1fr; margin-bottom: 0; }
+    to { grid-template-rows: 0fr; margin-bottom: calc(-1 * var(--stack-gap, 16px)); }
+}
+@keyframes lessonExpand {
+    from { grid-template-rows: 0fr; margin-bottom: calc(-1 * var(--stack-gap, 16px)); }
+    to { grid-template-rows: 1fr; margin-bottom: 0; }
+}
+@keyframes lessonFadeOut { to { opacity: 0; transform: scale(0.96); } }
+@keyframes lessonFadeIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }

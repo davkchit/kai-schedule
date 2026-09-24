@@ -13,8 +13,7 @@ export default function DashboardSidebar({
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
-                <img src="/assets/logo.png" alt="Логотип КАИ" width="108" height="45" />
-                <span className="sidebar-title">КАИ Расписание</span>
+                <img src="/assets/logo.png" alt="КАИ Расписание" width="120" height="50" />
             </div>
             <nav className="sidebar-nav">
                 <button className={`nav-item ${activeSection === 'builder' ? 'active' : ''}`} data-section="builder" id="navBuilder" onClick={() => setActiveSection('builder')}>

@@ -99,11 +99,15 @@ router.get('/load-plan/unmatched', (req, res) => {
     }
 
     const currentWeek = Math.max(getSemesterWeekMeta(semester, formatLocalDate()).weekNumber, 1);
+    // Removal markers are kept here: for a template pair, being retired IS a
+    // row (a tombstone from some week), and resolving the versions without it
+    // would show a pair the specialist has already taken out. Only a week's
+    // own removed rows are left out below.
     const lessons = db.prepare(`
         SELECT l.*, g.name AS group_name
         FROM lessons l
         JOIN groups_ g ON g.id = l.group_id
-        WHERE l.semester_id = ? AND l.is_removed = 0 AND l.kind = 'lesson'
+        WHERE l.semester_id = ? AND l.kind = 'lesson'
     `).all(semester.id);
 
     const templatesByGroup = new Map();
@@ -114,7 +118,7 @@ router.get('/load-plan/unmatched', (req, res) => {
             const candidates = templatesByGroup.get(lesson.group_id) || [];
             candidates.push(lesson);
             templatesByGroup.set(lesson.group_id, candidates);
-        } else {
+        } else if (!lesson.is_removed) {
             shown.push(lesson);
         }
     }

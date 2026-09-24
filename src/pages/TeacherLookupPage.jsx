@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
 
@@ -9,10 +9,7 @@ const TYPE_META = {
     'Лекция': { short: 'Лек', tone: 'lec' },
     'Практика': { short: 'Пр', tone: 'pr' },
     'Лаб': { short: 'Лаб', tone: 'lab' },
-    'Лабораторная': { short: 'Лаб', tone: 'lab' },
-    'Консультация': { short: 'Конс', tone: 'kons' },
-    'Зачёт': { short: 'Зач', tone: 'zach' },
-    'Экзамен': { short: 'Экз', tone: 'exam' }
+    'Лабораторная': { short: 'Лаб', tone: 'lab' }
 };
 
 const WEEKDAY_SHORT = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
@@ -25,10 +22,9 @@ export default function TeacherLookupPage() {
     });
 
     const navigate = useNavigate();
-    const debounceRef = useRef(null);
 
     const [inputValue, setInputValue] = useState('');
-    const [suggestions, setSuggestions] = useState([]);
+    const [teachers, setTeachers] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [isInvalid, setIsInvalid] = useState(false);
     const [selectedTeacher, setSelectedTeacher] = useState(null);
@@ -39,38 +35,29 @@ export default function TeacherLookupPage() {
     const [listQuery, setListQuery] = useState('');
     const [semesters, setSemesters] = useState([]);
 
+    // The whole list once, filtered here as the teacher types — the same way
+    // the group picker works, so focusing the field already shows everyone.
     useEffect(() => {
-        if (selectedTeacher) {
-            return undefined;
-        }
+        let ignore = false;
 
-        if (debounceRef.current) {
-            window.clearTimeout(debounceRef.current);
-        }
-
-        const trimmed = inputValue.trim();
-
-        if (!trimmed) {
-            setSuggestions([]);
-            return undefined;
-        }
-
-        debounceRef.current = window.setTimeout(async () => {
-            try {
-                const response = await fetch(`/api/teachers/search?q=${encodeURIComponent(trimmed)}`);
-                const data = await response.json();
-                setSuggestions(Array.isArray(data) ? data : []);
-            } catch {
-                setSuggestions([]);
-            }
-        }, 250);
+        fetch('/api/teachers/search')
+            .then((response) => (response.ok ? response.json() : []))
+            .then((rows) => {
+                if (!ignore && Array.isArray(rows)) setTeachers(rows);
+            })
+            .catch(() => {});
 
         return () => {
-            if (debounceRef.current) {
-                window.clearTimeout(debounceRef.current);
-            }
+            ignore = true;
         };
-    }, [inputValue, selectedTeacher]);
+    }, []);
+
+    const suggestions = useMemo(() => {
+        const normalizedQuery = inputValue.trim().toLowerCase();
+        return normalizedQuery
+            ? teachers.filter((teacher) => teacher.full_name.toLowerCase().includes(normalizedQuery))
+            : teachers;
+    }, [teachers, inputValue]);
 
     // Mon–Sat of the calendar week the teacher is looking at this page in.
     // Derived from the browser clock alone: the day tabs only ever filter the
@@ -189,7 +176,6 @@ export default function TeacherLookupPage() {
         setLoadData(null);
         setErrorMessage('');
         setInputValue('');
-        setSuggestions([]);
         setDayFilter('all');
         setListQuery('');
     }
@@ -198,11 +184,12 @@ export default function TeacherLookupPage() {
         return null;
     }
 
+    const isFiltered = dayFilter !== 'all' || Boolean(listQuery.trim());
     const hasTable = Boolean(!isLoading && !errorMessage && loadData?.semester && planRows.length > 0);
 
     return (
-        <div className={`tl-page ${hasTable ? 'is-wide' : ''}`}>
-            <header className="tl-page-header">
+        <div className={`page-stack tl-page ${hasTable ? 'is-wide' : ''}`}>
+            <header className="page-logo">
                 <img src="/assets/logo.png" alt="Логотип КАИ" />
             </header>
 
@@ -236,7 +223,7 @@ export default function TeacherLookupPage() {
                                     <input
                                         type="text"
                                         className="search-input"
-                                        placeholder="Например Хамидуллин"
+                                        placeholder="Например Сафронов"
                                         autoComplete="off"
                                         value={inputValue}
                                         onChange={(event) => {
@@ -368,6 +355,23 @@ export default function TeacherLookupPage() {
                                         </div>
                                     </div>
 
+                                    {/* Phone only: the totals as a card at the top, where the
+                                        table's footer line would be off-screen. */}
+                                    <div className="tl-summary">
+                                        <div className="tl-summary-cell">
+                                            <span className="tl-summary-label">
+                                                Проведено{isFiltered ? ' · по фильтру' : ''}
+                                            </span>
+                                            <span className="tl-summary-value">{totals.occurred} ч</span>
+                                        </div>
+                                        <div className="tl-summary-cell">
+                                            <span className="tl-summary-label">По плану</span>
+                                            <span className="tl-summary-value is-secondary">
+                                                {totals.planned > 0 ? `${totals.planned}${totals.hasUnplanned ? '+' : ''} ч` : '—'}
+                                            </span>
+                                        </div>
+                                    </div>
+
                                     {visibleRows.length === 0 ? (
                                         <p className="tl-note tl-note-empty">
                                             {dayFilter === 'all'
@@ -397,12 +401,20 @@ export default function TeacherLookupPage() {
 
                                             <div className="tl-totals">
                                                 <span className="tl-totals-caption">
-                                                    Итого{dayFilter === 'all' && !listQuery.trim() ? '' : ' по отфильтрованным'}
+                                                    Итого{isFiltered ? ' по отфильтрованным' : ''}
                                                 </span>
                                                 <span className="tl-totals-value">
                                                     {totals.occurred} / {totals.planned}{totals.hasUnplanned ? '+' : ''} ч
                                                 </span>
                                             </div>
+
+                                            {/* Phone only: the same rows as cards — five columns
+                                                don't fit a phone's width. */}
+                                            <ul className="tl-cards">
+                                                {visibleRows.map((row) => (
+                                                    <LoadCard key={row.id} row={row} />
+                                                ))}
+                                            </ul>
                                         </>
                                     )}
                                 </>
@@ -415,14 +427,49 @@ export default function TeacherLookupPage() {
     );
 }
 
-function LoadRow({ row }) {
-    const typeMeta = TYPE_META[row.lesson_type] || { short: row.lesson_type.slice(0, 4), tone: 'default' };
-    const lastDate = lastOccurredDate(row.occurrences);
+/** What both the table row and the phone card show for one plan row. */
+function describeRow(row) {
     const hasPlan = row.planned_hours !== null;
-    const percent = hasPlan && row.planned_hours > 0
-        ? Math.min(100, Math.round((row.occurred_hours / row.planned_hours) * 100))
-        : 0;
-    const isComplete = hasPlan && row.occurred_hours >= row.planned_hours;
+
+    return {
+        typeMeta: TYPE_META[row.lesson_type] || { short: row.lesson_type.slice(0, 4), tone: 'default' },
+        lastDate: lastOccurredDate(row.occurrences),
+        hasPlan,
+        percent: hasPlan && row.planned_hours > 0
+            ? Math.min(100, Math.round((row.occurred_hours / row.planned_hours) * 100))
+            : 0,
+        isComplete: hasPlan && row.occurred_hours >= row.planned_hours
+    };
+}
+
+function LoadCard({ row }) {
+    const { typeMeta, lastDate, hasPlan, percent, isComplete } = describeRow(row);
+
+    return (
+        <li className="tl-card-row">
+            <span className={`tl-type-badge tone-${typeMeta.tone}`}>{typeMeta.short}</span>
+            <div className="tl-card-main">
+                <p className="tl-card-title">{row.discipline_name}</p>
+                <p className="tl-card-meta">
+                    Группа {row.group_name}
+                    {row.subgroup ? `, ${row.subgroup} п/г` : ''}
+                    {lastDate ? ` · посл. ${formatIsoDate(lastDate)}` : ''}
+                </p>
+            </div>
+            <span className={`tl-card-hours ${isComplete ? 'is-complete' : ''}`}>
+                {hasPlan ? `${row.occurred_hours} / ${row.planned_hours} ч` : `${row.occurred_hours} ч`}
+            </span>
+            {hasPlan && (
+                <span className="tl-progress-track tl-card-progress">
+                    <span className={`tl-progress-fill ${isComplete ? 'is-complete' : ''}`} style={{ width: `${percent}%` }} />
+                </span>
+            )}
+        </li>
+    );
+}
+
+function LoadRow({ row }) {
+    const { typeMeta, lastDate, hasPlan, percent, isComplete } = describeRow(row);
 
     return (
         <tr>

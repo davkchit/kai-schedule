@@ -75,7 +75,10 @@ export default function AdminLoginPage() {
     }
 
     return (
-        <div>
+        <div className="page-stack">
+            <header className="page-logo">
+                <img src="/assets/logo.png" alt="Логотип КАИ" width="148" height="62" />
+            </header>
             <div className="background-circles">
                 <div className="circle circle-1"></div>
                 <div className="circle circle-2"></div>
@@ -84,9 +87,6 @@ export default function AdminLoginPage() {
             </div>
             <div className="container">
                 <div className="card">
-                    <div className="icon">
-                        <img src="/assets/logo.png" alt="Логотип КАИ" width="188" height="78" />
-                    </div>
                     <h1 className="title">Вход для<br />администратора</h1>
                     <form id="adminForm" className="login-form" onSubmit={handleSubmit}>
                         <div className="input-group">

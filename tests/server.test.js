@@ -1294,14 +1294,14 @@ test('teachers and disciplines: create, list, and reject duplicates', async () =
     const teacherResponse = await fetch(`${context.baseUrl}/api/admin/teachers`, {
         method: 'POST',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: 'Мустафин А.Р.' })
+        body: JSON.stringify({ full_name: 'Федоров А.Р.' })
     });
     assert.equal(teacherResponse.status, 201);
 
     const dupResponse = await fetch(`${context.baseUrl}/api/admin/teachers`, {
         method: 'POST',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: 'Мустафин А.Р.' })
+        body: JSON.stringify({ full_name: 'Федоров А.Р.' })
     });
     assert.equal(dupResponse.status, 409);
 
@@ -1314,7 +1314,7 @@ test('teachers and disciplines: create, list, and reject duplicates', async () =
 
     const listResponse = await fetch(`${context.baseUrl}/api/admin/teachers`, { headers: context.authHeaders });
     const list = await listResponse.json();
-    assert.deepEqual(list.map((t) => t.full_name), ['Мустафин А.Р.']);
+    assert.deepEqual(list.map((t) => t.full_name), ['Федоров А.Р.']);
 
     await context.close();
 });
@@ -1326,7 +1326,7 @@ test('teachers and disciplines: rename fixes a typo, delete is blocked while a l
     const teacherId = (await (await fetch(`${context.baseUrl}/api/admin/teachers`, {
         method: 'POST',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: 'Мустфин А.Р.' }) // typo: missing "а"
+        body: JSON.stringify({ full_name: 'Федров А.Р.' }) // typo: missing "а"
     })).json()).id;
 
     const disciplineId = (await (await fetch(`${context.baseUrl}/api/admin/disciplines`, {
@@ -1339,10 +1339,10 @@ test('teachers and disciplines: rename fixes a typo, delete is blocked while a l
     const renameResponse = await fetch(`${context.baseUrl}/api/admin/teachers/${teacherId}`, {
         method: 'PUT',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: 'Мустафин А.Р.' })
+        body: JSON.stringify({ full_name: 'Федоров А.Р.' })
     });
     assert.equal(renameResponse.status, 200);
-    assert.equal((await renameResponse.json()).full_name, 'Мустафин А.Р.');
+    assert.equal((await renameResponse.json()).full_name, 'Федоров А.Р.');
 
     const renameDisciplineResponse = await fetch(`${context.baseUrl}/api/admin/disciplines/${disciplineId}`, {
         method: 'PUT',
@@ -1391,6 +1391,39 @@ test('teachers and disciplines: rename fixes a typo, delete is blocked while a l
     await context.close();
 });
 
+test('a plan row is a lecture, a practice or a lab: consultations, credits and exams are not offered for now', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Типов Т.Т.')").run().lastInsertRowid;
+    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Виды занятий')").run().lastInsertRowid;
+    const headers = { ...context.authHeaders, 'Content-Type': 'application/json' };
+    const body = (lessonType) => JSON.stringify({
+        semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId,
+        lesson_type: lessonType, group_id: context.primaryGroupId, planned_hours: 10
+    });
+
+    for (const refused of ['Консультация', 'Зачёт', 'Экзамен']) {
+        const response = await fetch(`${context.baseUrl}/api/admin/load-plan`, { method: 'POST', headers, body: body(refused) });
+        assert.equal(response.status, 400, refused + ' must be refused');
+        assert.match((await response.json()).error, /Лекция, Практика, Лаб$/);
+    }
+
+    let created;
+    for (const accepted of ['Лекция', 'Практика', 'Лаб']) {
+        const response = await fetch(`${context.baseUrl}/api/admin/load-plan`, { method: 'POST', headers, body: body(accepted) });
+        assert.equal(response.status, 201, accepted + ' must be accepted');
+        created = await response.json();
+    }
+
+    // Editing an existing row into one of the removed types is refused as well.
+    const edit = await fetch(`${context.baseUrl}/api/admin/load-plan/${created.id}`, {
+        method: 'PUT', headers, body: JSON.stringify({ lesson_type: 'Экзамен' })
+    });
+    assert.equal(edit.status, 400);
+
+    await context.close();
+});
+
 test('unmatched pairs: the schedule shows them, no plan row claims their hours', async () => {
     const context = await createTestContext();
     const db = getDb();
@@ -1428,10 +1461,10 @@ test('unmatched pairs: the schedule shows them, no plan row claims their hours',
     lesson({ day_of_week: 2, lesson_type: 'Практика' });                   // one field off: hours go nowhere
     lesson({ day_of_week: 3, teacher_id: null, discipline_id: null, teacher: 'Гость Г.Г.', subject: 'Разовая пара' });
     lesson({ day_of_week: 4, kind: 'event', subject: 'Линейка', lesson_type: null, teacher_id: null, discipline_id: null });
-    lesson({ day_of_week: 5, lesson_type: 'Зачёт', specific_week: 3, is_removed: 1 }); // a week's own removal marker: nobody's hours
+    lesson({ day_of_week: 5, lesson_type: 'Лаб', specific_week: 3, is_removed: 1 }); // a week's own removal marker: nobody's hours
     // An old template version, replaced later by one that does match: the
     // retired row is not a problem, only what the schedule shows now is.
-    lesson({ day_of_week: 6, lesson_type: 'Консультация', template_from_week: 1 });
+    lesson({ day_of_week: 6, lesson_type: 'Лаб', template_from_week: 1 });
     lesson({ day_of_week: 6, template_from_week: 2 });
 
     const response = await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders });
@@ -1472,7 +1505,7 @@ test('a lecture two groups attend together is restored for the second group, cop
         INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
         VALUES ('Осень', '2026-08-31', 18, 1, 2)
     `).run().lastInsertRowid;
-    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Акст Е.Р.')").run().lastInsertRowid;
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Орлов Е.Р.')").run().lastInsertRowid;
     const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Физика')").run().lastInsertRowid;
 
     const insert = db.prepare(`
@@ -1482,19 +1515,21 @@ test('a lecture two groups attend together is restored for the second group, cop
     `);
     // The first group's own rows for the joint lecture: the template and the
     // copy in week 1, which was entered by hand.
-    insert.run(firstGroupId, semesterId, 4, 2, null, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Акст Е.Р.', teacherId, disciplineId);
-    insert.run(firstGroupId, semesterId, 4, 0, 1, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Акст Е.Р.', teacherId, disciplineId);
+    insert.run(firstGroupId, semesterId, 4, 2, null, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Орлов Е.Р.', teacherId, disciplineId);
+    insert.run(firstGroupId, semesterId, 4, 0, 1, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Орлов Е.Р.', teacherId, disciplineId);
     // Week 3 is the first group's own week, but not the second group's: there
     // the template still rules, so copying a row into week 3 would duplicate it.
-    insert.run(firstGroupId, semesterId, 4, 0, 3, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Акст Е.Р.', teacherId, disciplineId);
+    insert.run(firstGroupId, semesterId, 4, 0, 3, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Орлов Е.Р.', teacherId, disciplineId);
     // …and one more joint lecture whose cell the second group already fills.
-    insert.run(firstGroupId, semesterId, 2, 2, null, 1, '15:00', '16:30', 'Программирование и основы алгоритмизации', '104', 'Лекция', 'Хамидуллин М.Р.', null, null);
+    insert.run(firstGroupId, semesterId, 2, 2, null, 1, '15:00', '16:30', 'Программирование и основы алгоритмизации', '104', 'Лекция', 'Сафронов М.Р.', null, null);
 
     // The second group: an odd-week pair shares the cell (parities may), week 1
     // is entered by hand, and one cell is already taken every week.
     insert.run(secondGroupId, semesterId, 4, 1, null, 1, '13:10', '14:40', 'Другая пара по нечётным', '206', 'Практика', 'Кто-то К.К.', null, null);
     insert.run(secondGroupId, semesterId, 1, 0, 1, 1, '08:00', '09:30', 'Что-то в первой неделе', '206', 'Практика', 'Кто-то К.К.', null, null);
     insert.run(secondGroupId, semesterId, 2, 0, null, 1, '15:00', '16:30', 'Занятая ячейка', '206', 'Практика', 'Кто-то К.К.', null, null);
+    // As a database from before the fix: the fresh one above already recorded it as done.
+    db.exec("DELETE FROM settings WHERE key LIKE 'data_fix.%'");
 
     closeDb();
     db = getDb(); // reopening re-runs the migrations
@@ -1520,12 +1555,114 @@ test('a lecture two groups attend together is restored for the second group, cop
     );
 
     closeDb();
-    db = getDb(); // migrations run on every boot: they must not insert twice
+    db = getDb(); // the next boot: the fix must not insert twice
     assert.equal(
         db.prepare("SELECT COUNT(*) c FROM lessons WHERE group_id = ? AND subject = 'Физика'").get(secondGroupId).c,
         2,
         'running again inserts nothing new'
     );
+
+    // The specialist later re-uploads the second group's template without
+    // that lecture (an upload replaces the whole template): a restart must
+    // not put it back — the fix ran once and the schedule is hers now.
+    db.prepare('DELETE FROM lessons WHERE group_id = ? AND specific_week IS NULL').run(secondGroupId);
+    // A new semester where only the first group has a pair in that slot must
+    // not get it copied to the second group either.
+    const springId = db.prepare(`
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES ('Весна', '2027-02-08', 18, 0, 2)
+    `).run().lastInsertRowid;
+    db.prepare('DELETE FROM lessons WHERE group_id = ? AND semester_id = ?').run(firstGroupId, semesterId);
+    db.prepare(`
+        INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, specific_week, template_from_week,
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id)
+        VALUES (?, ?, 4, 2, NULL, 1, '13:10', '14:40', 'Физика', '104', 'Лекция', 'Орлов Е.Р.', ?, ?)
+    `).run(firstGroupId, springId, teacherId, disciplineId);
+
+    closeDb();
+    db = getDb();
+    assert.equal(
+        db.prepare("SELECT COUNT(*) c FROM lessons WHERE group_id = ? AND specific_week IS NULL AND subject = 'Физика'").get(secondGroupId).c,
+        0,
+        'a lecture the specialist took out does not come back on restart, in this semester or the next'
+    );
+
+    closeDb();
+    delete process.env.DB_PATH;
+    await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test('unmatched pairs: a template pair taken out of the schedule stops being listed, one taken out later still is', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+    db.exec('DELETE FROM lessons');
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Снятов С.С.')").run().lastInsertRowid;
+    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Снятая дисциплина')").run().lastInsertRowid;
+
+    const insert = db.prepare(`
+        INSERT INTO lessons (
+            group_id, semester_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
+            time_start, time_end, subject, lesson_type, teacher, teacher_id, discipline_id, kind
+        )
+        VALUES (?, ?, 0, ?, 0, NULL, ?, ?, ?, ?, 'Снятая дисциплина', 'Практика', 'Снятов С.С.', ?, ?, 'lesson')
+    `);
+    const row = (day, from, removed, start) => insert.run(
+        context.primaryGroupId, context.semesterId, day, from, removed, start, '09:30', teacherId, disciplineId
+    );
+
+    // No plan row exists for a practice, so every live pair below is unmatched.
+    row(1, 1, 0, '08:00');     // taken out by a tombstone from the same week: gone
+    row(1, 1, 1, '08:00');
+    row(2, 1, 0, '08:00');     // taken out from a week that has not come yet: still shown now
+    row(2, 999, 1, '08:00');
+    row(3, 1, 0, '08:00');     // taken out long ago, then put back as a newer version: shown
+    row(3, 1, 1, '08:00');
+    row(3, 2, 0, '08:00');
+    row(4, 1, 0, '08:00');     // never taken out: shown
+
+    const response = await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+
+    // All of them share one identity, so they are one case counting its pairs.
+    assert.equal(body.items.length, 1);
+    assert.equal(body.items[0].lessons_count, 3, 'days 2, 3 and 4 are shown; the pair on day 1 is retired and must not be counted');
+
+    await context.close();
+});
+
+test('rooms missing for 23301 and 23401 are filled from the sheet by week parity, never over a room typed by hand', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anti-vuz-unlabelled-'));
+    process.env.DB_PATH = path.join(tempDir, 'schedule.db');
+
+    closeDb();
+    let db = getDb();
+    db.exec('DELETE FROM lessons; DELETE FROM semesters;');
+    const universityId = db.prepare('INSERT INTO universities (name, short_name) VALUES (?, ?)').run('U', 'U').lastInsertRowid;
+    const groupId = db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, '23301').lastInsertRowid;
+    // First week even: week 2 is odd, week 3 even.
+    const semesterId = db.prepare(`
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES ('Осень', '2026-08-31', 18, 1, 2)
+    `).run().lastInsertRowid;
+    const insert = db.prepare(`
+        INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, specific_week, template_from_week, time_start, time_end, subject, room)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+    `);
+    const subject = 'Иностранный язык в профессиональной деятельности';
+    const oddTemplate = insert.run(groupId, semesterId, 1, 1, null, '08:00', '09:30', subject, null).lastInsertRowid;
+    const oddWeek = insert.run(groupId, semesterId, 1, 0, 2, '08:00', '09:30', subject, '').lastInsertRowid;
+    const evenWeek = insert.run(groupId, semesterId, 1, 0, 3, '08:00', '09:30', subject, null).lastInsertRowid;
+    const typedByHand = insert.run(groupId, semesterId, 3, 1, null, '11:30', '13:00', subject, '300').lastInsertRowid;
+    db.exec("DELETE FROM settings WHERE key LIKE 'data_fix.%'"); // as a database from before the fix
+    closeDb();
+
+    db = getDb();
+    const roomOf = (id) => db.prepare('SELECT room FROM lessons WHERE id = ?').get(id).room;
+    assert.equal(roomOf(oddTemplate), '206', 'the odd-week template takes the odd sheet\'s room');
+    assert.equal(roomOf(oddWeek), '206', 'week 2 is odd in this semester');
+    assert.equal(roomOf(evenWeek), null, 'week 3 is even, and the even sheet has no such pair on Monday 08:00');
+    assert.equal(roomOf(typedByHand), '300', 'a room typed by hand is kept');
 
     closeDb();
     delete process.env.DB_PATH;
@@ -1545,15 +1682,17 @@ test('a room holding the whole imported cell gets its real room back from the so
         INSERT INTO lessons (group_id, day_of_week, time_start, time_end, subject, room)
         VALUES (?, 1, '08:00', '09:30', ?, ?)
     `);
-    const garbage = insert.run(groupId, 'Физика', 'Физика (лек.) Акст Е.Р.').lastInsertRowid;
+    const garbage = insert.run(groupId, 'Физика', 'Физика (лек.) Орлов Е.Р.').lastInsertRowid;
     const knownGroupId = db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, '23203').lastInsertRowid;
     const recoverable = db.prepare(`
         INSERT INTO lessons (group_id, day_of_week, time_start, time_end, subject, room)
-        VALUES (?, 4, '13:10', '14:40', 'Физика', 'Физика (лек.) Акст Е.Р.')
+        VALUES (?, 4, '13:10', '14:40', 'Физика', 'Физика (лек.) Орлов Е.Р.')
     `).run(knownGroupId).lastInsertRowid;
     const realRoom = insert.run(groupId, 'Физика', '206').lastInsertRowid;
     const namedPlace = insert.run(groupId, 'Физическая культура', 'с/з').lastInsertRowid;
-    const otherSubjectsText = insert.run(groupId, 'Химия', 'Физика (лек.) Акст Е.Р.').lastInsertRowid;
+    const otherSubjectsText = insert.run(groupId, 'Химия', 'Физика (лек.) Орлов Е.Р.').lastInsertRowid;
+    // As a database from before the fix: the fresh one above already recorded it as done.
+    db.exec("DELETE FROM settings WHERE key LIKE 'data_fix.%'");
     closeDb();
 
     db = getDb(); // reopening re-runs the migrations
@@ -1562,7 +1701,7 @@ test('a room holding the whole imported cell gets its real room back from the so
     assert.equal(roomOf(recoverable), '104', 'a joint lecture gets the room from after the merged cell');
     assert.equal(roomOf(realRoom), '206');
     assert.equal(roomOf(namedPlace), 'с/з');
-    assert.equal(roomOf(otherSubjectsText), 'Физика (лек.) Акст Е.Р.', 'only a room echoing the row\'s own subject is touched');
+    assert.equal(roomOf(otherSubjectsText), 'Физика (лек.) Орлов Е.Р.', 'only a room echoing the row\'s own subject is touched');
 
     closeDb();
     delete process.env.DB_PATH;
@@ -1869,7 +2008,7 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     const teacherId = (await (await fetch(`${context.baseUrl}/api/admin/teachers`, {
         method: 'POST',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: 'Гареева Л.М.' })
+        body: JSON.stringify({ full_name: 'Николаева Л.М.' })
     })).json()).id;
 
     const disciplineId = (await (await fetch(`${context.baseUrl}/api/admin/disciplines`, {
@@ -2028,7 +2167,7 @@ test('public teacher search finds by partial name, and the load endpoint returns
     const context = await createTestContext();
     const db = getDb();
 
-    const teacher = db.prepare('INSERT INTO teachers (full_name) VALUES (?)').run('Хамидуллин М. Р.');
+    const teacher = db.prepare('INSERT INTO teachers (full_name) VALUES (?)').run('Сафронов М. Р.');
     const discipline = db.prepare('INSERT INTO disciplines (name) VALUES (?)').run('Информационная безопасность');
     // The seeded working semester, renamed and shortened for this scenario.
     db.prepare("UPDATE semesters SET label = 'Осень 2026-2027', weeks_count = 4 WHERE id = ?").run(context.semesterId);
@@ -2038,10 +2177,16 @@ test('public teacher search finds by partial name, and the load endpoint returns
         VALUES (?, ?, ?, 'Лекция', ?, 36, 'specialist', 1)
     `).run(semester.lastInsertRowid, teacher.lastInsertRowid, discipline.lastInsertRowid, context.primaryGroupId);
 
-    const searchResponse = await fetch(`${context.baseUrl}/api/teachers/search?q=хамидул`);
+    const searchResponse = await fetch(`${context.baseUrl}/api/teachers/search?q=сафрон`);
     const searchResults = await searchResponse.json();
     assert.equal(searchResults.length, 1);
-    assert.equal(searchResults[0].full_name, 'Хамидуллин М. Р.');
+    assert.equal(searchResults[0].full_name, 'Сафронов М. Р.');
+
+    // An empty query lists everyone, so the page can open its dropdown on focus.
+    const allResponse = await fetch(`${context.baseUrl}/api/teachers/search`);
+    const allTeachers = await allResponse.json();
+    assert.ok(allTeachers.some((row) => row.full_name === 'Сафронов М. Р.'));
+    assert.equal(allTeachers.length, db.prepare('SELECT COUNT(*) AS count FROM teachers').get().count);
 
     const loadResponse = await fetch(`${context.baseUrl}/api/teachers/${teacher.lastInsertRowid}/load`);
     const loadBody = await loadResponse.json();

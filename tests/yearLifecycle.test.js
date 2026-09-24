@@ -110,7 +110,7 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     assert.equal(autumn.start_date, '2026-08-31');
     await ok('PUT', `/api/admin/semesters/${autumn.id}`, { is_active: true });
 
-    const teacherId = (await ok('POST', '/api/admin/teachers', { full_name: 'Качеишвили Н.В.' })).id;
+    const teacherId = (await ok('POST', '/api/admin/teachers', { full_name: 'Виноградов Н.В.' })).id;
     const disciplineId = (await ok('POST', '/api/admin/disciplines', { name: 'Программирование' })).id;
     const autumnPlan = await ok('POST', '/api/admin/load-plan', {
         semester_id: autumn.id, teacher_id: teacherId, discipline_id: disciplineId,
@@ -122,12 +122,12 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     // live by identity now, no separate linking step.
     const l1 = await ok('POST', '/api/admin/lessons', {
         group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0,
-        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Качеишвили Н.В.',
+        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Виноградов Н.В.',
         teacher_id: teacherId, discipline_id: disciplineId
     });
     const l2 = await ok('POST', '/api/admin/lessons', {
         group_id: groupId, day_of_week: 3, time_start: '09:40', time_end: '11:10', week_type: 1,
-        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Качеишвили Н.В.',
+        subject: 'Программирование', lesson_type: 'Лекция', teacher: 'Виноградов Н.В.',
         teacher_id: teacherId, discipline_id: disciplineId
     });
 
@@ -188,7 +188,7 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         target_week: 'template',
         groups: [{
             group: '23303', university: 'КНИТУ-КАИ', lessons: [
-                { day: 1, time_start: '08:00', time_end: '09:30', subject: 'Базы данных', type: 'Лекция', teacher: 'Качеишвили Н.В.', week_type: 'all' },
+                { day: 1, time_start: '08:00', time_end: '09:30', subject: 'Базы данных', type: 'Лекция', teacher: 'Виноградов Н.В.', week_type: 'all' },
                 { day: 2, time_start: '09:40', time_end: '11:10', subject: 'Сети', type: 'Практика', week_type: 'odd' }
             ]
         }]

@@ -13,9 +13,8 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 
 /* Sidebar */
 .sidebar { width: 240px; background: var(--sidebar-bg); display: flex; flex-direction: column; padding: 24px 16px; flex-shrink: 0; }
-.sidebar-header { display: flex; align-items: center; gap: 12px; padding: 0 8px 24px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 24px; }
-.sidebar-header img { width: 108px; height: auto; display: block; }
-.sidebar-title { color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 0; line-height: 1.25; }
+.sidebar-header { display: flex; align-items: center; justify-content: center; padding: 0 8px 24px; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 24px; }
+.sidebar-header img { width: 120px; height: auto; display: block; }
 .sidebar-nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 12px; border: none; background: transparent; color: var(--sidebar-text); font-size: 14px; font-weight: 500; cursor: pointer; transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 0.1s ease-out; text-align: left; width: 100%; }
 .nav-item:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
@@ -75,7 +74,6 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .load-unmatched-note { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: rgba(239,68,68,0.10); color: #991b1b; font-size: 14px; line-height: 1.5; }
 .load-unmatched-title { margin: 0 0 6px; font-weight: 600; }
 .load-unmatched-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
-.load-semester-closed { font-family: inherit; font-size: 13px; font-weight: 600; color: var(--danger); background: rgba(239,68,68,0.10); padding: 2px 10px; border-radius: 999px; }
 .load-hours-empty { color: var(--text-secondary); }
 .btn-link {
     background: none; border: none; padding: 0; font: inherit; cursor: pointer;
@@ -154,11 +152,18 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .builder-slot-label {
     flex: 0 0 96px; padding: 10px; font-size: 12px; font-weight: 600; color: var(--text-sec);
     display: flex; align-items: center; border-right: 1px solid var(--border);
+    /* Stays in view while a narrow screen scrolls the days sideways. */
+    position: sticky; left: 0; z-index: 2; background: var(--card);
 }
-.builder-row-cells { display: flex; flex: 1; }
-.builder-day-header { flex: 1 0 130px; padding: 12px 8px; text-align: center; font-size: 13px; font-weight: 700; color: var(--text); border-right: 1px solid var(--border); }
+.builder-header-row .builder-slot-label { background: #f9fafb; }
+/* Every column takes an equal share and never grows to fit its content
+   (basis 0, min-width 0): with a content-sized basis one long subject widened
+   only its own cell, so on narrow screens a row stopped lining up with the
+   day headers. Below ~1040px the grid scrolls sideways instead. */
+.builder-row-cells { display: flex; flex: 1; min-width: 0; }
+.builder-day-header { flex: 1 1 0; min-width: 0; padding: 12px 8px; text-align: center; font-size: 13px; font-weight: 700; color: var(--text); border-right: 1px solid var(--border); }
 .builder-day-header:last-child { border-right: none; }
-.builder-cell { flex: 1 0 130px; min-height: 76px; border-right: 1px solid var(--border); padding: 6px; display: flex; }
+.builder-cell { flex: 1 1 0; min-width: 0; min-height: 76px; border-right: 1px solid var(--border); padding: 6px; display: flex; }
 .builder-cell:last-child { border-right: none; }
 
 .builder-add-btn {
@@ -177,7 +182,8 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .builder-add-btn:active { transform: scale(0.94); }
 .builder-add-btn.half { min-height: 100%; }
 
-.builder-cell-split { display: flex; gap: 6px; flex: 1; }
+.builder-cell-split { display: flex; gap: 6px; flex: 1; min-width: 0; }
+.builder-cell-split > * { flex: 1 1 0; min-width: 0; }
 
 /* Drag-and-drop: the card being dragged fades back, and every cell shows a
    soft target outline so it's obvious where it can land. */
@@ -203,7 +209,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 }
 .builder-lesson-card:hover { background: #bfdbfe; }
 .builder-lesson-card:active { transform: scale(0.97); }
-.builder-lesson-subject { font-size: 12.5px; font-weight: 700; line-height: 1.3; }
+.builder-lesson-subject { font-size: 12.5px; font-weight: 700; line-height: 1.3; hyphens: auto; overflow-wrap: anywhere; }
 .builder-lesson-meta { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: #3b5b99; }
 .builder-lesson-subgroup-tag { font-size: 10px; font-weight: 700; color: #d97706; text-transform: uppercase; letter-spacing: 0.03em; }
 .builder-lesson-room { font-size: 11px; color: #3b5b99; }
@@ -278,20 +284,40 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .load-plan-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 8px; }
 .load-plan-heading-row .subsection-title { margin-bottom: 0; }
 
-/* Семестр — один ряд: селектор активного + инлайн-форма нового */
-.load-semester-bar {
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-    padding: 14px 18px; margin-bottom: 8px;
+/* Семестр — карточка: выбор + статус сверху, факты, затем действия.
+   Формы изменения и нового семестра раскрываются внутри той же карточки. */
+.btn-sm { padding: 7px 14px; border-radius: 10px; font-size: 13px; }
+.sem-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 18px 20px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 16px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
-.load-semester-select-wrap { display: flex; align-items: center; gap: 10px; }
-.load-semester-select { font-weight: 600; min-width: 200px; }
-.load-semester-meta { font-size: 12px; color: var(--text-sec); white-space: nowrap; }
-.load-semester-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.load-semester-edit .form-input { width: auto; }
-.load-semester-add { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
-.load-semester-add .form-input { width: auto; min-width: 160px; }
-.load-weeks-input { width: 80px !important; min-width: 80px !important; flex: none; }
+.sem-head { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.sem-picker { display: flex; flex-direction: column; gap: 6px; min-width: 240px; }
+.sem-field-label { font-size: 12px; font-weight: 600; color: var(--text-sec); }
+.sem-select { font-weight: 600; width: 100%; }
+.sem-badges { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; }
+.sem-badge { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.sem-badge.is-active { color: #047857; background: rgba(16,185,129,0.12); }
+.sem-badge.is-closed { color: var(--danger); background: rgba(239,68,68,0.10); }
+.sem-new-btn { margin-left: auto; }
+.sem-facts {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0;
+    background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+}
+.sem-facts > div { background: var(--bg); padding: 10px 14px; }
+.sem-facts dt { font-size: 12px; color: var(--text-sec); margin-bottom: 2px; }
+.sem-facts dd { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.sem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sem-close-btn { margin-left: auto; margin-right: 0; }
+.sem-form { display: flex; flex-direction: column; gap: 12px; }
+.sem-add { border-top: 1px solid var(--border); padding-top: 16px; }
+.sem-form-title { font-size: 14px; font-weight: 700; margin: 0; }
+.sem-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.sem-form-grid.is-four { grid-template-columns: 2fr 1.4fr 0.8fr 1.2fr; }
+.sem-form-grid label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sem-form-grid .form-input { width: 100%; min-width: 0; }
+.sem-hint { margin: 0; font-size: 13px; color: var(--text-sec); }
 
 /* Преподаватели / дисциплины — карточки с превью-списком */
 .load-refs-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 8px; }
@@ -469,10 +495,12 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     .load-plan-form .form-input { width: 100%; min-width: 0; }
     .load-subgroup-input, .load-hours-input { width: 100% !important; }
 
-    .load-semester-bar { flex-direction: column; align-items: stretch; }
-    .load-semester-select-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
-    .load-semester-add { flex-direction: column; align-items: stretch; margin-left: 0; }
-    .load-semester-add .form-input, .load-weeks-input { width: 100% !important; min-width: 0; }
+    .sem-picker { min-width: 0; flex: 1 1 100%; }
+    .sem-badges { padding-bottom: 0; }
+    .sem-new-btn { margin-left: 0; }
+    .sem-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .sem-form-grid, .sem-form-grid.is-four { grid-template-columns: 1fr; }
+    .sem-close-btn { margin-left: 0; }
 
     .load-plan-toolbar { flex-direction: column; align-items: stretch; }
     .load-plan-filter-active { justify-content: space-between; }
@@ -552,4 +580,15 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     .modal-card { padding: 20px 16px 28px; }
     .section-title { font-size: 18px; }
     .btn { padding: 10px 16px; }
+}
+
+/* Reduced motion: people who turn motion down in their OS get instant state
+   changes instead of slides, springs and the endlessly floating circles. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }

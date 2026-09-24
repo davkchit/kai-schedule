@@ -127,18 +127,29 @@ body {
                 box-shadow 0.35s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
-/* Иконка */
-.icon {
-    margin-bottom: 32px;
+/* The logo sits above the card, not inside it: .page-stack groups the two
+   as one centered unit (body does the centering), so the card holds only
+   the form. Shared by the welcome, teacher and admin-login pages. */
+.page-stack {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    position: relative;
+    z-index: 1;
+}
+
+.page-logo {
+    display: flex;
     animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
-.icon img {
-    width: min(180px, 100%);
+.page-logo img {
+    display: block;
+    width: min(148px, 60vw);
     height: auto;
     filter: drop-shadow(0 4px 12px rgba(124, 185, 232, 0.3));
-    display: block;
-    margin: 0 auto;
 }
 
 /* Заголовок */
@@ -438,11 +449,9 @@ body {
         border-radius: 24px;
     }
 
-    .icon {
-        margin-bottom: 24px;
-    }
+    .page-stack { gap: 16px; }
 
-    .icon img { width: min(152px, 100%); }
+    .page-logo img { width: min(128px, 50vw); }
 
     .title {
         font-size: 26px;
@@ -548,3 +557,14 @@ body {
 [data-theme="dark"] .back-button { color: #94a3b8; }
 [data-theme="dark"] .back-button:hover { background: rgba(255,255,255,0.06); color: #f1f5f9; }
 [data-theme="dark"] .circle { opacity: 0.15; }
+
+/* Reduced motion: people who turn motion down in their OS get instant state
+   changes instead of slides, springs and the endlessly floating circles. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

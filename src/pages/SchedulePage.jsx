@@ -1,9 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
 import { capitalize, formatLocalDateForApi, normalizeDate } from '../lib/date';
 import { clearSelection, getSavedSelection, getSavedTheme, saveTheme } from '../lib/storage';
 import { resolveLessonsForDay } from '../lib/scheduleResolve';
+import {
+    maxIso,
+    planInitialWindow,
+    parseIsoDate,
+    requestDays,
+    shiftIsoDate
+} from '../lib/scheduleWindow';
 
 // How far ahead the calendar lets you browse: the end of the month one year
 // from today. It used to be a fixed date (31.12.2026), which would have left
@@ -14,10 +21,25 @@ function getMaxDate() {
     return new Date(today.getFullYear() + 1, today.getMonth() + 1, 0);
 }
 
+// Browsing back is bounded like browsing forward: a year either side of today.
+// Nothing older is worth a timetable, and an unbounded strip would keep asking
+// the server for empty weeks for as long as somebody kept scrolling.
+function getMinDate() {
+    const today = new Date();
+    return new Date(today.getFullYear() - 1, today.getMonth(), 1);
+}
+
 const MAX_DATE = getMaxDate();
-const SCHEDULE_WINDOW_DAYS = 28;
+const MIN_DATE = getMinDate();
+const WINDOW_LIMITS = {
+    earliest: formatLocalDateForApi(MIN_DATE),
+    latest: formatLocalDateForApi(MAX_DATE)
+};
 const CALENDAR_HEADERS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const BRAND_LOGO_SRC = '/assets/logo.png';
+// How long a pair that appeared or vanished in a live update animates — must
+// cover the lesson-leave / lesson-enter keyframes in schedule.css.
+const LESSON_MOTION_MS = 500;
 const REST_DAY_GIF_SRC = '/assets/party-confetti.gif';
 
 // Display only: the stored lesson_type 'Лаб' must stay as is, it's part of how a pair matches its load-plan row.
@@ -45,14 +67,21 @@ export default function SchedulePage() {
     const dateSelectorRef = useRef(null);
     const burgerMenuRef = useRef(null);
     const scheduleGridRef = useRef(null);
-    const appContainerRef = useRef(null);
-    const gridWrapRef = useRef(null);
+    const dayTabsRef = useRef(null);
 
     const [savedSelection, setSavedSelection] = useState(() => getSavedSelection());
     const [currentDate, setCurrentDate] = useState(() => normalizeDate(new Date()));
     const [pickerDate, setPickerDate] = useState(() => normalizeDate(new Date()));
     const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
-    const [scheduleData, setScheduleData] = useState(null);
+    // What is on screen: a window of consecutive days [from, to] (ISO dates) around
+    // the chosen day, the /api/schedule response that covers it, and a token that
+    // changes whenever the window is rebuilt around a date.
+    const [schedule, setSchedule] = useState(null);
+    const scheduleData = schedule ? schedule.data : null;
+    // 'YYYY-MM' of the day at the left edge of the strip, once the reader scrolls.
+    const [visibleMonth, setVisibleMonth] = useState(null);
+    // Mobile list view: how many days before the chosen date it also shows.
+    const [listExtraDays, setListExtraDays] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState('');
     const [isCookieVisible, setIsCookieVisible] = useState(true);
@@ -67,9 +96,36 @@ export default function SchedulePage() {
     // schedule is still on screen — better than replacing it with an error.
     const [staleNotice, setStaleNotice] = useState('');
     const lastFetchTimeRef = useRef(0);
-    // What the loaded response actually covers, so browsing inside it costs
-    // no requests: one 28-day window already holds every day of that month.
-    const loadedRangeRef = useRef(null);
+    const scheduleRef = useRef(null);
+    scheduleRef.current = schedule;
+    const currentDateRef = useRef(currentDate);
+    currentDateRef.current = currentDate;
+    // The calendar day the page last saw — see rollOverToNewDay.
+    const todayIsoRef = useRef(formatLocalDateForApi(new Date()));
+
+    // An app left open or in the background overnight still held yesterday
+    // as the chosen day: a student opening it in the morning saw yesterday's
+    // pairs. When the date has changed, a reader who was on "today" follows it
+    // to the new today; one who picked another date keeps it. Returns whether
+    // the day changed (the schedule is then reloaded around the new day).
+    function rollOverToNewDay() {
+        const todayIso = formatLocalDateForApi(new Date());
+
+        if (todayIso === todayIsoRef.current) {
+            return false;
+        }
+
+        const wasOnToday = formatLocalDateForApi(currentDateRef.current) === todayIsoRef.current;
+        todayIsoRef.current = todayIso;
+
+        if (wasOnToday) {
+            setCurrentDate(normalizeDate(new Date()));
+        }
+
+        setRefreshKey((k) => k + 1);
+        return true;
+    }
+    const anchorCounterRef = useRef(0);
 
     useEffect(() => {
         const selection = getSavedSelection();
@@ -79,7 +135,16 @@ export default function SchedulePage() {
             return;
         }
 
-        setSavedSelection(selection);
+        // The same group as the one already held must not replace it: a new object
+        // with identical contents restarts the load effect, and every visit to the
+        // page then asks the server for the schedule twice.
+        setSavedSelection((previous) => (
+            previous
+            && previous.group_id === selection.group_id
+            && (previous.subgroup || 0) === (selection.subgroup || 0)
+                ? previous
+                : selection
+        ));
     }, [navigate]);
 
     useEffect(() => {
@@ -135,23 +200,24 @@ export default function SchedulePage() {
 
         const groupId = savedSelection.group_id;
         const subgroup = savedSelection.subgroup || 0;
-        const wantedDate = formatLocalDateForApi(currentDate);
-        const loaded = loadedRangeRef.current;
+        const wantedIso = formatLocalDateForApi(currentDate);
+        const loaded = scheduleRef.current;
         const alreadyLoaded = loaded
             && loaded.groupId === groupId
             && loaded.subgroup === subgroup
             && loaded.refreshKey === refreshKey
-            && wantedDate >= loaded.from
-            && wantedDate <= loaded.to;
+            && wantedIso >= loaded.from
+            && wantedIso <= loaded.to;
 
         if (alreadyLoaded) {
-            // This day is inside the window already on screen. Tapping through
-            // a week used to fire one 28-day request per tap — with a whole
-            // campus behind a single address, that is what actually generates
-            // the load.
+            // The day is inside the run already on screen, so picking it only
+            // scrolls there. Tapping through a week used to fire one request per
+            // tap — with a whole campus behind a single address, that is what
+            // actually generates the load.
             return undefined;
         }
 
+        const { from, to } = planInitialWindow(wantedIso, WINDOW_LIMITS);
         let ignore = false;
 
         async function loadSchedule() {
@@ -159,28 +225,13 @@ export default function SchedulePage() {
             setErrorMessage('');
 
             try {
-                const response = await fetch(
-                    `/api/schedule/${groupId}?subgroup=${subgroup}&date=${wantedDate}&days=${SCHEDULE_WINDOW_DAYS}`
-                );
-
-                if (!response.ok) {
-                    const error = new Error('Failed to fetch schedule');
-                    error.status = response.status;
-                    throw error;
-                }
-
-                const data = await response.json();
+                const data = await fetchScheduleWindow(groupId, subgroup, from, to);
 
                 if (!ignore) {
-                    setScheduleData(data);
+                    anchorCounterRef.current += 1;
+                    setSchedule({ groupId, subgroup, refreshKey, from, to, anchorToken: anchorCounterRef.current, data });
+                    setListExtraDays(0);
                     setStaleNotice('');
-                    loadedRangeRef.current = {
-                        groupId,
-                        subgroup,
-                        refreshKey,
-                        from: data.requested_date || wantedDate,
-                        to: data.range_end || wantedDate
-                    };
                     lastFetchTimeRef.current = Date.now();
                 }
             } catch (error) {
@@ -191,7 +242,7 @@ export default function SchedulePage() {
                 // Keep whatever is already on screen. A rate-limited or failing
                 // server used to blank the page even though the phone was
                 // holding a perfectly good copy of the schedule.
-                if (scheduleData) {
+                if (scheduleRef.current) {
                     setStaleNotice(
                         error.status === 429
                             ? 'Сервер сейчас загружен — показываем сохранённое расписание'
@@ -218,15 +269,32 @@ export default function SchedulePage() {
         return () => {
             ignore = true;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- scheduleData is
-        // read only to decide between "keep showing it" and "show an error".
     }, [currentDate, savedSelection, refreshKey]);
 
-    useEffect(() => {
-        if (scheduleGridRef.current) {
-            scheduleGridRef.current.scrollLeft = 0;
+    // Puts the chosen day at the left edge whenever the window is rebuilt around
+    // it, a different day is picked, or the layout changes.
+    useLayoutEffect(() => {
+        if (!schedule || isLoading || !isAssetsReady) {
+            return;
         }
-    }, [currentDate, scheduleData]);
+
+        const iso = formatLocalDateForApi(currentDate);
+
+        if (iso < schedule.from || iso > schedule.to) {
+            return;
+        }
+
+        if (!isMobileView) {
+            alignToElement(scheduleGridRef.current, `[data-date="${iso}"]`);
+        } else if (currentView === 'day') {
+            // The day the reader last tapped comes first: after a refresh that
+            // is the one they were looking at, not necessarily today.
+            alignToElement(dayTabsRef.current, `[data-target-id="${activeMobileTab}"]`)
+                || alignToElement(dayTabsRef.current, `[data-date="${iso}"]`);
+        }
+        // Re-aligns only when the date, the run or the layout changes, never on an ordinary render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentDate, schedule?.anchorToken, isLoading, isAssetsReady, isMobileView, currentView]);
 
     useEffect(() => {
         const grid = scheduleGridRef.current;
@@ -265,30 +333,57 @@ export default function SchedulePage() {
         };
     }, [isAssetsReady]);
 
-    useLayoutEffect(() => {
-        const appContainer = appContainerRef.current;
-        const gridWrap = gridWrapRef.current;
-        if (!appContainer || !gridWrap) return;
+    // Desktop: watches the strip's horizontal scroll to keep the date button on
+    // the month of the day at the left edge.
+    useEffect(() => {
+        const grid = scheduleGridRef.current;
 
-        // Column divider lines run the full height of the grid, so their bottom
-        // margin is just this element's own padding-bottom — keep it equal to
-        // the space the header+toolbar already take above the grid, so the
-        // dividers read as evenly framed rather than nearly touching the bottom.
-        // Desktop-only: the mobile layout hides the toolbar and uses its own
-        // fixed bottom padding for the day-card list.
-        function syncBottomGap() {
-            if (window.matchMedia('(max-width: 768px)').matches) {
-                gridWrap.style.removeProperty('--grid-bottom-gap');
+        if (!grid || isMobileView) {
+            return undefined;
+        }
+
+        let frame = 0;
+
+        function inspect() {
+            frame = 0;
+            const columns = grid.querySelectorAll('.day-column');
+
+            if (columns.length === 0) {
                 return;
             }
 
-            const topGap = gridWrap.getBoundingClientRect().top - appContainer.getBoundingClientRect().top;
-            gridWrap.style.setProperty('--grid-bottom-gap', `${Math.max(0, Math.round(topGap))}px`);
+            const first = columns[0].getBoundingClientRect();
+
+            if (!first.width) {
+                return;
+            }
+
+            // The day at the left edge is the first column at least half in view.
+            const scrolledAway = grid.getBoundingClientRect().left - first.left;
+            const index = Math.min(columns.length - 1, Math.max(0, Math.round(scrolledAway / first.width)));
+            const leftDate = columns[index].dataset.date;
+
+            if (leftDate) {
+                setVisibleMonth(leftDate.slice(0, 7));
+            }
+
         }
 
-        syncBottomGap();
-        window.addEventListener('resize', syncBottomGap);
-        return () => window.removeEventListener('resize', syncBottomGap);
+        function onScroll() {
+            if (!frame) {
+                frame = requestAnimationFrame(inspect);
+            }
+        }
+
+        grid.addEventListener('scroll', onScroll, { passive: true });
+
+        return () => {
+            grid.removeEventListener('scroll', onScroll);
+
+            if (frame) {
+                cancelAnimationFrame(frame);
+            }
+        };
     }, [isAssetsReady, isMobileView]);
 
     useEffect(() => {
@@ -297,7 +392,11 @@ export default function SchedulePage() {
 
     useEffect(() => {
         function handleVisibilityChange() {
-            if (document.visibilityState === 'visible' && Date.now() - lastFetchTimeRef.current > 60_000) {
+            if (document.visibilityState !== 'visible' || rollOverToNewDay()) {
+                return;
+            }
+
+            if (Date.now() - lastFetchTimeRef.current > 60_000) {
                 setRefreshKey((k) => k + 1);
             }
         }
@@ -305,11 +404,74 @@ export default function SchedulePage() {
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
     }, []);
 
-    const scheduleDays = buildScheduleDays(scheduleData, currentDate);
+    // While the page stays open and visible, re-read the same window once a
+    // minute, so a pair the specialist removes disappears without a relaunch.
+    // Unlike refreshKey this is silent: same days, no loading state, no
+    // re-anchoring — the reader's scroll position and chosen day stay put, and
+    // nothing re-renders at all when the schedule hasn't changed. A hidden
+    // page (app in the background, phone locked) sends nothing.
+    useEffect(() => {
+        const timer = window.setInterval(async () => {
+            const loaded = scheduleRef.current;
+
+            if (document.visibilityState !== 'visible' || rollOverToNewDay()) {
+                return; // hidden, or midnight passed with the page open: reloaded around the new day
+            }
+
+            if (!loaded || Date.now() - lastFetchTimeRef.current < 55_000) {
+                return;
+            }
+
+            try {
+                // 'no-cache' revalidates with the server instead of reusing the
+                // browser's copy from up to a minute ago.
+                const data = await fetchScheduleWindow(loaded.groupId, loaded.subgroup, loaded.from, loaded.to, 'no-cache');
+
+                if (scheduleRef.current !== loaded) {
+                    return; // the reader moved to another window meanwhile
+                }
+
+                lastFetchTimeRef.current = Date.now();
+
+                if (JSON.stringify(data) !== JSON.stringify(loaded.data)) {
+                    // previousData lets buildScheduleDays keep a cancelled pair
+                    // on screen just long enough to animate it away (and mark a
+                    // new one to animate in); then it is dropped.
+                    setSchedule({ ...loaded, data, previousData: loaded.data });
+                    window.setTimeout(() => {
+                        setSchedule((current) => (current && current.data === data && current.previousData
+                            ? { ...current, previousData: null }
+                            : current));
+                    }, LESSON_MOTION_MS);
+                }
+            } catch {
+                // Keep what is on screen; the next tick tries again.
+            }
+        }, 60_000);
+
+        return () => window.clearInterval(timer);
+    }, []);
+
+    const scheduleDays = useMemo(() => buildScheduleDays(schedule), [schedule]);
     const calendarDays = buildCalendarDays(pickerDate, currentDate);
 
+    // The list view on a phone starts at the chosen day. Earlier days are added
+    // by a button rather than by scrolling up: the page header sits above the
+    // list, and days appearing there would push it out of the reader's reach.
+    const currentIso = formatLocalDateForApi(currentDate);
+    const listStartIso = schedule
+        ? maxIso(shiftIsoDate(currentIso, -listExtraDays), schedule.from)
+        : currentIso;
+    const gridDays = isMobileView ? scheduleDays.filter((day) => day.iso >= listStartIso) : scheduleDays;
+    const canShowEarlierDays = Boolean(schedule) && listStartIso > schedule.from;
+
+    // The date button names the month of the day at the left edge of the strip,
+    // which is what the reader is looking at, not the day they once picked.
+    const labelDate = visibleMonth
+        ? new Date(Number(visibleMonth.slice(0, 4)), Number(visibleMonth.slice(5, 7)) - 1, 1)
+        : currentDate;
     const dateSelectorText = capitalize(
-        currentDate.toLocaleString('ru-RU', { month: 'long', year: 'numeric' }).replace(' г.', '')
+        labelDate.toLocaleString('ru-RU', { month: 'long', year: 'numeric' }).replace(' г.', '')
     );
     const currentMonthYear = capitalize(
         pickerDate.toLocaleString('ru-RU', { month: 'long', year: 'numeric' }).replace(' г.', '')
@@ -317,6 +479,13 @@ export default function SchedulePage() {
     const isNextMonthDisabled =
         pickerDate.getFullYear() === MAX_DATE.getFullYear() &&
         pickerDate.getMonth() === MAX_DATE.getMonth();
+    const isPrevMonthDisabled =
+        pickerDate.getFullYear() === MIN_DATE.getFullYear() &&
+        pickerDate.getMonth() === MIN_DATE.getMonth();
+
+    function showEarlierDays() {
+        setListExtraDays(listExtraDays + 14);
+    }
 
     function switchSchedule() {
         clearSelection();
@@ -332,13 +501,17 @@ export default function SchedulePage() {
     }
 
     function toggleDatePicker() {
-        setPickerDate(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
+        setPickerDate(new Date(labelDate.getFullYear(), labelDate.getMonth(), 1));
         setIsDatePickerOpen((previous) => !previous);
     }
 
     function shiftPickerMonth(offset) {
         setPickerDate((previous) => {
             const next = new Date(previous.getFullYear(), previous.getMonth() + offset, 1);
+
+            if (next < MIN_DATE) {
+                return previous;
+            }
 
             if (
                 next.getFullYear() > MAX_DATE.getFullYear() ||
@@ -368,7 +541,29 @@ export default function SchedulePage() {
         setIsBurgerOpen(false);
     }
 
+    // A pair that just appeared or vanished in a live update is wrapped for
+    // its animation: the wrapper's height opens or closes (so the pairs below
+    // glide instead of jumping) while the card itself fades. Once the motion
+    // is over it renders bare again, like every other pair.
     function renderLessonCard(lesson, mobile = false) {
+        const card = renderLessonCardBody(lesson, mobile);
+
+        if (!lesson.motion) {
+            return card;
+        }
+
+        return (
+            <div
+                className={`lesson-motion is-${lesson.motion}`}
+                key={`${lesson.id}-${lesson.motion}${mobile ? '-mobile' : ''}`}
+                aria-hidden={lesson.motion === 'leaving' ? 'true' : undefined}
+            >
+                <div className="lesson-motion-inner">{card}</div>
+            </div>
+        );
+    }
+
+    function renderLessonCardBody(lesson, mobile) {
         const subgroupTag = lesson.subgroup > 0
             ? <span className={mobile ? 'mobile-tag-subgroup' : 'tag-subgroup'}>{lesson.subgroup} подгр.</span>
             : null;
@@ -436,12 +631,23 @@ export default function SchedulePage() {
     }
 
     return (
-        <div className="app-container" ref={appContainerRef}>
+        <div className="app-container">
             <header className="main-header">
                 <div className="logo-area">
                     <img src={BRAND_LOGO_SRC} alt="Логотип КАИ" width="110" height="46" />
                 </div>
-                <h1 className="page-title">Расписание занятий</h1>
+                <h1 className="page-title desktop-only">Расписание занятий</h1>
+                {/* On a phone the header says whose schedule this is instead —
+                    the page itself already makes "расписание" obvious. Just a
+                    label: switching groups stays in the burger menu. */}
+                {savedSelection?.group_name && (
+                    <p className="header-group mobile-only">
+                        <span className="header-group-name">{savedSelection.group_name}</span>
+                        {Number(savedSelection.subgroup) > 0 && (
+                            <span className="header-group-sub">{savedSelection.subgroup} подгруппа</span>
+                        )}
+                    </p>
+                )}
                 <div className="header-controls">
                     <a
                         href="/"
@@ -549,6 +755,7 @@ export default function SchedulePage() {
                                 id="prevMonthBtn"
                                 onClick={goToPreviousMonth}
                                 aria-label="Предыдущий месяц"
+                                disabled={isPrevMonthDisabled}
                             >
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                     <polyline points="15 18 9 12 15 6"></polyline>
@@ -593,6 +800,8 @@ export default function SchedulePage() {
                                         })}
                                         onClick={() => {
                                             setCurrentDate(item.date);
+                                            setVisibleMonth(null);
+                                            setListExtraDays(0);
                                             setIsDatePickerOpen(false);
                                         }}
                                     >
@@ -607,7 +816,6 @@ export default function SchedulePage() {
 
             <div
                 className="schedule-grid-wrap"
-                ref={gridWrapRef}
                 style={isMobileView && currentView === 'day' ? { display: 'none' } : undefined}
             >
                 <main
@@ -627,7 +835,6 @@ export default function SchedulePage() {
                             return;
                         }
 
-                        event.preventDefault();
                         grid.scrollLeft += event.deltaY;
                     }}
                 >
@@ -644,8 +851,17 @@ export default function SchedulePage() {
                     {!isLoading && staleNotice && scheduleData && (
                         <div className="schedule-stale" role="status">{staleNotice}</div>
                     )}
-                    {!isLoading && scheduleData && scheduleDays.map((day) => (
-                        <div className="day-column" key={day.id}>
+                    {!isLoading && scheduleData && isMobileView && canShowEarlierDays && (
+                        <button
+                            type="button"
+                            className="load-earlier-btn"
+                            onClick={showEarlierDays}
+                        >
+                            Показать предыдущие дни
+                        </button>
+                    )}
+                    {!isLoading && scheduleData && gridDays.map((day) => (
+                        <div className="day-column" key={day.id} data-date={day.iso}>
                             <div className="day-header">
                                 <div className={`day-badge ${day.isToday ? '' : 'hidden'}`}>Сегодня</div>
                                 <div className="day-title">{day.title}</div>
@@ -666,12 +882,13 @@ export default function SchedulePage() {
                 style={isMobileView && currentView === 'day' ? { display: 'flex' } : { display: 'none' }}
             >
                 <div className="day-tabs-container">
-                    <div className="day-tabs" id="mobileDayTabs">
+                    <div className="day-tabs" id="mobileDayTabs" ref={dayTabsRef}>
                         {scheduleDays.map((day) => (
                             <button
                                 key={day.id}
                                 className={`day-tab ${activeMobileTab === day.id ? 'active' : ''} ${day.isToday ? 'is-today' : ''}`}
                                 data-target-id={day.id}
+                                data-date={day.iso}
                                 onClick={() => setActiveMobileTab(day.id)}
                             >
                                 <div className="day-tab-name">{day.shortName}</div>
@@ -742,26 +959,80 @@ export default function SchedulePage() {
     );
 }
 
-function buildScheduleDays(scheduleData, currentDate) {
-    if (!scheduleData) {
+async function fetchScheduleWindow(groupId, subgroup, from, to, cacheMode = 'default') {
+    const response = await fetch(
+        `/api/schedule/${groupId}?subgroup=${subgroup}&date=${from}&days=${requestDays(from, to)}`,
+        { cache: cacheMode }
+    );
+
+    if (!response.ok) {
+        const error = new Error('Failed to fetch schedule');
+        error.status = response.status;
+        throw error;
+    }
+
+    return response.json();
+}
+
+/** Scrolls a horizontal strip so the element matching `selector` sits at its left edge. */
+function alignToElement(container, selector) {
+    if (!container) {
+        return false;
+    }
+
+    const target = container.querySelector(selector);
+
+    if (!target) {
+        return false;
+    }
+
+    container.scrollLeft += target.getBoundingClientRect().left - container.getBoundingClientRect().left;
+
+    return true;
+}
+
+/**
+ * One day's pairs across a live update: the new pairs, plus the pairs that
+ * just disappeared (marked 'leaving', kept only while they animate out);
+ * pairs in a slot that was empty before are marked 'entering'. A slot is its
+ * time and subgroup — an edited pair keeps its slot, so it simply updates in
+ * place instead of fading out and back in.
+ */
+function withLessonMotion(previousLessons, nextLessons) {
+    const slotOf = (lesson) => `${lesson.time_start}|${lesson.time_end}|${lesson.subgroup || 0}`;
+    const previousSlots = new Set(previousLessons.map(slotOf));
+    const nextSlots = new Set(nextLessons.map(slotOf));
+
+    const current = nextLessons.map((lesson) => (
+        previousSlots.has(slotOf(lesson)) ? lesson : { ...lesson, motion: 'entering' }
+    ));
+    const leaving = previousLessons
+        .filter((lesson) => !nextSlots.has(slotOf(lesson)))
+        .map((lesson) => ({ ...lesson, motion: 'leaving' }));
+
+    return [...current, ...leaving].sort((a, b) => a.time_start.localeCompare(b.time_start));
+}
+
+function buildScheduleDays(schedule) {
+    if (!schedule) {
         return [];
     }
 
+    const scheduleData = schedule.data;
     const today = normalizeDate(new Date());
     const result = [];
-    const visibleDaysCount = scheduleData.range_days || SCHEDULE_WINDOW_DAYS;
+    const last = parseIsoDate(schedule.to);
 
-    let iterDate = normalizeDate(currentDate);
-    let dayOffset = 0;
+    let iterDate = parseIsoDate(schedule.from);
 
-    while (iterDate <= MAX_DATE && dayOffset < visibleDaysCount) {
-        dayOffset += 1;
-
+    while (iterDate <= last && iterDate <= MAX_DATE) {
         const dayOfWeek = iterDate.getDay();
         // Semester, week number, parity and "week with its own rows" are all
-        // decided in src/lib/scheduleResolve.js — the same code the year
+        // decided in src/lib/scheduleResolve.js, the same code the year
         // lifecycle test runs.
-        const lessons = resolveLessonsForDay(scheduleData, iterDate);
+        const lessons = schedule.previousData
+            ? withLessonMotion(resolveLessonsForDay(schedule.previousData, iterDate), resolveLessonsForDay(scheduleData, iterDate))
+            : resolveLessonsForDay(scheduleData, iterDate);
 
         const isRestDay = (dayOfWeek === 0 || dayOfWeek === 6) && lessons.length === 0;
         const timeRange = lessons.length
@@ -771,6 +1042,7 @@ function buildScheduleDays(scheduleData, currentDate) {
 
         result.push({
             id: dateId,
+            iso: formatLocalDateForApi(iterDate),
             date: new Date(iterDate),
             isToday: iterDate.getTime() === today.getTime(),
             title: capitalize(

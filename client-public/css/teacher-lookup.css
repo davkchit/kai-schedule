@@ -6,20 +6,6 @@
    dense enterprise grid. Below 760px the same <table> re-lays itself out as
    stacked cards — one DOM, two shapes. */
 
-/* .tl-page stacks a small header above the same centered card welcome.css
-   already lays out — body still does the centering, this just groups the
-   header+card as one unit so the pair reads as this page's own identity
-   rather than another step of the group-search wizard. */
-.tl-page {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 20px;
-    position: relative;
-    z-index: 1;
-}
-
 /* The search state wants welcome.css's narrow 600px card; the table needs
    room for five columns. Widening the container (rather than the card) keeps
    the card's own padding/radius rules untouched. */
@@ -29,20 +15,6 @@
 
 .tl-page.is-wide .container {
     max-width: 1120px;
-}
-
-/* Just the mark, styled like the logo on the welcome card — no pill, no
-   caption. The card underneath already says what the page is. */
-.tl-page-header {
-    display: flex;
-    animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
-}
-
-.tl-page-header img {
-    display: block;
-    width: min(148px, 60vw);
-    height: auto;
-    filter: drop-shadow(0 4px 12px rgba(124, 185, 232, 0.3));
 }
 
 /* ── Results card ─────────────────────────────────────────────────── */
@@ -336,9 +308,6 @@
 .tl-type-badge.tone-lec { background: rgba(16, 185, 129, 0.14); color: #047857; }
 .tl-type-badge.tone-pr { background: rgba(245, 158, 11, 0.16); color: #b45309; }
 .tl-type-badge.tone-lab { background: rgba(139, 92, 246, 0.14); color: #6d28d9; }
-.tl-type-badge.tone-kons { background: rgba(59, 130, 246, 0.14); color: #1d4ed8; }
-.tl-type-badge.tone-zach { background: rgba(20, 184, 166, 0.14); color: #0f766e; }
-.tl-type-badge.tone-exam { background: rgba(239, 68, 68, 0.13); color: #b91c1c; }
 
 /* ── Hours cell ───────────────────────────────────────────────────── */
 
@@ -410,114 +379,6 @@
     color: var(--text-primary);
 }
 
-/* ── Mobile: the same table, re-laid-out as stacked cards ─────────── */
-
-@media (max-width: 760px) {
-    .card.tl-card-results {
-        padding: 30px 22px 24px;
-    }
-
-    .tl-toolbar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 12px;
-    }
-
-    .tl-list-search {
-        order: -1;
-    }
-
-    .tl-list-search input {
-        width: 100%;
-    }
-
-    .tl-table-scroll {
-        overflow-x: visible;
-        margin: 0;
-        padding: 0;
-    }
-
-    .tl-table,
-    .tl-table tbody {
-        display: block;
-    }
-
-    /* Column headers stop making sense once each row is its own card —
-       every cell carries its own label via data-label instead. */
-    .tl-table thead {
-        display: none;
-    }
-
-    .tl-table tbody tr {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        grid-template-areas:
-            "type discipline"
-            "group date"
-            "hours hours";
-        gap: 8px 10px;
-        align-items: center;
-        margin-top: 12px;
-        padding: 14px 16px;
-        border-radius: 16px;
-        background: rgba(240, 249, 255, 0.85);
-    }
-
-    .tl-table tbody tr:hover td,
-    .tl-table tbody tr:hover td:first-child,
-    .tl-table tbody tr:hover td:last-child {
-        background: none;
-        border-radius: 0;
-    }
-
-    .tl-table td {
-        display: block;
-        padding: 0;
-        border: none;
-        font-size: 14px;
-    }
-
-    .tl-table td:first-child,
-    .tl-table td:last-child {
-        padding: 0;
-        width: auto;
-    }
-
-    .tl-table td:nth-child(1) { grid-area: type; }
-    .tl-table td:nth-child(2) { grid-area: discipline; }
-    .tl-table td:nth-child(3) { grid-area: group; }
-    .tl-table td:nth-child(4) { grid-area: date; }
-    .tl-table td:nth-child(5) { grid-area: hours; margin-top: 2px; }
-
-    .tl-table td:nth-child(3)::before,
-    .tl-table td:nth-child(4)::before {
-        content: attr(data-label) ': ';
-        color: var(--gray-light);
-    }
-
-    .tl-table td:nth-child(4) {
-        text-align: right;
-    }
-
-    .tl-discipline {
-        font-size: 15px;
-    }
-
-    .tl-totals {
-        justify-content: space-between;
-    }
-}
-
-@media (max-width: 480px) {
-    .tl-teacher-name {
-        font-size: 22px;
-    }
-
-    .tl-results-top {
-        margin-bottom: 18px;
-    }
-}
-
 /* ── Dark theme ───────────────────────────────────────────────────── */
 
 [data-theme="dark"] .tl-teacher-name,
@@ -572,17 +433,290 @@
 [data-theme="dark"] .tl-type-badge.tone-lec { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
 [data-theme="dark"] .tl-type-badge.tone-pr { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
 [data-theme="dark"] .tl-type-badge.tone-lab { background: rgba(139, 92, 246, 0.22); color: #c4b5fd; }
-[data-theme="dark"] .tl-type-badge.tone-kons { background: rgba(59, 130, 246, 0.22); color: #93c5fd; }
-[data-theme="dark"] .tl-type-badge.tone-zach { background: rgba(20, 184, 166, 0.2); color: #5eead4; }
-[data-theme="dark"] .tl-type-badge.tone-exam { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
 
 [data-theme="dark"] .tl-hours-value.is-complete {
     color: #34d399;
 }
 
+/* ── Phone: its own layout, not the table squeezed ────────────────── */
+
+/* Phone-only blocks: the summary card and the list of cards. */
+.tl-summary,
+.tl-cards {
+    display: none;
+}
+
 @media (max-width: 760px) {
-    [data-theme="dark"] .tl-table tbody tr {
-        background: rgba(30, 41, 59, 0.7);
+    /* The results sit straight on the page, like the student schedule —
+       a card inside a card left no room on a phone. */
+    .card.tl-card-results,
+    [data-theme="dark"] .card.tl-card-results {
+        padding: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+        border-radius: 0;
+    }
+
+    .tl-page.is-wide .container {
+        max-width: 100%;
+    }
+
+    /* Every wrapper up to the page may shrink below its content's width;
+       otherwise the day strip's full length set the page's width and the
+       centered page spilled off both edges of the screen. */
+    #root,
+    .tl-page,
+    .tl-page .container,
+    .card.tl-card-results {
+        min-width: 0;
+    }
+
+    .tl-results {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-width: 0;
+    }
+
+    .tl-results-top {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        margin-bottom: 0;
+        order: 1;
+    }
+
+    .tl-teacher-name {
+        font-size: 28px;
+    }
+
+    .tl-semester-select {
+        font-size: 16px; /* below 16px iOS zooms the page on focus */
+    }
+
+    .back-button.tl-back {
+        align-self: flex-start;
+        margin-left: -12px;
+        font-size: 14px;
+    }
+
+    /* Tabs and search become separate rows of the column so the summary can
+       sit between them. */
+    .tl-toolbar {
+        display: contents;
+    }
+
+    .tl-day-tabs {
+        order: 2;
+        min-width: 0; /* without it the strip widened the page past the screen */
+        gap: 8px;
+        margin: 0 -16px;
+        padding: 2px 16px;
+    }
+
+    .tl-day-tab {
+        min-width: 58px;
+        padding: 10px 12px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        color: #6b7280;
+        font-size: 13px;
+    }
+
+    .tl-day-tab:hover {
+        background: #ffffff;
+        color: #6b7280;
+    }
+
+    .tl-day-tab.is-active,
+    .tl-day-tab.is-active:hover {
+        background: #3b82f6;
+        border-color: #3b82f6;
+        color: #ffffff;
+    }
+
+    .tl-day-tab.is-active .tl-day-date {
+        opacity: 0.9;
+    }
+
+    .tl-summary {
+        order: 3;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        padding: 16px 0;
+        background: #ffffff;
+        border-radius: 20px;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+    }
+
+    .tl-summary-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 0 18px;
+        min-width: 0;
+    }
+
+    .tl-summary-cell + .tl-summary-cell {
+        border-left: 1px solid rgba(15, 23, 42, 0.08);
+    }
+
+    .tl-summary-label {
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--gray-light);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .tl-summary-value {
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-primary);
+    }
+
+    .tl-summary-value.is-secondary {
+        font-size: 20px;
+        padding-top: 5px;
+        color: #475569;
+    }
+
+    .tl-list-search {
+        order: 4;
+        background: #ffffff;
+        border-radius: 14px;
+    }
+
+    .tl-list-search input {
+        width: 100%;
+        font-size: 16px;
+    }
+
+    .tl-note-empty {
+        order: 5;
+    }
+
+    .tl-table-scroll,
+    .tl-totals {
+        display: none;
+    }
+
+    .tl-cards {
+        order: 5;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        animation: fadeIn 0.35s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+    }
+
+    .tl-card-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px 14px;
+        padding: 16px;
+        background: #ffffff;
+        border-radius: 18px;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+    }
+
+    .tl-card-row .tl-type-badge {
+        align-self: start;
+        min-width: 46px;
+    }
+
+    .tl-card-main {
+        min-width: 0;
+    }
+
+    .tl-card-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1.3;
+        color: var(--text-primary);
+    }
+
+    .tl-card-meta {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: var(--text-secondary);
+    }
+
+    .tl-card-hours {
+        font-size: 17px;
+        font-weight: 700;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-primary);
+    }
+
+    .tl-card-hours.is-complete {
+        color: #059669;
+    }
+
+    .tl-card-progress {
+        grid-column: 1 / -1;
+        min-width: 0;
+        height: 5px;
+    }
+
+    /* Dark theme */
+    [data-theme="dark"] .tl-day-tab,
+    [data-theme="dark"] .tl-day-tab:hover,
+    [data-theme="dark"] .tl-summary,
+    [data-theme="dark"] .tl-list-search,
+    [data-theme="dark"] .tl-card-row {
+        background: #1e293b;
+        border-color: #334155;
+        box-shadow: none;
+    }
+
+    [data-theme="dark"] .tl-day-tab,
+    [data-theme="dark"] .tl-day-tab:hover {
+        color: #94a3b8;
+    }
+
+    [data-theme="dark"] .tl-day-tab.is-active,
+    [data-theme="dark"] .tl-day-tab.is-active:hover {
+        background: #3b82f6;
+        border-color: #3b82f6;
+        color: #ffffff;
+    }
+
+    [data-theme="dark"] .tl-summary-cell + .tl-summary-cell {
+        border-left-color: #334155;
+    }
+
+    [data-theme="dark"] .tl-summary-value,
+    [data-theme="dark"] .tl-card-title,
+    [data-theme="dark"] .tl-card-hours {
+        color: #f1f5f9;
+    }
+
+    [data-theme="dark"] .tl-summary-value.is-secondary,
+    [data-theme="dark"] .tl-card-meta {
+        color: #94a3b8;
+    }
+
+    [data-theme="dark"] .tl-card-hours.is-complete {
+        color: #34d399;
+    }
+}
+
+@media (max-width: 480px) {
+    .tl-teacher-name {
+        font-size: 24px;
     }
 }
 

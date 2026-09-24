@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
 const DATA_CACHE = `anti-vuz-data-${CACHE_VERSION}`;
@@ -53,6 +53,14 @@ self.addEventListener('fetch', (event) => {
 
     if (request.mode === 'navigate') {
         event.respondWith(handleNavigation(request));
+        return;
+    }
+
+    // Stylesheets keep the same name across releases (unlike the hashed
+    // bundles), so a cached copy would pair the new code with the old styles
+    // for one launch — on iOS that showed unstyled system-blue buttons.
+    if (url.pathname.startsWith('/css/')) {
+        event.respondWith(networkFirstStatic(request));
         return;
     }
 
@@ -257,6 +265,24 @@ async function findCachedDataResponse(request, cache) {
     }
 
     return cache.match(candidates[0].cachedRequest);
+}
+
+/** The network's copy when online; the saved one only when offline. */
+async function networkFirstStatic(request) {
+    const cache = await caches.open(STATIC_CACHE);
+
+    try {
+        const response = await fetch(request);
+
+        if (isCacheableResponse(response)) {
+            await cache.put(request, response.clone());
+            return response;
+        }
+
+        return (await cache.match(request)) || response;
+    } catch {
+        return (await cache.match(request)) || fetch(request);
+    }
 }
 
 async function staleWhileRevalidate(request, cacheName) {

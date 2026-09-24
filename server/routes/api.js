@@ -178,12 +178,14 @@ router.get('/teachers/search', (req, res) => {
     const db = getDb();
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
+    // No query = the whole list, so the lookup page can open a dropdown on
+    // focus the way the group picker does (a department's worth of names).
     if (!query) {
-        return res.json([]);
+        return res.json(db.prepare('SELECT id, full_name FROM teachers ORDER BY full_name').all());
     }
 
     // Filtered in JS, not SQL: SQLite's LIKE/LOWER() only case-fold ASCII —
-    // "Хамидуллин" would never match "хамидул" under COLLATE NOCASE. The
+    // "Сафронов" would never match "сафрон" under COLLATE NOCASE. The
     // teachers table is small (a department's worth of names), so a full
     // scan with a proper Unicode-aware toLowerCase() is simpler and correct,
     // rather than reaching for an ICU-enabled SQLite build.

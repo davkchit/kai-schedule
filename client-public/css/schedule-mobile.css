@@ -2,7 +2,7 @@
 @media (max-width: 768px) {
     .mobile-day-view { display: none; flex-direction: column; padding-bottom: 100px; }
     .day-tabs-container { margin-bottom: 24px; overflow: hidden; }
-    .day-tabs { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 4px 0; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none; }
+    .day-tabs { display: flex; gap: 8px; overflow-anchor: none; overflow-x: auto; overflow-y: hidden; padding: 4px 0; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none; }
     .day-tabs::-webkit-scrollbar { display: none; }
     .day-tab { flex-shrink: 0; background-color: #ffffff; border: 1.5px solid #E5E7EB; border-radius: 12px; padding: 10px 14px; cursor: pointer; transition: background-color 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), border-color 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 0.12s ease-out; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 62px; }
     .day-tab:active { transform: scale(0.94); }
@@ -28,6 +28,10 @@
     .mobile-tag-room, .mobile-tag-type { background-color: #DBEAFE; color: #2563eb; font-size: 12px; padding: 6px 10px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; transition: background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
     .mobile-tag-subgroup { background-color: #fef3c7; color: #d97706; font-size: 12px; padding: 6px 10px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; }
     .support-widget { display: none; }
+    .load-earlier-btn { width: 100%; flex: none; padding: 14px 16px; border: none; border-radius: 16px; background-color: #ffffff; color: #2563eb; font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: transform 0.12s ease-out, background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
+    .load-earlier-btn:active:not(:disabled) { transform: scale(0.98); }
+    .load-earlier-btn:disabled { opacity: 0.6; cursor: default; }
+    [data-theme="dark"] .load-earlier-btn { background-color: #1e293b; color: #60a5fa; box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 
     [data-theme="dark"] body { background-color: #0f172a; }
     [data-theme="dark"] .day-column { background-color: #1e293b; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }

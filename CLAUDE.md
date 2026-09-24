@@ -92,6 +92,10 @@ Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours a
 
 `POST /api/admin/semesters/:id/close` freezes it: every `load_plan.final_hours` is filled from the current calculation, `semesters.closed_at` is set, and every write touching that semester is refused with 409 (`findClosedSemester` in `routes/admin.js` guards lessons, schedule uploads, plan rows and the semester's own dates). Reads then report the stored total instead of recomputing, so a printed report stays true. `POST .../reopen` clears both and hours go live again. See `tests/semesterClose.test.js`.
 
+### Database migrations and one-off data fixes
+
+`initTables()` in `server/db.js` runs on every `getDb()` open. Schema changes there are idempotent and run every boot. Corrections of imported data (joint lectures missing from the second group, rooms lost to merged cells or unlabelled "Ауд." columns) run **once per database** through `runDataFixOnce`, which records `data_fix.<name>` in `settings`. They must not re-run: a restart would otherwise "correct" the specialist's later edits (e.g. re-add a lecture she removed by re-uploading a template). A test that inserts pre-fix data must delete those settings keys before reopening.
+
 ### Critical Domain: Schedule Override Model
 
 Lessons have a `specific_week` column:
@@ -130,6 +134,14 @@ Endpoint: `POST /api/admin/schedule/upload-bulk`. Atomic — either all groups s
 ### Dark Theme
 
 Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored in `localStorage` as `kai_schedule_theme`. Applied globally to `document.documentElement` via `data-theme="dark"` attribute on app startup (`src/main.jsx`). CSS variables are overridden under `[data-theme="dark"]` in `schedule.css` and `welcome.css`.
+
+### Schedule page: the window of days
+
+The page shows a window of 29 consecutive days around the chosen day: two weeks before it and two after, in one request (`GET /api/schedule/:groupId?date=&days=` — the server was not changed). Going further means picking a date in the calendar, which rebuilds the window around it. Browsing is bounded to a year either side of today (`getMinDate`/`getMaxDate` in `SchedulePage.jsx`). The window is planned in `src/lib/scheduleWindow.js`; the chosen day is scrolled to the left edge after each rebuild, and the date button names the month of the day at the left edge.
+
+Endless scrolling was built and then taken out for now: `planExtension` and `mergeScheduleData` in the same module (joining neighbouring windows by id, verified by `tests/scheduleWindow.test.js` against a request for each single day, and against the real data of every group) are kept for bringing it back. What stopped it: dragging with the mouse across the moment days are added on the left made the position jump by 14 days per mouse move, because the drag handler works from the position at mouse-down while the days added on the left shift the scroll. Bringing it back needs that handled and a trial on real phones and trackpads first.
+
+On a phone the day tabs and the list use the same window; in the list view earlier days already in the window are revealed by a button.
 
 ### PWA Auto-Refresh
 
