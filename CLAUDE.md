@@ -74,6 +74,10 @@ In production, Express serves the Vite-built `dist/` and handles all `/api` rout
 
 Pages: `WelcomePage` → user selects university/group → `SchedulePage` renders the timetable. `AdminLoginPage` and `AdminDashboardPage` are separate flows.
 
+The admin pages keep state and handlers in the page and render through presentational pieces that take every value and handler as a prop of the same name:
+- `src/pages/adminDashboard/` — `useAdminApi.js` (every `/api/admin` request: JSON, CSRF token on writes, 401 → login), `BuilderSection.jsx` (the constructor grid and which pairs a cell shows), `GroupPicker.jsx` (searchable group field), plus the sidebar, settings, backups, audit and lesson modal.
+- `src/pages/adminLoad/` — the load page's `SemesterCard`, `ReferenceCards`, `PlanSection`, `PlanRow` and `format.js`; `AdminLoadSection.jsx` holds their state.
+
 `src/lib/storage.js` persists selection, theme preference, and admin token to `localStorage`.
 
 ### Database Schema (key tables)

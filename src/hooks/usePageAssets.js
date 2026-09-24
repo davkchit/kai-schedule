@@ -2,6 +2,11 @@ import { useLayoutEffect, useState } from 'react';
 
 export default function usePageAssets({ title, description, stylesheets = [], links = [] }) {
     const [isReady, setIsReady] = useState(stylesheets.length === 0);
+    // Pages pass these as inline array literals, a new array every render.
+    // Keyed by content instead, the effect re-runs only when the assets
+    // actually change — not on every render of the page.
+    const stylesheetsKey = stylesheets.join('|');
+    const linksKey = JSON.stringify(links);
 
     useLayoutEffect(() => {
         const previousTitle = document.title;
@@ -73,12 +78,9 @@ export default function usePageAssets({ title, description, stylesheets = [], li
                 node.remove();
             }
         };
-    }, [
-        title,
-        description,
-        stylesheets.join('|'),
-        JSON.stringify(links)
-    ]);
+        // stylesheets/links are represented by their content keys (see above).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [title, description, stylesheetsKey, linksKey]);
 
     return isReady;
 }

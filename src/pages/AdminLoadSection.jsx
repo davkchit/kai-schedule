@@ -1,8 +1,9 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getWeekTypeNumber } from '../lib/date';
-
-const LESSON_TYPES = ['Лекция', 'Практика', 'Лаб'];
-const REF_PREVIEW_COUNT = 5;
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LESSON_TYPES, REF_PREVIEW_COUNT } from './adminLoad/constants';
+import { resolveNewSemesterParity } from './adminLoad/format';
+import SemesterCard from './adminLoad/SemesterCard';
+import ReferenceCards from './adminLoad/ReferenceCards';
+import PlanSection from './adminLoad/PlanSection';
 
 // The teaching-load admin window — kept as its own component (rather than
 // folded into AdminDashboardPage.jsx) since that file is already the
@@ -116,9 +117,9 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
         if (viewedSemester) {
             await loadPlanForSemester(viewedSemester.id);
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- loadPlanForSemester
-        // closes over api/setToastMessage/setLoadPlan, none of which change
-        // for the interactions this is memoized against (see PlanRow).
+        // loadPlanForSemester closes over api/setToastMessage/setLoadPlan, none
+        // of which change for the interactions this is memoized against (see PlanRow).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [viewedSemester?.id]);
 
     async function addTeacher(event) {
@@ -684,705 +685,80 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                 преподавателям заходить никуда не нужно, они смотрят свои часы на отдельной странице по поиску.
             </p>
 
-            <h3 className="subsection-title">Семестр</h3>
-            <div className="sem-card">
-                <div className="sem-head">
-                    <label className="sem-picker">
-                        <span className="sem-field-label">Просматриваемый семестр</span>
-                        <select
-                            className="form-input sem-select"
-                            value={viewedSemester ? String(viewedSemester.id) : ''}
-                            onChange={(event) => {
-                                setViewedSemesterId(Number(event.target.value) || null);
-                                setIsEditingSemester(false);
-                            }}
-                        >
-                            {semesters.length === 0 && <option value="">Семестров пока нет</option>}
-                            {semesters.map((semester) => (
-                                <option key={semester.id} value={semester.id}>
-                                    {semester.label}{semester.is_active ? ' — рабочий' : ''}{semester.closed ? ' — закрыт' : ''}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
-                    {viewedSemester && (
-                        <div className="sem-badges">
-                            {viewedSemester.is_active && <span className="sem-badge is-active">Рабочий</span>}
-                            {viewedSemester.closed && <span className="sem-badge is-closed">Закрыт {viewedSemester.closed_at}</span>}
-                        </div>
-                    )}
-                    {!isAddingSemester && semesters.length > 0 && (
-                        <button type="button" className="btn btn-secondary btn-sm sem-new-btn" onClick={() => setIsAddingSemester(true)}>
-                            + Новый семестр
-                        </button>
-                    )}
-                </div>
+            <SemesterCard
+                semesters={semesters}
+                viewedSemester={viewedSemester}
+                setViewedSemesterId={setViewedSemesterId}
+                isEditingSemester={isEditingSemester}
+                setIsEditingSemester={setIsEditingSemester}
+                isAddingSemester={isAddingSemester}
+                setIsAddingSemester={setIsAddingSemester}
+                semesterEdit={semesterEdit}
+                setSemesterEdit={setSemesterEdit}
+                newSemester={newSemester}
+                setNewSemester={setNewSemester}
+                startEditSemester={startEditSemester}
+                saveSemesterEdit={saveSemesterEdit}
+                activateSemester={activateSemester}
+                reopenSemester={reopenSemester}
+                closeSemester={closeSemester}
+                addSemester={addSemester}
+            />
 
-                {viewedSemester && !isEditingSemester && (
-                    <>
-                        <dl className="sem-facts">
-                            <div><dt>Начало</dt><dd>{formatIsoDay(viewedSemester.start_date)}</dd></div>
-                            <div><dt>Длительность</dt><dd>{viewedSemester.weeks_count} нед.</dd></div>
-                            <div><dt>1-я неделя</dt><dd>{parityLabel(viewedSemester.first_week_parity)}</dd></div>
-                            <div><dt>Последняя неделя</dt><dd>{formatWeekRange(viewedSemester.start_date, viewedSemester.weeks_count)}</dd></div>
-                        </dl>
-                        <div className="sem-actions">
-                            {!viewedSemester.closed && (
-                                <button type="button" className="btn btn-secondary btn-sm" onClick={startEditSemester}>Изменить даты</button>
-                            )}
-                            {!viewedSemester.is_active && !viewedSemester.closed && (
-                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => activateSemester(viewedSemester)}>
-                                    Сделать рабочим
-                                </button>
-                            )}
-                            {viewedSemester.closed ? (
-                                <button type="button" className="btn btn-secondary btn-sm" onClick={reopenSemester}>Открыть заново</button>
-                            ) : (
-                                <button type="button" className="btn btn-delete btn-sm sem-close-btn" onClick={closeSemester}>Закрыть семестр</button>
-                            )}
-                        </div>
-                    </>
-                )}
+            <ReferenceCards
+                teachers={teachers}
+                disciplines={disciplines}
+                visibleTeachers={visibleTeachers}
+                visibleDisciplines={visibleDisciplines}
+                newTeacherName={newTeacherName}
+                setNewTeacherName={setNewTeacherName}
+                newDisciplineName={newDisciplineName}
+                setNewDisciplineName={setNewDisciplineName}
+                addTeacher={addTeacher}
+                addDiscipline={addDiscipline}
+                renameTeacher={renameTeacher}
+                deleteTeacher={deleteTeacher}
+                renameDiscipline={renameDiscipline}
+                deleteDiscipline={deleteDiscipline}
+                showAllTeachers={showAllTeachers}
+                setShowAllTeachers={setShowAllTeachers}
+                showAllDisciplines={showAllDisciplines}
+                setShowAllDisciplines={setShowAllDisciplines}
+            />
 
-                {viewedSemester && isEditingSemester && !viewedSemester.closed && (
-                    <form className="sem-form" onSubmit={saveSemesterEdit}>
-                        <div className="sem-form-grid">
-                            <label>
-                                <span className="sem-field-label">Начало</span>
-                                <input
-                                    type="date"
-                                    className="form-input"
-                                    value={semesterEdit.start_date}
-                                    onChange={(event) => setSemesterEdit((previous) => ({ ...previous, start_date: event.target.value }))}
-                                />
-                            </label>
-                            <label>
-                                <span className="sem-field-label">Недель</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="52"
-                                    className="form-input"
-                                    value={semesterEdit.weeks_count}
-                                    onChange={(event) => setSemesterEdit((previous) => ({ ...previous, weeks_count: event.target.value }))}
-                                />
-                            </label>
-                            <label>
-                                <span className="sem-field-label">1-я неделя</span>
-                                <select
-                                    className="form-input"
-                                    title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
-                                    value={String(semesterEdit.first_week_parity)}
-                                    onChange={(event) => setSemesterEdit((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
-                                >
-                                    <option value="1">нечётная</option>
-                                    <option value="2">чётная</option>
-                                </select>
-                            </label>
-                        </div>
-                        <p className="sem-hint">
-                            Последняя неделя: {formatWeekRange(semesterEdit.start_date, Number(semesterEdit.weeks_count))}
-                        </p>
-                        <div className="sem-actions">
-                            <button type="submit" className="btn btn-primary btn-sm">Сохранить</button>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsEditingSemester(false)}>Отмена</button>
-                        </div>
-                    </form>
-                )}
-
-                {(isAddingSemester || semesters.length === 0) && (
-                    <form className="sem-form sem-add" onSubmit={addSemester}>
-                        <p className="sem-form-title">Новый семестр</p>
-                        <div className="sem-form-grid is-four">
-                            <label>
-                                <span className="sem-field-label">Название</span>
-                                <input
-                                    type="text"
-                                    className="form-input"
-                                    placeholder="Например Осень 2026-2027"
-                                    value={newSemester.label}
-                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, label: event.target.value }))}
-                                />
-                            </label>
-                            <label>
-                                <span className="sem-field-label">Начало (понедельник)</span>
-                                <input
-                                    type="date"
-                                    className="form-input"
-                                    value={newSemester.start_date}
-                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, start_date: event.target.value }))}
-                                />
-                            </label>
-                            <label>
-                                <span className="sem-field-label">Недель</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="52"
-                                    className="form-input"
-                                    value={newSemester.weeks_count}
-                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, weeks_count: event.target.value }))}
-                                />
-                            </label>
-                            <label>
-                                <span className="sem-field-label">1-я неделя</span>
-                                <select
-                                    className="form-input"
-                                    title="Чётная или нечётная первая неделя семестра — смотрите шапку расписания"
-                                    value={String(resolveNewSemesterParity(newSemester) || '')}
-                                    onChange={(event) => setNewSemester((previous) => ({ ...previous, first_week_parity: Number(event.target.value) }))}
-                                >
-                                    {!resolveNewSemesterParity(newSemester) && <option value="">выберите</option>}
-                                    <option value="1">нечётная</option>
-                                    <option value="2">чётная</option>
-                                </select>
-                            </label>
-                        </div>
-                        <div className="sem-actions">
-                            <button type="submit" className="btn btn-primary btn-sm">Добавить семестр</button>
-                            {semesters.length > 0 && (
-                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setIsAddingSemester(false)}>Отмена</button>
-                            )}
-                        </div>
-                    </form>
-                )}
-            </div>
-
-            <h3 className="subsection-title">Преподаватели и дисциплины</h3>
-            <div className="load-refs-row">
-                <div className="load-ref-card">
-                    <form className="load-ref-add-row" onSubmit={addTeacher}>
-                        <input
-                            type="text"
-                            className="form-input"
-                            placeholder="ФИО преподавателя"
-                            value={newTeacherName}
-                            onChange={(event) => setNewTeacherName(event.target.value)}
-                        />
-                        <button type="submit" className="btn btn-secondary">Добавить</button>
-                    </form>
-                    <div className="load-ref-card-header">
-                        <span>Преподаватели</span>
-                        <span className="load-ref-count">{teachers.length}</span>
-                    </div>
-                    <ul className="load-ref-list">
-                        {visibleTeachers.map((teacher) => (
-                            <li key={teacher.id} className="load-ref-row">
-                                <span>{teacher.full_name}</span>
-                                <span className="load-ref-row-actions">
-                                    <button type="button" onClick={() => renameTeacher(teacher)} title="Переименовать">✎</button>
-                                    <button type="button" onClick={() => deleteTeacher(teacher)} title="Удалить">✕</button>
-                                </span>
-                            </li>
-                        ))}
-                        {teachers.length === 0 && <li className="load-ref-empty">Преподавателей пока нет</li>}
-                    </ul>
-                    {teachers.length > REF_PREVIEW_COUNT && (
-                        <button type="button" className="btn-link load-ref-all" onClick={() => setShowAllTeachers((v) => !v)}>
-                            {showAllTeachers ? 'Свернуть' : 'Все'}
-                        </button>
-                    )}
-                </div>
-
-                <div className="load-ref-card">
-                    <form className="load-ref-add-row" onSubmit={addDiscipline}>
-                        <input
-                            type="text"
-                            className="form-input"
-                            placeholder="Название дисциплины"
-                            value={newDisciplineName}
-                            onChange={(event) => setNewDisciplineName(event.target.value)}
-                        />
-                        <button type="submit" className="btn btn-secondary">Добавить</button>
-                    </form>
-                    <div className="load-ref-card-header">
-                        <span>Дисциплины</span>
-                        <span className="load-ref-count">{disciplines.length}</span>
-                    </div>
-                    <ul className="load-ref-list">
-                        {visibleDisciplines.map((discipline) => (
-                            <li key={discipline.id} className="load-ref-row">
-                                <span>{discipline.name}</span>
-                                <span className="load-ref-row-actions">
-                                    <button type="button" onClick={() => renameDiscipline(discipline)} title="Переименовать">✎</button>
-                                    <button type="button" onClick={() => deleteDiscipline(discipline)} title="Удалить">✕</button>
-                                </span>
-                            </li>
-                        ))}
-                        {disciplines.length === 0 && <li className="load-ref-empty">Дисциплин пока нет</li>}
-                    </ul>
-                    {disciplines.length > REF_PREVIEW_COUNT && (
-                        <button type="button" className="btn-link load-ref-all" onClick={() => setShowAllDisciplines((v) => !v)}>
-                            {showAllDisciplines ? 'Свернуть' : 'Все'}
-                        </button>
-                    )}
-                </div>
-            </div>
-
-            <div className="load-plan-heading-row">
-                <h3 className="subsection-title">План нагрузки {viewedSemester ? `— ${viewedSemester.label}` : ''}</h3>
-                {viewedSemester && (
-                    <a
-                        className="btn btn-secondary"
-                        href={`/api/admin/load-plan/export?semester_id=${viewedSemester.id}`}
-                    >
-                        Выгрузить в Excel
-                    </a>
-                )}
-            </div>
-
-            {!viewedSemester ? (
-                <p className="empty-message">
-                    {isLoading ? 'Загрузка...' : (semesters.length === 0 ? 'Создайте семестр выше, чтобы вести план.' : 'Выберите семестр выше, чтобы вести план.')}
-                </p>
-            ) : (
-                <>
-                    <div className="load-plan-stats">
-                        <span>{planStats.total} {pluralizeRecords(planStats.total)}</span>
-                        <span className="load-plan-stats-dot">·</span>
-                        <span>{planStats.totalHours}{planStats.hasUnfilled ? '+' : ''} часов</span>
-                        <div className="load-plan-stats-progress">
-                            <div className="load-plan-stats-progress-fill" style={{ width: `${planStats.percentFilled}%` }} />
-                        </div>
-                        <span>{planStats.percentFilled}% заполнено</span>
-                    </div>
-
-                    {unconfirmedWeeks.length > 0 && (
-                        <p className="load-unconfirmed-note">
-                            На {unconfirmedWeeks.length === 1 ? 'неделю' : 'недели'} {unconfirmedWeeks.join(', ')} расписание
-                            не вносили — часы за {unconfirmedWeeks.length === 1 ? 'неё' : 'них'} посчитаны по шаблону.
-                            Если там были отмены или переносы, откройте нужную неделю в конструкторе и внесите, как было.
-                        </p>
-                    )}
-
-                    {unmatchedPairs.length > 0 && (
-                        <div className="load-unmatched-note">
-                            <p className="load-unmatched-title">
-                                Часы по этим парам не идут никому — {unmatchedPairs.length} {pluralizeKinds(unmatchedPairs.length)}:
-                            </p>
-                            <ul className="load-unmatched-list">
-                                {unmatchedPairs.map((item) => (
-                                    <li key={`${item.group_id}|${item.subject}|${item.teacher}|${item.lesson_type}|${item.subgroup}|${item.reason}`}>
-                                        <b>{item.group_name}</b> · {item.subject || 'без предмета'} · {item.teacher || 'без преподавателя'}
-                                        {item.lesson_type ? ` · ${item.lesson_type}` : ''}
-                                        {item.subgroup > 0 ? `, ${item.subgroup}-я подгруппа` : ''}
-                                        {' — '}
-                                        {item.reason === 'no_plan_row'
-                                            ? 'в плане нет строки с таким преподавателем, предметом, типом и группой'
-                                            : 'предмет или преподаватель вписаны вручную, а не выбраны из списка'}
-                                        {` (${item.lessons_count} ${pluralizePairs(item.lessons_count)} в расписании)`}
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-
-                    {viewedSemester.closed && (
-                        <p className="empty-message">
-                            Семестр закрыт {viewedSemester.closed_at}: часы зафиксированы, изменения выключены.
-                            Чтобы что-то поправить, откройте его заново выше.
-                        </p>
-                    )}
-
-                    {!viewedSemester.closed && (
-                    <form className="load-plan-form" onSubmit={submitPlanForm}>
-                        <select
-                            className="form-input"
-                            value={planForm.teacher_id}
-                            onChange={(event) => setPlanForm((previous) => ({ ...previous, teacher_id: event.target.value }))}
-                        >
-                            <option value="">Преподаватель</option>
-                            {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.full_name}</option>)}
-                        </select>
-                        <select
-                            className="form-input"
-                            value={planForm.discipline_id}
-                            onChange={(event) => setPlanForm((previous) => ({ ...previous, discipline_id: event.target.value }))}
-                        >
-                            <option value="">Дисциплина</option>
-                            {disciplines.map((discipline) => <option key={discipline.id} value={discipline.id}>{discipline.name}</option>)}
-                        </select>
-                        <select
-                            className="form-input"
-                            value={planForm.lesson_type}
-                            onChange={(event) => setPlanForm((previous) => ({ ...previous, lesson_type: event.target.value }))}
-                        >
-                            {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-                        </select>
-                        <select
-                            className="form-input"
-                            value={planForm.group_id}
-                            onChange={(event) => setPlanForm((previous) => ({ ...previous, group_id: event.target.value }))}
-                        >
-                            <option value="">Группа</option>
-                            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                        </select>
-                        <select
-                            className="form-input load-subgroup-input"
-                            value={planForm.subgroup}
-                            onChange={(event) => setPlanForm((previous) => ({ ...previous, subgroup: event.target.value }))}
-                        >
-                            <option value="0">Вся группа</option>
-                            <option value="1">1 п/г</option>
-                            <option value="2">2 п/г</option>
-                        </select>
-                        <input
-                            type="number"
-                            min="1"
-                            className="form-input load-hours-input"
-                            placeholder="Часов"
-                            value={planForm.planned_hours}
-                            onChange={(event) => setPlanForm((previous) => ({ ...previous, planned_hours: event.target.value }))}
-                        />
-                        <button type="submit" className="btn btn-primary">Добавить в план</button>
-                    </form>
-                    )}
-
-                    <div className="load-plan-toolbar">
-                        <div className="load-plan-search">
-                            <SearchIcon />
-                            <input
-                                type="search"
-                                placeholder="Поиск по преподавателю или дисциплине"
-                                value={filterQuery}
-                                onChange={(event) => setFilterQuery(event.target.value)}
-                            />
-                        </div>
-                        <select
-                            className="form-input load-plan-group-filter"
-                            value={filterGroupId}
-                            onChange={(event) => setFilterGroupId(event.target.value)}
-                        >
-                            <option value="">Все группы</option>
-                            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                        </select>
-                        {(filterQuery || filterGroupId) && (
-                            <span className="load-plan-filter-active">
-                                показано {visibleRows.length} из {loadPlan.length}
-                                <button
-                                    type="button"
-                                    className="btn-link load-plan-filter-clear"
-                                    onClick={() => { setFilterQuery(''); setFilterGroupId(''); }}
-                                >
-                                    ✕ показать все
-                                </button>
-                            </span>
-                        )}
-                    </div>
-
-                    <div className="lessons-table-wrapper">
-                        <table className="lessons-table load-plan-table">
-                            <thead>
-                                <tr>
-                                    <th>Преподаватель</th>
-                                    <th>Дисциплина</th>
-                                    <th>Вид</th>
-                                    <th>Группа</th>
-                                    <th>Часы</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {visibleRows.map((row) => (
-                                    <PlanRow
-                                        key={row.id}
-                                        row={row}
-                                        teachers={teachers}
-                                        disciplines={disciplines}
-                                        groups={groups}
-                                        isEditing={editingPlanId === row.id}
-                                        onSaveEdit={saveEditRow}
-                                        onCancelEdit={cancelEditRow}
-                                        onStartEdit={startEditRow}
-                                        onUpdateHours={updatePlannedHours}
-                                        isClosed={Boolean(viewedSemester.closed)}
-                                        isMenuOpen={openMenuId === row.id}
-                                        onToggleMenu={toggleRowMenu}
-                                        onScheduleMenuClose={scheduleMenuClose}
-                                        onDelete={deletePlanRow}
-                                    />
-                                ))}
-                            </tbody>
-                        </table>
-                        {loadPlan.length === 0 && (
-                            <p className="empty-message">План на этот семестр пока пуст.</p>
-                        )}
-                        {loadPlan.length > 0 && visibleRows.length === 0 && (
-                            <p className="empty-message">По этому запросу ничего не найдено.</p>
-                        )}
-                    </div>
-                </>
-            )}
+            <PlanSection
+                viewedSemester={viewedSemester}
+                isLoading={isLoading}
+                semesters={semesters}
+                planStats={planStats}
+                unconfirmedWeeks={unconfirmedWeeks}
+                unmatchedPairs={unmatchedPairs}
+                planForm={planForm}
+                setPlanForm={setPlanForm}
+                submitPlanForm={submitPlanForm}
+                teachers={teachers}
+                disciplines={disciplines}
+                groups={groups}
+                filterQuery={filterQuery}
+                setFilterQuery={setFilterQuery}
+                filterGroupId={filterGroupId}
+                setFilterGroupId={setFilterGroupId}
+                visibleRows={visibleRows}
+                loadPlan={loadPlan}
+                editingPlanId={editingPlanId}
+                saveEditRow={saveEditRow}
+                cancelEditRow={cancelEditRow}
+                startEditRow={startEditRow}
+                updatePlannedHours={updatePlannedHours}
+                openMenuId={openMenuId}
+                toggleRowMenu={toggleRowMenu}
+                scheduleMenuClose={scheduleMenuClose}
+                deletePlanRow={deletePlanRow}
+            />
         </div>
     );
 }
 
-// Memoized so opening/closing one row's kebab menu or edit form
-// doesn't re-render the other 100+ rows in the table — before this, every
-// click on any row's "⋯" re-rendered the entire plan (132 rows on a real
-// semester), which is exactly the visible lag that prompted this split.
-function buildEditFormFromRow(row) {
-    return {
-        teacher_id: String(row.teacher_id),
-        discipline_id: String(row.discipline_id),
-        lesson_type: row.lesson_type,
-        group_id: String(row.group_id),
-        subgroup: String(row.subgroup),
-        planned_hours: row.planned_hours === null ? '' : String(row.planned_hours)
-    };
-}
-
-const PlanRow = memo(function PlanRow({
-    row, teachers, disciplines, groups, isClosed,
-    isEditing, onSaveEdit, onCancelEdit, onStartEdit, onUpdateHours,
-    isMenuOpen, onToggleMenu, onScheduleMenuClose, onDelete
-}) {
-    // Lives here, not in the parent — otherwise every keystroke while editing
-    // one row would change that row's callback identities and, without care,
-    // ripple into a re-render of the other 100+ rows too.
-    const [draft, setDraft] = useState(null);
-    const form = draft ?? buildEditFormFromRow(row);
-
-    // Covers leaving edit mode any other way than the Cancel button — e.g.
-    // opening "Изменить" on a different row while this one was mid-edit —
-    // so a later re-open of this row starts from the real row, not a stale
-    // abandoned draft.
-    useEffect(() => {
-        if (!isEditing) setDraft(null);
-    }, [isEditing]);
-
-    async function handleSave() {
-        const ok = await onSaveEdit(row.id, form);
-        if (ok) setDraft(null);
-    }
-
-    function handleCancel() {
-        setDraft(null);
-        onCancelEdit();
-    }
-
-    return (
-        <Fragment>
-            {isEditing ? (
-                <tr className="load-edit-row">
-                    <td>
-                        <select
-                            className="form-input"
-                            value={form.teacher_id}
-                            onChange={(event) => setDraft({ ...form, teacher_id: event.target.value })}
-                        >
-                            {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.full_name}</option>)}
-                        </select>
-                    </td>
-                    <td>
-                        <select
-                            className="form-input"
-                            value={form.discipline_id}
-                            onChange={(event) => setDraft({ ...form, discipline_id: event.target.value })}
-                        >
-                            {disciplines.map((discipline) => <option key={discipline.id} value={discipline.id}>{discipline.name}</option>)}
-                        </select>
-                    </td>
-                    <td>
-                        <select
-                            className="form-input"
-                            value={form.lesson_type}
-                            onChange={(event) => setDraft({ ...form, lesson_type: event.target.value })}
-                        >
-                            {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-                        </select>
-                    </td>
-                    <td>
-                        <div className="load-edit-group-cell">
-                            <select
-                                className="form-input"
-                                value={form.group_id}
-                                onChange={(event) => setDraft({ ...form, group_id: event.target.value })}
-                            >
-                                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                            </select>
-                            <select
-                                className="form-input load-edit-subgroup"
-                                value={form.subgroup}
-                                onChange={(event) => setDraft({ ...form, subgroup: event.target.value })}
-                            >
-                                <option value="0">Вся группа</option>
-                                <option value="1">1 п/г</option>
-                                <option value="2">2 п/г</option>
-                            </select>
-                        </div>
-                    </td>
-                    <td>
-                        <input
-                            type="number"
-                            min="1"
-                            className="form-input load-edit-hours"
-                            placeholder="часы"
-                            value={form.planned_hours}
-                            onChange={(event) => setDraft({ ...form, planned_hours: event.target.value })}
-                        />
-                    </td>
-                    <td className="load-edit-actions">
-                        <button type="button" className="btn btn-primary load-edit-save" onClick={handleSave}>
-                            Сохранить
-                        </button>
-                        <button type="button" className="btn-link" onClick={handleCancel}>
-                            Отмена
-                        </button>
-                    </td>
-                </tr>
-            ) : (
-                <tr>
-                    <td>{row.teacher_name}</td>
-                    <td>{row.discipline_name}</td>
-                    <td><span className="load-type-badge">{row.lesson_type}</span></td>
-                    <td>{row.group_name}{row.subgroup ? ` (${row.subgroup} п/г)` : ''}</td>
-                    <td>
-                        {row.planned_hours === null ? (
-                            isClosed ? <span className="load-hours-empty">—</span> : <HoursEditor onSave={(hours) => onUpdateHours(row.id, hours)} />
-                        ) : (
-                            <div className="load-progress-cell">
-                                <span className="load-hours-figure">{row.planned_hours} ч</span>
-                                <div className="load-progress-track">
-                                    <div
-                                        className="load-progress-fill"
-                                        style={{ width: `${Math.min(100, Math.round((row.progress?.occurred_hours || 0) / row.planned_hours * 100))}%` }}
-                                    />
-                                </div>
-                            </div>
-                        )}
-                    </td>
-                    <td className="load-row-menu-cell">
-                        {!isClosed && (
-                        <div className="load-row-menu" onBlur={onScheduleMenuClose}>
-                            <button
-                                type="button"
-                                className="load-row-menu-trigger"
-                                aria-label="Действия"
-                                onClick={() => onToggleMenu(row.id)}
-                            >
-                                ⋯
-                            </button>
-                            {isMenuOpen && (
-                                <div className="load-row-menu-dropdown">
-                                    <button type="button" className="load-row-menu-item" onClick={() => onStartEdit(row)}>
-                                        Изменить
-                                    </button>
-                                    <button type="button" className="load-row-menu-item danger" onClick={() => onDelete(row.id)}>
-                                        Удалить
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                        )}
-                    </td>
-                </tr>
-            )}
-        </Fragment>
-    );
-});
-
-/**
- * Turns "18 недель" into the dates it actually means, shown right next to the
- * number: a count that runs the last teaching week through New Year is obvious
- * on sight, while the bare "18" is not.
- */
-function formatWeekRange(startDate, weeksCount) {
-    if (!startDate || !Number.isInteger(weeksCount) || weeksCount < 1) {
-        return '—';
-    }
-
-    const [year, month, day] = startDate.split('-').map(Number);
-    const monday = new Date(Date.UTC(year, month - 1, day + (weeksCount - 1) * 7));
-    const saturday = new Date(monday.getTime() + 5 * 86400000);
-    const short = (d) => `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-
-    return `${short(monday)}–${short(saturday)}.${saturday.getUTCFullYear()}`;
-}
-
-/** 2026-09-01 → 01.09.2026 */
-function formatIsoDay(isoDate) {
-    const [year, month, day] = isoDate.split('-');
-    return `${day}.${month}.${year}`;
-}
-
-function parityLabel(parity) {
-    return parity === 1 ? 'нечётная' : 'чётная';
-}
-
-/** The picked parity, else the calendar default for the chosen start date. */
-function resolveNewSemesterParity(form) {
-    if (form.first_week_parity === 1 || form.first_week_parity === 2) {
-        return form.first_week_parity;
-    }
-
-    if (!form.start_date) {
-        return undefined;
-    }
-
-    const [year, month, day] = form.start_date.split('-').map(Number);
-    return getWeekTypeNumber(new Date(year, month - 1, day));
-}
-
-function pluralizeKinds(count) {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-    if (mod10 === 1 && mod100 !== 11) return 'случай';
-    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'случая';
-    return 'случаев';
-}
-
-function pluralizePairs(count) {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-    if (mod10 === 1 && mod100 !== 11) return 'пара';
-    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'пары';
-    return 'пар';
-}
-
-function pluralizeRecords(count) {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-    if (mod10 === 1 && mod100 !== 11) return 'запись';
-    if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'записи';
-    return 'записей';
-}
-
-function SearchIcon() {
-    return (
-        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM19 19l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-    );
-}
-
-// Shown instead of a progress bar for a plan row that has no hours yet — e.g.
-// one auto-created from an imported schedule, before the specialist has
-// entered what the department actually assigned.
-function HoursEditor({ onSave }) {
-    const [value, setValue] = useState('');
-
-    return (
-        <form
-            className="load-hours-editor"
-            onSubmit={(event) => {
-                event.preventDefault();
-                onSave(value);
-            }}
-        >
-            <span className="load-hours-editor-label">часы не заданы</span>
-            <input
-                type="number"
-                min="1"
-                max="2000"
-                placeholder="часы"
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
-            />
-            <button type="submit" className="btn-link">задать</button>
-        </form>
-    );
-}
 
 function emptyPlanForm() {
     return {

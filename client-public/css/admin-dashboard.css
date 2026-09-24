@@ -88,6 +88,17 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .lessons-toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; }
 .group-select { padding: 10px 16px; border: 1px solid var(--border); border-radius: 12px; font-size: 14px; min-width: 200px; outline: none; background: var(--card); }
 .group-select:focus { border-color: var(--primary); }
+/* The builder's searchable group field (GroupPicker.jsx) — the select's look,
+   a chevron, and the lesson form's dropdown list under it. */
+.group-picker { position: relative; min-width: 240px; }
+.group-picker-input { width: 100%; padding-right: 36px; cursor: pointer; }
+.group-picker-input:focus { cursor: text; }
+.group-picker-input::placeholder { color: var(--text); }
+.group-picker-input:focus::placeholder { color: var(--text-sec); }
+.group-picker-chevron { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--text-sec); pointer-events: none; }
+.group-picker-list { max-height: 320px; min-width: 180px; }
+.group-picker-list .dict-picker-option { font-size: 14px; }
+.dict-picker-option.is-highlighted { background: rgba(59,130,246,0.08); color: var(--primary); }
 .lessons-table-wrapper { background: var(--card); border-radius: 16px; border: 1px solid var(--border); overflow: hidden; }
 .lessons-table { width: 100%; border-collapse: collapse; }
 .lessons-table th { text-align: left; padding: 14px 16px; font-size: 12px; font-weight: 600; color: var(--text-sec); text-transform: uppercase; letter-spacing: 0.5px; background: #f9fafb; border-bottom: 1px solid var(--border); }
@@ -546,6 +557,7 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
     .lessons-table { min-width: 580px; }
     .lessons-toolbar { flex-wrap: wrap; }
     .group-select { flex: 1; min-width: 0; font-size: 16px; }
+    .group-picker { flex: 1; min-width: 0; }
 
     /* Audit */
     .audit-header { flex-direction: column; align-items: stretch; gap: 12px; }

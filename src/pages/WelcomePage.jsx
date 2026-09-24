@@ -355,15 +355,11 @@ export default function WelcomePage() {
 }
 
 function getSuggestions(currentStep, universities, groups, inputValue) {
-    let options = [];
-
-    if (currentStep === 0) {
-        options = universities.map((university) => university.short_name);
-    } else if (currentStep === 1) {
-        options = groups.map((group) => group.name);
-    } else {
-        options = SUBGROUP_OPTIONS;
-    }
+    const options = currentStep === 0
+        ? universities.map((university) => university.short_name)
+        : currentStep === 1
+            ? groups.map((group) => group.name)
+            : SUBGROUP_OPTIONS;
 
     if (!inputValue.trim()) {
         return options;

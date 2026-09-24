@@ -64,7 +64,7 @@ export default function TeacherLookupPage() {
     // plan rows already fetched, so they need no extra server round-trip.
     const weekDays = useMemo(buildCurrentWeekDays, []);
 
-    const planRows = loadData?.plan ?? [];
+    const planRows = useMemo(() => loadData?.plan ?? [], [loadData]);
 
     const visibleRows = useMemo(() => {
         const normalizedQuery = listQuery.trim().toLowerCase();
