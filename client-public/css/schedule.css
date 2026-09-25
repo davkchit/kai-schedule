@@ -181,7 +181,6 @@ body {
 .card-meta { display: flex; gap: 8px; flex-wrap: wrap; }
 .tag-room, .tag-type { background-color: var(--tag-bg); color: var(--tag-text); font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; transition: background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .tag-subgroup { background-color: #fef3c7; color: #d97706; font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; }
-.no-lessons { color: var(--text-secondary); font-size: 15px; font-weight: 500; padding: 8px 0; }
 
 .support-widget { position: fixed; bottom: 80px; right: 30px; background-color: rgba(255, 255, 255, 0.75); backdrop-filter: blur(20px) saturate(180%); padding: 12px 20px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); display: flex; align-items: center; gap: 12px; cursor: pointer; transition: transform 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .support-widget:hover { transform: translateY(-2px); }

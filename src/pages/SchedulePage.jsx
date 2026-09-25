@@ -870,8 +870,7 @@ export default function SchedulePage() {
                             {day.isRestDay && (
                                 renderRestDayState()
                             )}
-                            {day.isNoLessons && <div className="no-lessons">Нет занятий</div>}
-                            {!day.isRestDay && !day.isNoLessons && day.lessons.map((lesson) => renderLessonCard(lesson))}
+                            {!day.isRestDay && day.lessons.map((lesson) => renderLessonCard(lesson))}
                         </div>
                     ))}
                 </main>
@@ -907,12 +906,7 @@ export default function SchedulePage() {
                             {day.isRestDay && (
                                 renderRestDayState(true)
                             )}
-                            {day.isNoLessons && (
-                                <div className="rest-day mobile">
-                                    <span>Нет занятий</span>
-                                </div>
-                            )}
-                            {!day.isRestDay && !day.isNoLessons && day.lessons.map((lesson) => renderLessonCard(lesson, true))}
+                            {!day.isRestDay && day.lessons.map((lesson) => renderLessonCard(lesson, true))}
                         </div>
                     ))}
                 </div>
@@ -1026,7 +1020,6 @@ function buildScheduleDays(schedule) {
     let iterDate = parseIsoDate(schedule.from);
 
     while (iterDate <= last && iterDate <= MAX_DATE) {
-        const dayOfWeek = iterDate.getDay();
         // Semester, week number, parity and "week with its own rows" are all
         // decided in src/lib/scheduleResolve.js, the same code the year
         // lifecycle test runs.
@@ -1034,7 +1027,9 @@ function buildScheduleDays(schedule) {
             ? withLessonMotion(resolveLessonsForDay(schedule.previousData, iterDate), resolveLessonsForDay(scheduleData, iterDate))
             : resolveLessonsForDay(scheduleData, iterDate);
 
-        const isRestDay = (dayOfWeek === 0 || dayOfWeek === 6) && lessons.length === 0;
+        // Any day without pairs gets the same «Отдыхаем · Занятий нет» card —
+        // a weekday used to show a bare «Нет занятий» line instead.
+        const isRestDay = lessons.length === 0;
         const timeRange = lessons.length
             ? `${lessons[0].time_start}—${lessons[lessons.length - 1].time_end}`
             : '';
@@ -1056,8 +1051,7 @@ function buildScheduleDays(schedule) {
             shortDate: `${String(iterDate.getDate()).padStart(2, '0')}.${String(iterDate.getMonth() + 1).padStart(2, '0')}`,
             lessons,
             timeRange,
-            isRestDay,
-            isNoLessons: !isRestDay && lessons.length === 0
+            isRestDay
         });
 
         iterDate = new Date(iterDate);
