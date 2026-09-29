@@ -87,7 +87,14 @@ router.put('/teachers/:id', (req, res) => {
     }
 
     try {
-        db.prepare('UPDATE teachers SET full_name = ? WHERE id = ?').run(payload.full_name, teacherId);
+        // The pairs carry the name as text too (what students, the builder and
+        // the schedule export show): renaming only the dictionary left them on
+        // the old spelling while the load pages showed the new one.
+        db.transaction(() => {
+            db.prepare('UPDATE teachers SET full_name = ? WHERE id = ?').run(payload.full_name, teacherId);
+            db.prepare('UPDATE lessons SET teacher = ?, updated_at = CURRENT_TIMESTAMP WHERE teacher_id = ?')
+                .run(payload.full_name, teacherId);
+        })();
 
         writeAuditLog(db, {
             adminId: req.admin.id,
@@ -225,7 +232,12 @@ router.put('/disciplines/:id', (req, res) => {
     }
 
     try {
-        db.prepare('UPDATE disciplines SET name = ? WHERE id = ?').run(payload.name, disciplineId);
+        // Same as a teacher rename: the pairs' own subject text follows the dictionary.
+        db.transaction(() => {
+            db.prepare('UPDATE disciplines SET name = ? WHERE id = ?').run(payload.name, disciplineId);
+            db.prepare('UPDATE lessons SET subject = ?, updated_at = CURRENT_TIMESTAMP WHERE discipline_id = ?')
+                .run(payload.name, disciplineId);
+        })();
 
         writeAuditLog(db, {
             adminId: req.admin.id,

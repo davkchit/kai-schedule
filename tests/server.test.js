@@ -1319,6 +1319,34 @@ test('teachers and disciplines: create, list, and reject duplicates', async () =
     await context.close();
 });
 
+test('renaming a teacher or discipline renames it in the schedule students see too', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+    const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Павлва Г.Р.')").run().lastInsertRowid;
+    const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Базы даных')").run().lastInsertRowid;
+    const insert = db.prepare(`
+        INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, template_from_week, time_start, time_end,
+            subject, lesson_type, teacher, teacher_id, discipline_id)
+        VALUES (?, ?, 1, 0, 1, ?, ?, 'Базы даных', 'Лекция', 'Павлва Г.Р.', ?, ?)
+    `);
+    const linkedId = insert.run(context.primaryGroupId, context.semesterId, '08:00', '09:30', teacherId, disciplineId).lastInsertRowid;
+    // Same spelling typed by hand, not linked to the dictionary: not the dictionary's row, left alone.
+    const typedId = insert.run(context.primaryGroupId, context.semesterId, '09:40', '11:10', null, null).lastInsertRowid;
+
+    const put = (path, body) => fetch(`${context.baseUrl}${path}`, {
+        method: 'PUT', headers: { ...context.authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    assert.equal((await put(`/api/admin/teachers/${teacherId}`, { full_name: 'Павлова Г.Р.' })).status, 200);
+    assert.equal((await put(`/api/admin/disciplines/${disciplineId}`, { name: 'Базы данных' })).status, 200);
+
+    const textOf = (id) => db.prepare('SELECT subject, teacher FROM lessons WHERE id = ?').get(id);
+    assert.deepEqual(textOf(linkedId), { subject: 'Базы данных', teacher: 'Павлова Г.Р.' }, 'a linked pair shows the new names');
+    assert.deepEqual(textOf(typedId), { subject: 'Базы даных', teacher: 'Павлва Г.Р.' },
+        'a pair typed by hand is not the dictionary row and keeps its text');
+
+    await context.close();
+});
+
 test('teachers and disciplines: rename fixes a typo, delete is blocked while a load_plan row still references them', async () => {
     const context = await createTestContext();
     const db = getDb();

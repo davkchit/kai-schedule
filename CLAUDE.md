@@ -117,7 +117,7 @@ Hours are never stored — they're computed live from whichever schedule rows cu
 
 Matching is exact, so one wrong field (type, subgroup) or a teacher typed by hand instead of picked is enough for a pair to stop counting — silently. `GET /api/admin/load-plan/unmatched` (`routes/admin/loadPlan.js`) names those pairs and the load page lists them; it considers only what the schedule currently shows, skipping retired template versions, removed rows and events.
 
-Because matching is live, editing a past week's identity (e.g., swapping the teacher) immediately moves hours between teachers with no extra step — the old teacher's count drops, the new one's rises, next time either is computed. Deleting a teacher or discipline is refused while **any** lesson (any semester, not just `load_plan` rows) still references it — checked in `routes/admin/references.js`. Renaming in the dictionary doesn't touch history, since lessons reference the row by id, not text.
+Because matching is live, editing a past week's identity (e.g., swapping the teacher) immediately moves hours between teachers with no extra step — the old teacher's count drops, the new one's rises, next time either is computed. Deleting a teacher or discipline is refused while **any** lesson (any semester, not just `load_plan` rows) still references it — checked in `routes/admin/references.js`. Renaming in the dictionary keeps every link (lessons reference the row by id) and also rewrites the `teacher`/`subject` text of the lessons linked to it, so students, the builder and exports show the new name too (`routes/admin/references.js`).
 
 ### Bulk Schedule Upload
 
