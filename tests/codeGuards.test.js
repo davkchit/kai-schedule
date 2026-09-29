@@ -36,3 +36,23 @@ test('no hard-coded calendar dates in application logic', () => {
 
     assert.deepEqual(offenders, []);
 });
+
+test('every audit action the server writes has a Russian label in the journal', () => {
+    // The journal showed raw codes like "semester.close" and "lesson.move" for
+    // the actions nobody had added to the label map — the specialist reads
+    // this page, not the code.
+    const root = path.join(__dirname, '..');
+    const actions = new Set();
+    for (const file of listSourceFiles(path.join(root, 'server'))) {
+        const source = fs.readFileSync(file, 'utf8');
+        for (const match of source.matchAll(/action:\s*(?:[^?,\n]+\?\s*)?'([a-z_]+\.[a-z_]+)'(?:\s*:\s*'([a-z_]+\.[a-z_]+)')?/g)) {
+            actions.add(match[1]);
+            if (match[2]) actions.add(match[2]);
+        }
+    }
+    const labels = fs.readFileSync(path.join(root, 'src', 'pages', 'adminDashboard', 'format.js'), 'utf8');
+    const missing = [...actions].filter((action) => !labels.includes(`'${action}':`));
+
+    assert.ok(actions.size > 10, `found only ${actions.size} audit actions — the pattern no longer matches the code`);
+    assert.deepEqual(missing, [], `no label for: ${missing.join(', ')}`);
+});
