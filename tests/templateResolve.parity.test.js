@@ -136,3 +136,41 @@ test('templateResolve: known-good expected outputs (guards against both copies d
     const bySlotKey = resolveServer(FIXTURES[8].candidates, FIXTURES[8].targetWeek);
     assert.deepEqual(bySlotKey.map((l) => l.subject).sort(), ['full-even', 'sub1-odd', 'sub2-odd']);
 });
+
+// The fixtures above name the known cases; this sweeps many generated ones
+// (ties on template_from_week, tombstones, missing from_week, every slot key
+// field) so a drift in some corner nobody wrote a fixture for is caught too.
+function createRandom(seed) {
+    let state = seed >>> 0;
+    return () => {
+        state = (state * 1664525 + 1013904223) >>> 0;
+        return state / 2 ** 32;
+    };
+}
+
+test('templateResolve: client and server agree on 3000 generated schedules', async () => {
+    const resolveClient = await loadClientResolver();
+    const pick = (random, values) => values[Math.floor(random() * values.length)];
+
+    for (let seed = 1; seed <= 3000; seed += 1) {
+        const random = createRandom(seed);
+        const candidates = Array.from({ length: 1 + Math.floor(random() * 25) }, (_, index) => ({
+            id: 1 + Math.floor(random() * 1000) * 100 + index,
+            day_of_week: pick(random, [1, 2]),
+            time_start: pick(random, ['08:00', '09:40']),
+            time_end: pick(random, ['09:30', '11:10']),
+            subgroup: pick(random, [0, 1, 2]),
+            week_type: pick(random, [0, 1, 2]),
+            template_from_week: pick(random, [undefined, null, 1, 1, 2, 3, 5, 8]),
+            is_removed: pick(random, [0, 0, 0, 1])
+        }));
+        const targetWeek = 1 + Math.floor(random() * 9);
+        const ids = (lessons) => lessons.map((l) => l.id).sort((a, b) => a - b);
+
+        assert.deepEqual(
+            ids(resolveClient(candidates, targetWeek)),
+            ids(resolveServer(candidates, targetWeek)),
+            `the two copies disagree (seed ${seed}, week ${targetWeek})`
+        );
+    }
+});
