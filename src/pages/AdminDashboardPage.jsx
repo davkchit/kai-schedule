@@ -42,9 +42,7 @@ export default function AdminDashboardPage() {
     const [workingSemester, setWorkingSemester] = useState(null);
     const [directorName, setDirectorName] = useState('');
     const [directorTitle, setDirectorTitle] = useState('Директор филиала');
-    const [academicYear, setAcademicYear] = useState('');
     const [studyForm, setStudyForm] = useState('очная форма обучения');
-    const [termParity, setTermParity] = useState('spring');
     const [isExporting, setIsExporting] = useState(false);
     const [groupDirectionDrafts, setGroupDirectionDrafts] = useState({});
     const [settingsStatus, setSettingsStatus] = useState({ type: '', message: '' });
@@ -244,9 +242,7 @@ export default function AdminDashboardPage() {
 
             if (data.director_name) setDirectorName(data.director_name);
             if (data.director_title) setDirectorTitle(data.director_title);
-            if (data.academic_year) setAcademicYear(data.academic_year);
             if (data.study_form) setStudyForm(data.study_form);
-            if (data.term_parity) setTermParity(data.term_parity);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Не удалось загрузить настройки');
@@ -891,9 +887,7 @@ export default function AdminDashboardPage() {
                     semester_start_date: semesterStartDate,
                     director_name: directorName,
                     director_title: directorTitle,
-                    academic_year: academicYear,
-                    study_form: studyForm,
-                    term_parity: termParity
+                    study_form: studyForm
                 })
             });
 
@@ -971,7 +965,6 @@ export default function AdminDashboardPage() {
                 </section>
 
                 <SettingsSection
-                    academicYear={academicYear}
                     activeSection={activeSection}
                     directorName={directorName}
                     directorTitle={directorTitle}
@@ -985,7 +978,6 @@ export default function AdminDashboardPage() {
                     newGroupUniversityId={newGroupUniversityId}
                     saveSettings={saveSettings}
                     semesterStartDate={semesterStartDate}
-                    setAcademicYear={setAcademicYear}
                     setDirectorName={setDirectorName}
                     setDirectorTitle={setDirectorTitle}
                     setGroupDirectionDrafts={setGroupDirectionDrafts}
@@ -994,10 +986,8 @@ export default function AdminDashboardPage() {
                     setNewGroupUniversityId={setNewGroupUniversityId}
                     setSemesterStartDate={setSemesterStartDate}
                     setStudyForm={setStudyForm}
-                    setTermParity={setTermParity}
                     settingsStatus={settingsStatus}
                     studyForm={studyForm}
-                    termParity={termParity}
                     universities={universities}
                 />
 

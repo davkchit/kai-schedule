@@ -1347,6 +1347,66 @@ test('renaming a teacher or discipline renames it in the schedule students see t
     await context.close();
 });
 
+test('the Excel export writes a week the way the official sheet posted to VK does', async () => {
+    const context = await createTestContext();
+    const db = getDb();
+    const ExcelJS = require('exceljs');
+
+    // An autumn semester next to the test's spring one: the header must say
+    // «I семестр, 2026/2027» from its dates, whatever the settings say.
+    db.prepare("INSERT INTO settings (key, value) VALUES ('academic_year', '2025/2026'), ('term_parity', 'spring')").run();
+    const autumnId = db.prepare(`
+        INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
+        VALUES ('Осень', '2026-08-31', 18, 0, 2)
+    `).run().lastInsertRowid;
+    const universityId = db.prepare("SELECT id FROM universities WHERE short_name = 'КНИТУ-КАИ'").get().id;
+    const addGroup = (name) => db.prepare('INSERT INTO groups_ (university_id, name, direction) VALUES (?, ?, ?)')
+        .run(universityId, name, '09.03.01 Информатика и вычислительная техника').lastInsertRowid;
+    const insert = db.prepare(`
+        INSERT INTO lessons (group_id, semester_id, subgroup, day_of_week, week_type, template_from_week,
+            time_start, time_end, subject, room, lesson_type, teacher)
+        VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?)
+    `);
+    const first = addGroup('23101');
+    insert.run(first, autumnId, 0, 1, '08:00', '09:30', 'Математика', '104', 'Лекция', 'Николаева Г.А.');
+    insert.run(first, autumnId, 0, 2, '09:40', '11:10', 'Физическая культура и спорт', 'с/з', 'Практика', 'Кузнецов Н.П.');
+    insert.run(first, autumnId, 1, 3, '11:30', '13:00', 'Информатика', '103', 'Лаб', 'Николаева Г.А.');
+    // Two third-year groups with the same week share one block, as on the official sheet.
+    for (const name of ['23303', '23313']) {
+        insert.run(addGroup(name), autumnId, 0, 1, '11:30', '13:00', 'Базы данных', '205', 'Практика', 'Голубев С.В.');
+    }
+
+    const response = await fetch(`${context.baseUrl}/api/admin/schedule/export?week_start=2026-08-31`, { headers: context.authHeaders });
+    assert.equal(response.status, 200);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(await response.arrayBuffer()));
+    const texts = (sheet) => {
+        const out = [];
+        sheet.eachRow((row) => row.eachCell((cell) => {
+            if (!(cell.isMerged && cell.master.address !== cell.address) && cell.value) out.push(String(cell.value));
+        }));
+        return out;
+    };
+
+    const course1 = texts(workbook.getWorksheet('1 курс'));
+    for (const expected of [
+        'РАСПИСАНИЕ ЗАНЯТИЙ на I семестр', 'ЧЕТНАЯ НЕДЕЛЯ', '2026/2027 учебный год', '« ___» ____________ 2026г.',
+        'ПОНЕДЕЛЬНИК 31.08.2026', 'ВТОРНИК 1.09.2026', '8:00-9:30',
+        'Математика (лек.) Николаева Г.А.',
+        'Физическая культура и спорт (элективная дисциплина) Кузнецов Н.П.',
+        'Информатика (лаб.) 1 п/г Николаева Г.А.'
+    ]) {
+        assert.ok(course1.includes(expected), `1 курс: expected «${expected}» among ${JSON.stringify(course1)}`);
+    }
+
+    const course3 = texts(workbook.getWorksheet('3 курс'));
+    assert.ok(course3.includes('РАСПИСАНИЕ ЗАНЯТИЙ на V семестр'));
+    assert.ok(course3.includes('23303 / 23313'), 'identical groups share one block');
+    assert.equal(course3.filter((text) => text === 'Базы данных (пр.) Голубев С.В.').length, 1);
+
+    await context.close();
+});
+
 test('teachers and disciplines: rename fixes a typo, delete is blocked while a load_plan row still references them', async () => {
     const context = await createTestContext();
     const db = getDb();

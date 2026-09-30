@@ -4,7 +4,6 @@ import { getCourseFromGroupName } from './builderUtils';
 // Presentational only: moved verbatim from AdminDashboardPage.jsx, every
 // value and handler comes from the page as a prop of the same name.
 export default function SettingsSection({
-    academicYear,
     activeSection,
     directorName,
     directorTitle,
@@ -18,7 +17,6 @@ export default function SettingsSection({
     newGroupUniversityId,
     saveSettings,
     semesterStartDate,
-    setAcademicYear,
     setDirectorName,
     setDirectorTitle,
     setGroupDirectionDrafts,
@@ -27,10 +25,8 @@ export default function SettingsSection({
     setNewGroupUniversityId,
     setSemesterStartDate,
     setStudyForm,
-    setTermParity,
     settingsStatus,
     studyForm,
-    termParity,
     universities
 }) {
     return (
@@ -49,32 +45,8 @@ export default function SettingsSection({
                     />
                 </div>
                 <div className="setting-row">
-                    <label htmlFor="termParity">Текущий семестр (осенний/весенний)</label>
-                    <p className="setting-hint">Вместе с курсом группы определяет номер семестра в шапке экспорта (I/III/V/VII — осенний, II/IV/VI/VIII — весенний)</p>
-                    <select
-                        id="termParity"
-                        className="setting-input"
-                        value={termParity}
-                        onChange={(event) => setTermParity(event.target.value)}
-                    >
-                        <option value="spring">Весенний</option>
-                        <option value="fall">Осенний</option>
-                    </select>
-                </div>
-                <div className="setting-row">
-                    <label htmlFor="academicYear">Учебный год</label>
-                    <p className="setting-hint">Используется в шапке при экспорте в Excel, например «2025/2026»</p>
-                    <input
-                        type="text"
-                        id="academicYear"
-                        className="setting-input"
-                        placeholder="2025/2026"
-                        value={academicYear}
-                        onChange={(event) => setAcademicYear(event.target.value)}
-                    />
-                </div>
-                <div className="setting-row">
                     <label htmlFor="studyForm">Форма обучения</label>
+                    <p className="setting-hint">Номер семестра и учебный год в шапке Excel берутся из дат рабочего семестра</p>
                     <input
                         type="text"
                         id="studyForm"

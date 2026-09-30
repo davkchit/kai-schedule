@@ -363,7 +363,7 @@ router.get('/schedule/export', async (req, res) => {
 
         const allLessons = db.prepare(`
             SELECT id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
-                   time_start, time_end, subject, room, lesson_type, teacher
+                   time_start, time_end, subject, room, lesson_type, teacher, kind
             FROM lessons
             WHERE semester_id = ? AND group_id = ?
         `).all(semester.id, group.id);
@@ -402,7 +402,8 @@ router.get('/schedule/export', async (req, res) => {
     for (let offset = 0; offset < 6; offset += 1) {
         const isoDate = addDaysToIsoDate(weekStart, offset);
         const [year, month, day] = isoDate.split('-');
-        dayDates[offset + 1] = `${day}.${month}.${year}`;
+        // The sheet writes the day without a leading zero: «ВТОРНИК 1.09.2026».
+        dayDates[offset + 1] = `${Number(day)}.${month}.${year}`;
     }
 
     const settingsRows = db.prepare('SELECT key, value FROM settings').all();
@@ -412,7 +413,13 @@ router.get('/schedule/export', async (req, res) => {
         settings[row.key] = row.value;
     }
 
-    const termParity = settings.term_parity === 'fall' ? 'fall' : 'spring';
+    // Autumn or spring, the academic year and the approval year all follow from
+    // the semester's own start date — a stale setting can't put «VIII семестр,
+    // 2025/2026» on an autumn 2026 sheet.
+    const [startYear, startMonth] = semester.start_date.split('-').map(Number);
+    const isAutumn = startMonth >= 7;
+    const termParity = isAutumn ? 'fall' : 'spring';
+    const academicYear = isAutumn ? `${startYear}/${startYear + 1}` : `${startYear - 1}/${startYear}`;
     const courseSheets = Array.from(courseMap.entries())
         .sort(([a], [b]) => a - b)
         .map(([course, courseGroups]) => ({ course, groups: courseGroups }));
@@ -421,10 +428,11 @@ router.get('/schedule/export', async (req, res) => {
         const workbook = buildScheduleWorkbook({
             courseSheets,
             dayDates,
-            weekTypeLabel: weekMeta.weekTypeLabel.toUpperCase(),
+            weekTypeLabel: weekMeta.weekTypeLabel.toUpperCase().replace(/Ё/g, 'Е'),
             semesterLabelForCourse: (course) => getSemesterLabel(course, termParity),
             studyForm: settings.study_form || 'очная форма обучения',
-            academicYear: settings.academic_year || '',
+            academicYear,
+            approvalYear: startYear,
             directorName: settings.director_name || 'ФИО директора',
             directorTitle: settings.director_title || 'Директор филиала'
         });
