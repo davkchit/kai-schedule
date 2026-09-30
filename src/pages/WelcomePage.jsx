@@ -46,6 +46,9 @@ export default function WelcomePage() {
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [isInvalid, setIsInvalid] = useState(false);
     const [isFinishing, setIsFinishing] = useState(false);
+    const [isInputFocused, setIsInputFocused] = useState(false);
+    const inputRef = useRef(null);
+    const listRef = useRef(null);
 
     useEffect(() => {
         const savedSelection = getSavedSelection();
@@ -118,6 +121,80 @@ export default function WelcomePage() {
     }, []);
 
     const suggestions = getSuggestions(currentStep, universities, groups, inputValue);
+    // Group numbers and subgroups are digits: a phone shows its number pad,
+    // which is shorter than the letters and needs no switching.
+    const isNumericStep = currentStep === 2 ||
+        (currentStep === 1 && groups.length > 0 && groups.every((group) => /^\d+$/.test(group.name)));
+
+    // On a phone the keyboard covers the lower half of the screen, and the
+    // field sits mid-card with the list running under the keyboard. While the
+    // field is focused the page gets room below (.keyboard-open), the field is
+    // scrolled to the top of what is visible, and the list is cut to the space
+    // left above the keyboard.
+    useEffect(() => {
+        if (!isInputFocused) {
+            return undefined;
+        }
+
+        const viewport = window.visualViewport;
+        const isPhone = window.matchMedia('(max-width: 768px)').matches;
+        const root = document.documentElement;
+        const list = listRef.current;
+        // Measured before the keyboard is up: Chrome on Android shrinks innerHeight with it.
+        const fullHeight = window.innerHeight;
+
+        let wasKeyboardShown = false;
+
+        function fitList() {
+            if (!list || !viewport) {
+                return;
+            }
+
+            const keyboardShown = viewport.height < fullHeight - 80;
+
+            if (!keyboardShown) {
+                wasKeyboardShown = false;
+                list.style.maxHeight = '';
+                return;
+            }
+
+            // The keyboard came up after the first scroll aimed at the full screen.
+            if (!wasKeyboardShown && isPhone) {
+                wasKeyboardShown = true;
+                inputRef.current?.scrollIntoView({ block: 'start' });
+            }
+
+            const visibleBottom = viewport.offsetTop + viewport.height;
+            const room = visibleBottom - list.getBoundingClientRect().top - 12;
+            list.style.maxHeight = `${Math.max(112, Math.round(room))}px`;
+        }
+
+        let scrollTimer = null;
+
+        if (isPhone) {
+            root.classList.add('keyboard-open');
+            // After the keyboard has slid in, or the scroll would aim at the old viewport.
+            scrollTimer = window.setTimeout(() => {
+                inputRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                window.setTimeout(fitList, 350);
+            }, 300);
+        }
+
+        fitList();
+        viewport?.addEventListener('resize', fitList);
+        viewport?.addEventListener('scroll', fitList);
+
+        return () => {
+            window.clearTimeout(scrollTimer);
+            root.classList.remove('keyboard-open');
+            viewport?.removeEventListener('resize', fitList);
+            viewport?.removeEventListener('scroll', fitList);
+
+            if (list) {
+                list.style.maxHeight = '';
+            }
+        };
+    }, [isInputFocused]);
 
     function animateSubtitle(nextSubtitle) {
         for (const timer of subtitleTimersRef.current) {
@@ -295,6 +372,7 @@ export default function WelcomePage() {
                         <div className="search-container">
                             <input
                                 type="text"
+                                ref={inputRef}
                                 id="searchInput"
                                 className="search-input"
                                 placeholder={STEPS[currentStep].placeholder}
@@ -305,8 +383,14 @@ export default function WelcomePage() {
                                     setInputValue(event.target.value);
                                     setShowSuggestions(true);
                                 }}
-                                onFocus={() => setShowSuggestions(true)}
+                                inputMode={isNumericStep ? 'numeric' : 'text'}
+                                enterKeyHint="next"
+                                onFocus={() => {
+                                    setShowSuggestions(true);
+                                    setIsInputFocused(true);
+                                }}
                                 onBlur={() => {
+                                    setIsInputFocused(false);
                                     window.setTimeout(() => setShowSuggestions(false), 200);
                                 }}
                                 style={isInvalid ? { borderColor: '#EF4444' } : undefined}
@@ -317,6 +401,7 @@ export default function WelcomePage() {
                                 </svg>
                             </button>
                             <div
+                                ref={listRef}
                                 id="suggestions"
                                 className={`suggestions-list ${!showSuggestions || suggestions.length === 0 || isFinishing ? 'hidden' : ''}`}
                             >

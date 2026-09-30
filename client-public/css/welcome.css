@@ -212,8 +212,12 @@ body {
 }
 
 /* Контейнер поиска */
+/* z-index: the entry animation leaves this block and the teacher line below
+   each on a layer of its own, and the later one painted over the open list,
+   taking the tap meant for its first item. */
 .search-container {
     position: relative;
+    z-index: 2;
     margin-bottom: 24px;
     animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) 0.3s both;
 }
@@ -235,6 +239,16 @@ body {
 
 .search-input::placeholder {
     color: var(--gray-light);
+}
+
+/* While a phone keyboard is up (WelcomePage adds the class): room below the
+   card, so the field can be scrolled to the top of what the keyboard leaves. */
+html.keyboard-open .page-stack {
+    margin-bottom: 70vh;
+}
+
+.search-input {
+    scroll-margin-top: 16px;
 }
 
 .search-input:focus {
