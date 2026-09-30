@@ -367,24 +367,38 @@ body {
     transform: scale(0.97);
 }
 
-.teacher-link {
+/* "Вы преподаватель? Моё расписание →" — the second way in, a quiet line
+   at the foot of the card under a hairline, so the search stays the one
+   main action. */
+.teacher-entry {
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: fit-content;
-    margin: 20px auto 0;
-    padding: 11px 20px;
-    background: rgba(59, 130, 246, 0.1);
-    border: 1px solid rgba(59, 130, 246, 0.16);
-    border-radius: 999px;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 2px 6px;
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(113, 128, 150, 0.14);
+    font-size: 15px;
+    color: var(--text-secondary);
+    animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) 0.2s both;
+}
+
+.teacher-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    margin: -6px -10px -6px 0;
+    background: transparent;
+    border: none;
+    border-radius: 10px;
     color: #2563eb;
-    font-size: 14px;
+    font: inherit;
     font-weight: 600;
     cursor: pointer;
-    animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
-    transition: transform 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                box-shadow 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
+    transition: background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
+                transform 0.12s ease-out;
 }
 
 .teacher-link svg {
@@ -393,29 +407,33 @@ body {
 }
 
 .teacher-link:hover {
-    background: rgba(59, 130, 246, 0.16);
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(59, 130, 246, 0.18);
+    background: rgba(59, 130, 246, 0.08);
 }
 
-.teacher-link:hover svg:last-child {
+.teacher-link:hover svg {
     transform: translateX(3px);
 }
 
 .teacher-link:active {
-    transform: translateY(0) scale(0.96);
-    transition: transform 0.1s ease-out;
+    transform: scale(0.97);
+}
+
+.teacher-link:focus-visible {
+    outline: 2px solid rgba(59, 130, 246, 0.5);
+    outline-offset: 2px;
+}
+
+[data-theme="dark"] .teacher-entry {
+    border-top-color: rgba(148, 163, 184, 0.16);
+    color: #94a3b8;
 }
 
 [data-theme="dark"] .teacher-link {
-    background: rgba(59, 130, 246, 0.16);
-    border-color: rgba(96, 165, 250, 0.25);
     color: #93c5fd;
 }
 
 [data-theme="dark"] .teacher-link:hover {
-    background: rgba(59, 130, 246, 0.24);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    background: rgba(96, 165, 250, 0.12);
 }
 
 .back-button.hidden {
