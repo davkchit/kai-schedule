@@ -32,7 +32,9 @@ const DEFAULT_EDIT_FORM = {
     discipline_id: null,
     subgroup: 0,
     week_type: 0,
-    specific_week: ''
+    specific_week: '',
+    // Other groups the new pair goes to as well (a stream's lecture).
+    extra_group_ids: []
 };
 
 const BUILDER_TIME_SLOTS = [

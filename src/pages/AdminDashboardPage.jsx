@@ -446,7 +446,8 @@ export default function AdminDashboardPage() {
             discipline_id: null,
             subgroup,
             week_type: context === 'template' ? builderTemplateWeekType : 0,
-            specific_week: context === 'template' ? '' : targetWeekNumber
+            specific_week: context === 'template' ? '' : targetWeekNumber,
+            extra_group_ids: []
         });
         setIsEditModalOpen(true);
     }
@@ -666,8 +667,31 @@ export default function AdminDashboardPage() {
             specific_week: editForm.specific_week
         };
 
+        // A new pair for other groups too (a stream's lecture): checked for
+        // every group BEFORE anything is saved, so a taken cell in one of them
+        // stops the whole thing rather than leaving the lecture in one group.
+        const extraGroupIds = editMode === 'create' ? (editForm.extra_group_ids || []).filter(Boolean).map(Number) : [];
+        const extraBody = {
+            ...body,
+            group_ids: extraGroupIds,
+            specific_week: editContext === 'template' ? null : Number(editForm.specific_week)
+        };
+
         try {
             let response;
+
+            if (extraGroupIds.length > 0) {
+                const check = await api('/api/admin/lessons/for-groups', {
+                    method: 'POST',
+                    body: JSON.stringify({ ...extraBody, dry_run: true })
+                });
+
+                if (!check.ok) {
+                    const data = await check.json();
+                    setToastMessage(data.error || 'Не удалось проверить другие группы');
+                    return;
+                }
+            }
 
             if (editContext === 'template') {
                 // Template edits are always inserted as a new version — existing rows
@@ -724,6 +748,18 @@ export default function AdminDashboardPage() {
 
             const saved = await response.json().catch(() => ({}));
             const ownWeeks = editContext === 'template' && Array.isArray(saved.own_weeks_ahead) ? saved.own_weeks_ahead : [];
+            let extraNote = '';
+
+            if (extraGroupIds.length > 0) {
+                const extra = await api('/api/admin/lessons/for-groups', {
+                    method: 'POST',
+                    body: JSON.stringify(extraBody)
+                });
+                const names = groups.filter((group) => extraGroupIds.includes(Number(group.id))).map((group) => group.name);
+                extraNote = extra.ok
+                    ? ` — и в ${names.join(', ')}`
+                    : `, но в ${names.join(', ')} не добавлено: ${(await extra.json().catch(() => ({}))).error || 'ошибка'}`;
+            }
 
             setIsEditModalOpen(false);
             setEditForm(DEFAULT_EDIT_FORM);
@@ -734,7 +770,7 @@ export default function AdminDashboardPage() {
             // matching the old plan row on its own.
             setToastMessage(ownWeeks.length > 0
                 ? `Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них это изменение не появится, поправьте их на вкладке недели.`
-                : (editMode === 'create' ? 'Занятие добавлено' : 'Занятие обновлено'));
+                : (editMode === 'create' ? `Занятие добавлено${extraNote}` : 'Занятие обновлено'));
             loadLessons(selectedGroupId);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
@@ -1015,6 +1051,7 @@ export default function AdminDashboardPage() {
                 editContext={editContext}
                 editForm={editForm}
                 editMode={editMode}
+                groups={groups}
                 handleDeleteFromModal={handleDeleteFromModal}
                 handleEditSubmit={handleEditSubmit}
                 isEditModalOpen={isEditModalOpen}

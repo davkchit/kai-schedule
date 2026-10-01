@@ -1499,6 +1499,54 @@ test('a stream pair (one lecture for 23303 and 23313 at once) counts once, and s
     }
 });
 
+test('a new pair goes to other groups of the stream too — all of them or none', async () => {
+    const context = await createTestContext();
+
+    try {
+        const db = getDb();
+        const post = (body) => fetch(`${context.baseUrl}/api/admin/lessons/for-groups`, {
+            method: 'POST', headers: { ...context.authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        });
+        const universityId = db.prepare("SELECT id FROM universities WHERE short_name = 'КНИТУ-КАИ'").get().id;
+        const addGroup = (name) => db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, name).lastInsertRowid;
+        const g403 = addGroup('23403');
+        const g404 = addGroup('23404');
+        const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Волков И.З.')").run().lastInsertRowid;
+        const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Защита информации')").run().lastInsertRowid;
+        const pair = {
+            day_of_week: 3, time_start: '08:00', time_end: '09:30', subgroup: 0, specific_week: 4,
+            subject: 'что угодно', teacher: 'что угодно', teacher_id: teacherId, discipline_id: disciplineId,
+            lesson_type: 'Лекция', room: '105'
+        };
+        const count = () => db.prepare('SELECT COUNT(*) c FROM lessons WHERE discipline_id = ?').get(disciplineId).c;
+
+        // A taken cell in one group: refused for all, nothing written — not even on the real run.
+        db.prepare(`INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, specific_week, time_start, time_end, subject)
+                    VALUES (?, ?, 3, 0, 4, '08:00', '09:30', 'Физкультура')`).run(g404, context.semesterId);
+        const taken = await post({ ...pair, group_ids: [g403, g404], dry_run: true });
+        assert.equal(taken.status, 409);
+        assert.match((await taken.json()).error, /23404.*Физкультура/);
+        assert.equal((await post({ ...pair, group_ids: [g403, g404] })).status, 409);
+        assert.equal(count(), 0);
+
+        // A week still run by a template that has pairs this week: refused, it would hide them.
+        const templated = await post({ ...pair, specific_week: 3, group_ids: [context.primaryGroupId], dry_run: true });
+        assert.equal(templated.status, 409);
+        assert.match((await templated.json()).error, /по шаблону/);
+
+        // Free cells: the dry run writes nothing, the real run writes both, text from the dictionary.
+        db.prepare("DELETE FROM lessons WHERE subject = 'Физкультура'").run();
+        assert.equal((await post({ ...pair, group_ids: [g403, g404], dry_run: true })).status, 200);
+        assert.equal(count(), 0);
+        assert.equal((await post({ ...pair, group_ids: [g403, g404] })).status, 201);
+        const rows = db.prepare('SELECT group_id, subject, teacher, specific_week, room FROM lessons WHERE discipline_id = ? ORDER BY group_id').all(disciplineId);
+        assert.deepEqual(rows.map((row) => row.group_id), [g403, g404]);
+        assert.ok(rows.every((row) => row.subject === 'Защита информации' && row.teacher === 'Волков И.З.' && row.specific_week === 4 && row.room === '105'));
+    } finally {
+        await context.close();
+    }
+});
+
 test('teachers and disciplines: rename fixes a typo, delete is blocked while a load_plan row still references them', async () => {
     const context = await createTestContext();
     const db = getDb();

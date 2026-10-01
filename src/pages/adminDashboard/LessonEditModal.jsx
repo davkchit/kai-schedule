@@ -1,5 +1,6 @@
 import { LESSON_TYPES } from './builderUtils';
 import DictionaryPicker from './DictionaryPicker';
+import GroupsField from '../adminLoad/GroupsField';
 
 // The dialog for creating, editing and removing a pair in the constructor.
 // teachers/disciplines and onCreateTeacher/onCreateDiscipline come from the
@@ -9,6 +10,7 @@ export default function LessonEditModal({
     editContext,
     editForm,
     editMode,
+    groups,
     handleDeleteFromModal,
     handleEditSubmit,
     isEditModalOpen,
@@ -145,6 +147,18 @@ export default function LessonEditModal({
                             </select>
                         </div>
                     </div>
+                    {editMode === 'create' && (
+                        <div className="form-row modal-extra-groups">
+                            <label>Ещё группы</label>
+                            <p className="modal-hint">Если пара общая на поток — та же пара сразу добавится и в эти группы.</p>
+                            <GroupsField
+                                groups={(groups || []).filter((group) => String(group.id) !== String(editForm.group_id))}
+                                value={(editForm.extra_group_ids || []).map(String)}
+                                onChange={(groupIds) => setEditForm((previous) => ({ ...previous, extra_group_ids: groupIds }))}
+                                allowEmpty
+                            />
+                        </div>
+                    )}
                     <div className="modal-actions">
                         {editMode === 'edit' && (
                             <button type="button" className="btn btn-delete" onClick={handleDeleteFromModal}>

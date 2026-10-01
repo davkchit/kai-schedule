@@ -4,7 +4,7 @@
 const express = require('express');
 const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
-const { formatLocalDate, getSemesterWeekMeta } = require('../../utils/date');
+const { formatLocalDate, getSemesterWeekMeta, getSemesterWeekType } = require('../../utils/date');
 const { resolveTemplateLessons } = require('../../utils/templateResolve');
 const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../../utils/slots');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
@@ -281,6 +281,153 @@ router.post('/lessons', (req, res) => {
 
     res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead });
 });
+
+/**
+ * The same new pair for other groups too — a lecture the whole stream
+ * attends. The constructor saves the pair for its own group the usual way and
+ * sends the other groups here: first with dry_run, before saving anything, so
+ * a taken cell in 23404 stops the whole thing instead of leaving the lecture
+ * in 23403 only; then for real, all groups in one transaction.
+ *
+ * A week that is still the template's for a group is refused when that
+ * template has pairs this week: one row of its own would make the week "its
+ * own" and hide the rest (the constructor materializes such a week first —
+ * the specialist does that from the group itself). With an empty template
+ * there is nothing to hide, and the pair is just added.
+ */
+router.post('/lessons/for-groups', (req, res) => {
+    const rawIds = Array.isArray(req.body?.group_ids) ? req.body.group_ids : [];
+    const groupIds = [...new Set(rawIds.map(Number))];
+
+    if (groupIds.length === 0 || groupIds.length > 8 || groupIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+        return res.status(400).json({ error: 'Укажите от 1 до 8 групп' });
+    }
+
+    let payload;
+
+    try {
+        payload = validateLessonCreateBody({ ...req.body, group_id: groupIds[0] });
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
+    if (payload.is_removed) {
+        return res.status(400).json({ error: 'Убрать пару сразу у нескольких групп нельзя' });
+    }
+
+    const db = getDb();
+    const semester = getActiveSemester(db);
+
+    if (!semester) {
+        return res.status(400).json({ error: NO_WORKING_SEMESTER });
+    }
+
+    if (findClosedSemester(db, semester.id)) {
+        return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
+    let identity;
+
+    try {
+        identity = resolveTeacherDiscipline(db, {
+            teacherId: payload.teacher_id, teacherText: payload.teacher,
+            disciplineId: payload.discipline_id, disciplineText: payload.subject
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 400).json({ error: error.message });
+    }
+
+    const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
+    const problems = [];
+
+    for (const groupId of groupIds) {
+        const group = db.prepare('SELECT id, name FROM groups_ WHERE id = ?').get(groupId);
+
+        if (!group) {
+            return res.status(404).json({ error: 'Группа не найдена' });
+        }
+
+        const occupant = payload.specific_week === null
+            ? findTemplateSlotOccupant(db, {
+                semesterId: semester.id, groupId, dayOfWeek: payload.day_of_week,
+                timeStart: payload.time_start, timeEnd: payload.time_end, subgroup: payload.subgroup,
+                weekType: payload.week_type, targetWeek: templateFromWeek, ignoreLessonId: null
+            })
+            : findWeekSlotOccupant(db, {
+                semesterId: semester.id, groupId, weekNumber: payload.specific_week, dayOfWeek: payload.day_of_week,
+                timeStart: payload.time_start, timeEnd: payload.time_end, subgroup: payload.subgroup
+            });
+
+        if (occupant) {
+            problems.push(`у ${group.name} в это время уже стоит ${occupant.subject}`);
+            continue;
+        }
+
+        if (payload.specific_week !== null && templateHasPairsThisWeek(db, semester, groupId, payload.specific_week)) {
+            problems.push(`у ${group.name} эта неделя ещё идёт по шаблону — добавьте пару в ней отдельно`);
+        }
+    }
+
+    if (problems.length > 0) {
+        return res.status(409).json({ error: `Не добавлено ни в одну группу: ${problems.join('; ')}.` });
+    }
+
+    if (req.body.dry_run) {
+        return res.json({ ok: true });
+    }
+
+    const insertLesson = db.prepare(`
+        INSERT INTO lessons (
+            group_id, subgroup, day_of_week, week_type, specific_week,
+            template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
+            kind, semester_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const createdIds = db.transaction(() => groupIds.map((groupId) => insertLesson.run(
+        groupId, payload.subgroup, payload.day_of_week, payload.week_type, payload.specific_week,
+        templateFromWeek, payload.time_start, payload.time_end,
+        identity.discipline, payload.room, payload.lesson_type, identity.teacher, identity.teacherId, identity.disciplineId,
+        payload.sort_order, payload.kind, semester.id
+    ).lastInsertRowid))();
+
+    groupIds.forEach((groupId, index) => writeAuditLog(db, {
+        adminId: req.admin.id,
+        action: 'lesson.create',
+        entityType: 'lesson',
+        entityId: createdIds[index],
+        ipAddress: getClientAddress(req),
+        details: {
+            group_id: groupId,
+            subject: identity.discipline,
+            day_of_week: payload.day_of_week,
+            time_start: payload.time_start,
+            time_end: payload.time_end,
+            specific_week: payload.specific_week,
+            together_with_groups: groupIds.length
+        }
+    }));
+
+    res.status(201).json({ created: createdIds.length });
+});
+
+function templateHasPairsThisWeek(db, semester, groupId, weekNumber) {
+    const ownRows = db.prepare('SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1')
+        .get(semester.id, groupId, weekNumber);
+
+    if (ownRows) {
+        return false;
+    }
+
+    const weekType = getSemesterWeekType(semester, weekNumber);
+    const templateRows = db.prepare(`
+        SELECT * FROM lessons
+        WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
+    `).all(semester.id, groupId, weekType);
+
+    return resolveTemplateLessons(templateRows, weekNumber).length > 0;
+}
 
 router.put('/lessons/:id', (req, res) => {
     const db = getDb();
