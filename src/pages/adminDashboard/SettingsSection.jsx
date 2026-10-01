@@ -10,9 +10,11 @@ export default function SettingsSection({
     groupDirectionDrafts,
     groups,
     handleCreateGroup,
+    handleJoinGroup,
     handleSaveGroupDirection,
     isCreatingGroup,
     newGroupDirection,
+    newGroupJoinedTo,
     newGroupName,
     newGroupUniversityId,
     saveSettings,
@@ -21,6 +23,7 @@ export default function SettingsSection({
     setDirectorTitle,
     setGroupDirectionDrafts,
     setNewGroupDirection,
+    setNewGroupJoinedTo,
     setNewGroupName,
     setNewGroupUniversityId,
     setSemesterStartDate,
@@ -89,6 +92,7 @@ export default function SettingsSection({
 
             <h3 className="subsection-title">Группы и направления</h3>
             <p className="section-desc">Курс определяется автоматически по номеру группы (23<strong>1</strong>01 — 1 курс). Направление появляется в шапке при экспорте расписания.</p>
+            <p className="section-desc">«Объединена с» — для групп, которые учатся вместе (как 23313 с 23303): расписание у них одно, в конструкторе это одна группа «23303 / 23313», студенты каждой видят его под своим номером.</p>
 
             <div className="add-group-row">
                 <select
@@ -115,6 +119,17 @@ export default function SettingsSection({
                     value={newGroupDirection}
                     onChange={(event) => setNewGroupDirection(event.target.value)}
                 />
+                <select
+                    className="form-input"
+                    value={newGroupJoinedTo}
+                    onChange={(event) => setNewGroupJoinedTo(event.target.value)}
+                    title="Если группа учится вместе с другой — расписание будет общим"
+                >
+                    <option value="">Отдельная группа</option>
+                    {groups.filter((group) => !group.joined_to).map((group) => (
+                        <option key={group.id} value={group.id}>Объединить с {group.name}</option>
+                    ))}
+                </select>
                 <button type="button" className="btn btn-primary" onClick={handleCreateGroup} disabled={isCreatingGroup}>
                     {isCreatingGroup ? 'Добавление...' : 'Добавить группу'}
                 </button>
@@ -128,6 +143,7 @@ export default function SettingsSection({
                             <th>Группа</th>
                             <th>Курс</th>
                             <th>Направление</th>
+                            <th>Объединена с</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -152,6 +168,22 @@ export default function SettingsSection({
                                                 [group.id]: event.target.value
                                             }))}
                                         />
+                                    </td>
+                                    <td>
+                                        {group.joined_label ? (
+                                            <span className="setting-hint">главная: {group.joined_label}</span>
+                                        ) : (
+                                            <select
+                                                className="form-input"
+                                                value={group.joined_to ?? ''}
+                                                onChange={(event) => handleJoinGroup(group.id, event.target.value)}
+                                            >
+                                                <option value="">—</option>
+                                                {groups
+                                                    .filter((other) => other.id !== group.id && !other.joined_to)
+                                                    .map((other) => <option key={other.id} value={other.id}>{other.name}</option>)}
+                                            </select>
+                                        )}
                                     </td>
                                     <td>
                                         <button className="btn-edit" onClick={() => handleSaveGroupDirection(group.id)}>

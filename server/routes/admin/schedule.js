@@ -14,6 +14,7 @@ const {
 } = require('../../utils/date');
 const { getCourseFromGroupName, getSemesterLabel } = require('../../utils/course');
 const { resolveTemplateLessons } = require('../../utils/templateResolve');
+const { joinedLabels, joinedMemberError } = require('../../utils/groupJoin');
 const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../../utils/slots');
 const { getActiveSemester, getSemesterById, getSemesterForDate } = require('../../utils/semesters');
 const {
@@ -72,6 +73,10 @@ router.post('/schedule/upload', (req, res) => {
 
     if (!groupRow) {
         return res.status(404).json({ error: `Группа "${group}" не найдена` });
+    }
+
+    if (joinedMemberError(db, groupRow.id)) {
+        return res.status(409).json({ error: joinedMemberError(db, groupRow.id) });
     }
 
     const weekTypeMap = { all: 0, odd: 1, even: 2 };
@@ -239,6 +244,10 @@ router.post('/schedule/upload-bulk', (req, res) => {
             return res.status(404).json({ error: `Группа "${group}" не найдена` });
         }
 
+        if (joinedMemberError(db, groupRow.id)) {
+            return res.status(409).json({ error: joinedMemberError(db, groupRow.id) });
+        }
+
         resolvedGroups.push({ groupRow, group, lessons });
     }
 
@@ -350,7 +359,11 @@ router.get('/schedule/export', async (req, res) => {
     }
 
     const weekMeta = getSemesterWeekMeta(semester, weekStart);
-    const groups = db.prepare('SELECT id, name, direction FROM groups_ ORDER BY name').all();
+    // A joined group has no pairs of its own: it is printed inside its
+    // leader's block, which is named after both ("23303 / 23313").
+    const labels = joinedLabels(db);
+    const groups = db.prepare('SELECT id, name, direction FROM groups_ WHERE joined_to IS NULL ORDER BY name').all()
+        .map((group) => ({ ...group, label: labels.get(group.id) || group.name }));
 
     const courseMap = new Map();
 
@@ -387,7 +400,7 @@ router.get('/schedule/export', async (req, res) => {
         }
 
         courseMap.get(course).push({
-            name: group.name,
+            name: group.label,
             direction: group.direction,
             lessons: lessonsForWeek
         });
@@ -662,6 +675,10 @@ router.post('/schedule/materialize-week', (req, res) => {
 
     if (!group) {
         return res.status(404).json({ error: 'Группа не найдена' });
+    }
+
+    if (joinedMemberError(db, payload.group_id)) {
+        return res.status(409).json({ error: joinedMemberError(db, payload.group_id) });
     }
 
     // The constructor edits the working semester; "week N" means week N of it.

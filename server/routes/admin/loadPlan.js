@@ -7,6 +7,7 @@ const express = require('express');
 const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { buildLoadWorkbook } = require('../../exportLoad');
+const { scheduleGroupId } = require('../../utils/groupJoin');
 const { attachPlanGroups, setPlanGroups } = require('../../utils/planGroups');
 const { computePlanRowProgress } = require('../../utils/planProgress');
 const { formatLocalDate, getSemesterWeekMeta } = require('../../utils/date');
@@ -140,7 +141,8 @@ router.get('/load-plan/unmatched', (req, res) => {
         WHERE lp.semester_id = ?
     `).all(semester.id));
     // A stream row stands for a pair in each of its groups.
-    const planned = new Set(planRows.flatMap((row) => row.group_ids.map((groupId) => identityKey(row, groupId))));
+    // A joined group's row covers its leader's pairs, which is where they live.
+    const planned = new Set(planRows.flatMap((row) => row.group_ids.map((groupId) => identityKey(row, scheduleGroupId(db, groupId)))));
 
     const byIdentity = new Map();
 

@@ -318,6 +318,14 @@ function initTables() {
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_load_plan ON lessons(load_plan_id)');
 
+    // A group that studies as one with another (23313 with 23303) points at it
+    // and owns no pairs of its own — see utils/groupJoin.js.
+    try {
+        db.exec('ALTER TABLE groups_ ADD COLUMN joined_to INTEGER REFERENCES groups_(id)');
+    } catch (err) {
+        // Ignored if column already exists
+    }
+
     // The other groups of a stream row (see load_plan above). Only the groups
     // beyond load_plan.group_id live here, so a row with one group needs none.
     db.exec(`

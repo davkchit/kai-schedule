@@ -33,6 +33,7 @@ export default function AdminDashboardPage() {
     const [newGroupUniversityId, setNewGroupUniversityId] = useState('');
     const [newGroupName, setNewGroupName] = useState('');
     const [newGroupDirection, setNewGroupDirection] = useState('');
+    const [newGroupJoinedTo, setNewGroupJoinedTo] = useState('');
     const [isCreatingGroup, setIsCreatingGroup] = useState(false);
     const [selectedGroupId, setSelectedGroupId] = useState('');
     const [lessons, setLessons] = useState([]);
@@ -866,7 +867,8 @@ export default function AdminDashboardPage() {
                 body: JSON.stringify({
                     university_id: Number(newGroupUniversityId),
                     name: newGroupName.trim(),
-                    direction: newGroupDirection.trim()
+                    direction: newGroupDirection.trim(),
+                    joined_to: newGroupJoinedTo ? Number(newGroupJoinedTo) : null
                 })
             });
 
@@ -877,10 +879,12 @@ export default function AdminDashboardPage() {
                 return;
             }
 
-            setGroups((previous) => [...previous, data].sort((a, b) => a.name.localeCompare(b.name)));
-            setToastMessage(`Группа ${data.name} добавлена`);
+            // A full reload: joining changes the other group's label too.
+            await loadGroups();
+            setToastMessage(data.joined_to_name ? `Группа ${data.name} добавлена и объединена с ${data.joined_to_name}` : `Группа ${data.name} добавлена`);
             setNewGroupName('');
             setNewGroupDirection('');
+            setNewGroupJoinedTo('');
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Ошибка сети');
@@ -914,6 +918,56 @@ export default function AdminDashboardPage() {
             }
         }
     }
+
+    // Join a group to another (they share one timetable from then on), or
+    // split it off again with leaderId ''.
+    async function handleJoinGroup(groupId, leaderId) {
+        const group = groups.find((item) => item.id === groupId);
+        const leader = groups.find((item) => String(item.id) === String(leaderId));
+        const question = leader
+            ? `Объединить ${group.name} с ${leader.name}?\n\nРасписание станет общим: правите только ${leader.name}, студенты ${group.name} видят то же самое, в Excel — один блок «${leader.name} / ${group.name}». Пары ${group.name}, совпадающие с ${leader.name}, удалятся как дубли; если хоть одна отличается, объединения не будет.`
+            : `Разъединить ${group.name} и ${group.joined_to_name}?\n\n${group.name} получит копию общего расписания и дальше пойдёт отдельно.`;
+
+        if (!window.confirm(question)) {
+            return;
+        }
+
+        try {
+            const response = await api(`/api/admin/groups/${groupId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ joined_to: leaderId ? Number(leaderId) : null })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось изменить объединение');
+                return;
+            }
+
+            await loadGroups();
+            setToastMessage(leader ? `${group.name} объединена с ${leader.name}` : `${group.name} теперь отдельно`);
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
+    // A group joined while it was open in the constructor: switch to the
+    // leader, where its timetable now lives.
+    const selectedLeaderId = groups.find((group) => String(group.id) === String(selectedGroupId))?.joined_to;
+
+    useEffect(() => {
+        if (selectedLeaderId) {
+            setSelectedGroupId(String(selectedLeaderId));
+        }
+    }, [selectedLeaderId]);
+
+    // The constructor works with one group per shared timetable: a joined
+    // group is left out, its leader is shown as "23303 / 23313".
+    const builderGroups = groups
+        .filter((group) => !group.joined_to)
+        .map((group) => (group.joined_label ? { ...group, name: group.joined_label } : group));
 
     async function saveSettings() {
         try {
@@ -962,7 +1016,7 @@ export default function AdminDashboardPage() {
                 <BuilderSection
                     activeSection={activeSection}
                     workingSemester={workingSemester}
-                    groups={groups}
+                    groups={builderGroups}
                     selectedGroupId={selectedGroupId}
                     setSelectedGroupId={setSelectedGroupId}
                     lessons={lessons}
@@ -1008,6 +1062,9 @@ export default function AdminDashboardPage() {
                     groups={groups}
                     handleCreateGroup={handleCreateGroup}
                     handleSaveGroupDirection={handleSaveGroupDirection}
+                    handleJoinGroup={handleJoinGroup}
+                    newGroupJoinedTo={newGroupJoinedTo}
+                    setNewGroupJoinedTo={setNewGroupJoinedTo}
                     isCreatingGroup={isCreatingGroup}
                     newGroupDirection={newGroupDirection}
                     newGroupName={newGroupName}
@@ -1051,7 +1108,7 @@ export default function AdminDashboardPage() {
                 editContext={editContext}
                 editForm={editForm}
                 editMode={editMode}
-                groups={groups}
+                groups={builderGroups}
                 handleDeleteFromModal={handleDeleteFromModal}
                 handleEditSubmit={handleEditSubmit}
                 isEditModalOpen={isEditModalOpen}

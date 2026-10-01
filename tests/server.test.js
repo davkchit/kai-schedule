@@ -1547,6 +1547,95 @@ test('a new pair goes to other groups of the stream too — all of them or none'
     }
 });
 
+test('a joined group (23313 with 23303) shows and counts the leader\'s pairs, and can be split off again', async () => {
+    const context = await createTestContext();
+
+    try {
+        const db = getDb();
+        const json = (method, body) => ({ method, headers: { ...context.authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(context.semesterId);
+        const universityId = db.prepare("SELECT id FROM universities WHERE short_name = 'КНИТУ-КАИ'").get().id;
+        const addGroup = (name) => db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, name).lastInsertRowid;
+        const g303 = addGroup('23303');
+        const g313 = addGroup('23313');
+        const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Павлова Г.Р.')").run().lastInsertRowid;
+        const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Базы данных')").run().lastInsertRowid;
+        const addPair = (groupId, week, room = '103') => db.prepare(`
+            INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, specific_week, template_from_week, time_start, time_end,
+                subject, room, lesson_type, teacher, teacher_id, discipline_id)
+            VALUES (?, ?, 1, 0, ?, 1, '08:00', '09:30', 'Базы данных', ?, 'Лекция', 'Павлова Г.Р.', ?, ?)
+        `).run(groupId, context.semesterId, week, room, teacherId, disciplineId);
+        for (const week of [1, 2]) {
+            addPair(g303, week);
+            addPair(g313, week, week === 2 ? '104' : '103');
+        }
+        const lessonsOf = (groupId) => db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ?').get(groupId).c;
+
+        // Different timetables: refused, nothing lost.
+        const refused = await fetch(`${context.baseUrl}/api/admin/groups/${g313}`, json('PUT', { joined_to: g303 }));
+        assert.equal(refused.status, 409);
+        assert.match((await refused.json()).error, /различаются \(2 пар/);
+        assert.equal(lessonsOf(g313), 2);
+
+        // The same timetables: joined, the duplicates dropped, the direction untouched.
+        db.prepare("UPDATE lessons SET room = '103' WHERE group_id = ?").run(g313);
+        db.prepare("UPDATE groups_ SET direction = 'ИВТ' WHERE id = ?").run(g313);
+        const joined = await fetch(`${context.baseUrl}/api/admin/groups/${g313}`, json('PUT', { joined_to: g303 }));
+        assert.equal(joined.status, 200);
+        assert.equal((await joined.json()).direction, 'ИВТ');
+        assert.equal(lessonsOf(g313), 0);
+        const groups = await (await fetch(`${context.baseUrl}/api/admin/groups`, { headers: context.authHeaders })).json();
+        assert.equal(groups.find((group) => group.id === g303).joined_label, '23303 / 23313');
+        assert.equal(groups.find((group) => group.id === g313).joined_to_name, '23303');
+
+        // Students of 23313 see the shared pairs; the constructor shows them too.
+        const studentView = await (await fetch(`${context.baseUrl}/api/schedule/${g313}?date=2026-02-09&days=14`)).json();
+        assert.equal(studentView.group.name, '23313');
+        assert.equal(studentView.lessons.filter((lesson) => lesson.subject === 'Базы данных').length, 2);
+        const builderView = await (await fetch(`${context.baseUrl}/api/admin/lessons?group_id=${g313}`, { headers: context.authHeaders })).json();
+        assert.equal(builderView.length, 2);
+
+        // Writes go to the leader, never to the member.
+        const write = await fetch(`${context.baseUrl}/api/admin/lessons`, json('POST', {
+            group_id: g313, day_of_week: 2, time_start: '08:00', time_end: '09:30', subject: 'X', specific_week: 1
+        }));
+        assert.equal(write.status, 409);
+        assert.match((await write.json()).error, /объединена с 23303/);
+
+        // A plan row for 23313 alone counts the leader's pairs.
+        const planRow = await (await fetch(`${context.baseUrl}/api/admin/load-plan`, json('POST', {
+            semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция', group_id: g313
+        }))).json();
+        assert.equal(planRow.progress.occurred_hours, 4);
+        const unmatched = await (await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders })).json();
+        assert.equal(unmatched.items.filter((item) => item.subject === 'Базы данных').length, 0);
+
+        // Excel: one block named after both groups, the pair once.
+        const ExcelJS = require('exceljs');
+        const exported = await fetch(`${context.baseUrl}/api/admin/schedule/export?week_start=2026-02-09`, { headers: context.authHeaders });
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()));
+        const cells = [];
+        workbook.getWorksheet('3 курс').eachRow((row) => row.eachCell((cell) => {
+            if (!(cell.isMerged && cell.master.address !== cell.address) && cell.value) cells.push(String(cell.value));
+        }));
+        assert.ok(cells.includes('23303 / 23313'));
+        assert.equal(cells.filter((text) => text.startsWith('Базы данных')).length, 1);
+
+        // The leader can't be deleted from under its member.
+        assert.equal((await fetch(`${context.baseUrl}/api/admin/groups/${g303}`, { method: 'DELETE', headers: context.authHeaders })).status, 409);
+
+        // Split off: 23313 gets a copy of the shared timetable and goes on its own.
+        const split = await fetch(`${context.baseUrl}/api/admin/groups/${g313}`, json('PUT', { joined_to: null }));
+        assert.equal(split.status, 200);
+        assert.equal((await split.json()).joined_to, null);
+        assert.equal(lessonsOf(g313), 2);
+        assert.equal(lessonsOf(g303), 2);
+    } finally {
+        await context.close();
+    }
+});
+
 test('teachers and disciplines: rename fixes a typo, delete is blocked while a load_plan row still references them', async () => {
     const context = await createTestContext();
     const db = getDb();

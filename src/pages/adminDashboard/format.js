@@ -29,6 +29,8 @@ function formatAuditAction(action) {
         'schedule.clear_week': 'Очистка недели (возврат к шаблону)',
         'group.create': 'Добавление группы',
         'group.update': 'Изменение направления группы',
+        'group.join': 'Объединение групп',
+        'group.unjoin': 'Разъединение групп',
         'lesson.create': 'Добавление занятия',
         'lesson.update': 'Редактирование занятия',
         'lesson.delete': 'Удаление занятия',

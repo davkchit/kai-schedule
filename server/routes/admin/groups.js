@@ -5,20 +5,31 @@ const express = require('express');
 const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { validateGroupCreateBody, validateGroupUpdateBody } = require('../../validation');
+const { joinGroup, joinedLabels, unjoinGroup } = require('../../utils/groupJoin');
 const { getClientAddress } = require('./shared');
+
+const GROUP_FIELDS = `
+    SELECT g.id, g.name, g.direction, g.joined_to, l.name AS joined_to_name, u.short_name as university
+    FROM groups_ g
+    JOIN universities u ON u.id = g.university_id
+    LEFT JOIN groups_ l ON l.id = g.joined_to
+`;
+
+// joined_label: "23303 / 23313" on the group the others are joined to.
+function withJoinedLabel(db, rows) {
+    const labels = joinedLabels(db);
+    return rows.map((row) => ({ ...row, joined_label: labels.get(row.id) || null }));
+}
+
+function readGroup(db, groupId) {
+    return withJoinedLabel(db, [db.prepare(`${GROUP_FIELDS} WHERE g.id = ?`).get(groupId)])[0];
+}
 
 const router = express.Router();
 
 router.get('/groups', (req, res) => {
     const db = getDb();
-    const rows = db.prepare(`
-        SELECT g.id, g.name, g.direction, u.short_name as university
-        FROM groups_ g
-        JOIN universities u ON u.id = g.university_id
-        ORDER BY u.short_name, g.name
-    `).all();
-
-    res.json(rows);
+    res.json(withJoinedLabel(db, db.prepare(`${GROUP_FIELDS} ORDER BY u.short_name, g.name`).all()));
 });
 
 router.post('/groups', (req, res) => {
@@ -44,8 +55,22 @@ router.post('/groups', (req, res) => {
         return res.status(409).json({ error: `Группа «${payload.name}» уже существует в этом вузе` });
     }
 
-    const result = db.prepare('INSERT INTO groups_ (university_id, name, direction) VALUES (?, ?, ?)')
-        .run(payload.university_id, payload.name, payload.direction);
+    let result;
+
+    try {
+        result = db.transaction(() => {
+            const inserted = db.prepare('INSERT INTO groups_ (university_id, name, direction) VALUES (?, ?, ?)')
+                .run(payload.university_id, payload.name, payload.direction);
+
+            if (payload.joined_to) {
+                joinGroup(db, Number(inserted.lastInsertRowid), payload.joined_to);
+            }
+
+            return inserted;
+        })();
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({ error: error.message });
+    }
 
     writeAuditLog(db, {
         adminId: req.admin.id,
@@ -53,17 +78,10 @@ router.post('/groups', (req, res) => {
         entityType: 'group',
         entityId: result.lastInsertRowid,
         ipAddress: getClientAddress(req),
-        details: { name: payload.name, university_id: payload.university_id }
+        details: { name: payload.name, university_id: payload.university_id, joined_to: payload.joined_to }
     });
 
-    const created = db.prepare(`
-        SELECT g.id, g.name, g.direction, u.short_name as university
-        FROM groups_ g
-        JOIN universities u ON u.id = g.university_id
-        WHERE g.id = ?
-    `).get(result.lastInsertRowid);
-
-    res.status(201).json(created);
+    res.status(201).json(readGroup(db, result.lastInsertRowid));
 });
 
 router.put('/groups/:id', (req, res) => {
@@ -88,25 +106,48 @@ router.put('/groups/:id', (req, res) => {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
 
-    db.prepare('UPDATE groups_ SET direction = ? WHERE id = ?').run(payload.direction, groupId);
+    if (payload.direction !== undefined) {
+        db.prepare('UPDATE groups_ SET direction = ? WHERE id = ?').run(payload.direction, groupId);
 
-    writeAuditLog(db, {
-        adminId: req.admin.id,
-        action: 'group.update',
-        entityType: 'group',
-        entityId: groupId,
-        ipAddress: getClientAddress(req),
-        details: { direction: payload.direction }
-    });
+        writeAuditLog(db, {
+            adminId: req.admin.id,
+            action: 'group.update',
+            entityType: 'group',
+            entityId: groupId,
+            ipAddress: getClientAddress(req),
+            details: { direction: payload.direction }
+        });
+    }
 
-    const updated = db.prepare(`
-        SELECT g.id, g.name, g.direction, u.short_name as university
-        FROM groups_ g
-        JOIN universities u ON u.id = g.university_id
-        WHERE g.id = ?
-    `).get(groupId);
+    if (payload.joined_to !== undefined) {
+        const current = db.prepare('SELECT joined_to FROM groups_ WHERE id = ?').get(groupId).joined_to;
 
-    res.json(updated);
+        if (current !== payload.joined_to) {
+            let outcome;
+
+            try {
+                // Re-pointing to another leader goes through "on its own" first.
+                outcome = db.transaction(() => {
+                    const split = current ? unjoinGroup(db, groupId) : { copied: 0 };
+                    const joined = payload.joined_to ? joinGroup(db, groupId, payload.joined_to) : { removed: 0 };
+                    return { ...split, ...joined };
+                })();
+            } catch (error) {
+                return res.status(error.statusCode || 500).json({ error: error.message });
+            }
+
+            writeAuditLog(db, {
+                adminId: req.admin.id,
+                action: payload.joined_to ? 'group.join' : 'group.unjoin',
+                entityType: 'group',
+                entityId: groupId,
+                ipAddress: getClientAddress(req),
+                details: { joined_to: payload.joined_to, previous: current, ...outcome }
+            });
+        }
+    }
+
+    res.json(readGroup(db, groupId));
 });
 
 /**
@@ -128,6 +169,14 @@ router.delete('/groups/:id', (req, res) => {
 
     if (!group) {
         return res.status(404).json({ error: 'Группа не найдена' });
+    }
+
+    const members = db.prepare('SELECT name FROM groups_ WHERE joined_to = ? ORDER BY name').all(groupId);
+
+    if (members.length > 0) {
+        return res.status(409).json({
+            error: `С группой «${group.name}» объединены: ${members.map((row) => row.name).join(', ')}. Сначала разъедините их.`
+        });
     }
 
     const lessonCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ?').get(groupId).c;

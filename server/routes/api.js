@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { addDaysToIsoDate, formatLocalDate, getSemesterWeekMeta, resolveFirstWeekParity } = require('../utils/date');
+const { scheduleGroupId } = require('../utils/groupJoin');
 const { attachPlanGroups } = require('../utils/planGroups');
 const { computePlanRowProgress } = require('../utils/planProgress');
 const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
@@ -113,7 +114,8 @@ router.get('/schedule/:groupId', (req, res) => {
         const weekFrom = getSemesterWeekMeta(semester, portionStart).weekNumber;
         const weekTo = getSemesterWeekMeta(semester, portionEnd).weekNumber;
 
-        const params = [groupId, semester.id, weekFrom, weekTo];
+        // A group joined to another (23313 → 23303) shows that group's pairs.
+        const params = [scheduleGroupId(db, groupId), semester.id, weekFrom, weekTo];
         if (subgroup === 1 || subgroup === 2) {
             params.push(subgroup);
         }

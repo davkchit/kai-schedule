@@ -1,4 +1,5 @@
 const { HOURS_PER_LESSON, computeExceptionWeeks, computeLoadProgress } = require('./loadCalc');
+const { scheduleGroupId } = require('./groupJoin');
 const { getPlanGroupIds } = require('./planGroups');
 const { resolveFirstWeekParity } = require('./date');
 
@@ -21,7 +22,8 @@ const { resolveFirstWeekParity } = require('./date');
  */
 function computePlanRowProgress(db, planRow, semester, { cache = new Map(), overrides = {} } = {}) {
     const effective = { ...semester, ...overrides };
-    const groupIds = getPlanGroupIds(db, planRow);
+    // A joined group (23313 → 23303) has no pairs of its own: read its leader's.
+    const groupIds = [...new Set(getPlanGroupIds(db, planRow).map((groupId) => scheduleGroupId(db, groupId)))];
     const occurrencesBySlot = new Map();
 
     // A stream row covers several groups. Each group's schedule is resolved

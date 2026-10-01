@@ -6,6 +6,7 @@ const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { formatLocalDate, getSemesterWeekMeta, getSemesterWeekType } = require('../../utils/date');
 const { resolveTemplateLessons } = require('../../utils/templateResolve');
+const { joinedMemberError, scheduleGroupId } = require('../../utils/groupJoin');
 const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../../utils/slots');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
 const { validateLessonCreateBody, validateLessonUpdateBody } = require('../../validation');
@@ -56,7 +57,7 @@ router.get('/lessons', (req, res) => {
         SELECT * FROM lessons
         WHERE semester_id = ? AND group_id = ?
         ORDER BY day_of_week, sort_order, time_start
-    `).all(semester.id, groupId);
+    `).all(semester.id, scheduleGroupId(db, groupId));
 
     res.json(rows);
 });
@@ -75,6 +76,12 @@ router.post('/lessons', (req, res) => {
 
     if (!group) {
         return res.status(404).json({ error: 'Группа не найдена' });
+    }
+
+    const joinedError = joinedMemberError(db, payload.group_id);
+
+    if (joinedError) {
+        return res.status(409).json({ error: joinedError });
     }
 
     // Only matters for template rows (specific_week IS NULL) — always the real
@@ -345,6 +352,13 @@ router.post('/lessons/for-groups', (req, res) => {
 
         if (!group) {
             return res.status(404).json({ error: 'Группа не найдена' });
+        }
+
+        const joinedError = joinedMemberError(db, groupId);
+
+        if (joinedError) {
+            problems.push(joinedError.replace(/\.$/, ''));
+            continue;
         }
 
         const occupant = payload.specific_week === null

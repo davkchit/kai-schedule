@@ -461,9 +461,23 @@ function validateAccountUpdateBody(body) {
 function validateGroupUpdateBody(body) {
     assertPlainObject(body, 'Тело запроса должно быть объектом');
 
-    return {
-        direction: readOptionalString(body.direction, 'Направление', 300)
-    };
+    // Each field only when sent: joining a group must not wipe its direction.
+    const result = {};
+
+    if (body.direction !== undefined) {
+        result.direction = readOptionalString(body.direction, 'Направление', 300);
+    }
+
+    if (body.joined_to !== undefined) {
+        result.joined_to = readOptionalJoinTarget(body.joined_to);
+    }
+
+    return result;
+}
+
+/** The group this one studies together with (null or '' = on its own). */
+function readOptionalJoinTarget(value) {
+    return value === null || value === '' ? null : readInteger(value, 'joined_to', { min: 1 });
 }
 
 function validateGroupCreateBody(body) {
@@ -472,7 +486,8 @@ function validateGroupCreateBody(body) {
     return {
         university_id: readInteger(body.university_id, 'university_id', { min: 1 }),
         name: readRequiredString(body.name, 'Название группы', 50),
-        direction: readOptionalString(body.direction, 'Направление', 300)
+        direction: readOptionalString(body.direction, 'Направление', 300),
+        joined_to: body.joined_to === undefined ? null : readOptionalJoinTarget(body.joined_to)
     };
 }
 
