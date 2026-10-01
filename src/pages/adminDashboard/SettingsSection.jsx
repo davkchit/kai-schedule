@@ -144,13 +144,13 @@ export default function SettingsSection({
                             <th>Курс</th>
                             <th>Направление</th>
                             <th>Объединена с</th>
-                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
                         {groups.map((group) => {
                             const course = getCourseFromGroupName(group.name);
                             const draft = groupDirectionDrafts[group.id] ?? group.direction ?? '';
+                            const members = groups.filter((other) => other.joined_to === group.id).map((other) => other.name);
 
                             return (
                                 <tr key={group.id}>
@@ -158,20 +158,30 @@ export default function SettingsSection({
                                     <td><strong>{group.name}</strong></td>
                                     <td>{course ?? '—'}</td>
                                     <td>
-                                        <input
-                                            type="text"
-                                            className="form-input"
-                                            placeholder="09.03.01 Информатика и вычислительная техника"
-                                            value={draft}
-                                            onChange={(event) => setGroupDirectionDrafts((previous) => ({
-                                                ...previous,
-                                                [group.id]: event.target.value
-                                            }))}
-                                        />
+                                        {/* «Сохранить» belongs to the direction alone, so it sits
+                                            next to it and shows only once the text was changed;
+                                            «Объединена с» applies on its own, after a confirm. */}
+                                        <div className="group-direction-cell">
+                                            <input
+                                                type="text"
+                                                className="form-input"
+                                                placeholder="09.03.01 Информатика и вычислительная техника"
+                                                value={draft}
+                                                onChange={(event) => setGroupDirectionDrafts((previous) => ({
+                                                    ...previous,
+                                                    [group.id]: event.target.value
+                                                }))}
+                                            />
+                                            {draft !== (group.direction ?? '') && (
+                                                <button className="btn-edit" onClick={() => handleSaveGroupDirection(group.id)}>
+                                                    Сохранить
+                                                </button>
+                                            )}
+                                        </div>
                                     </td>
                                     <td>
                                         {group.joined_label ? (
-                                            <span className="setting-hint">главная: {group.joined_label}</span>
+                                            <span className="setting-hint">с ней: {members.join(', ')}</span>
                                         ) : (
                                             <select
                                                 className="form-input"
@@ -184,11 +194,6 @@ export default function SettingsSection({
                                                     .map((other) => <option key={other.id} value={other.id}>{other.name}</option>)}
                                             </select>
                                         )}
-                                    </td>
-                                    <td>
-                                        <button className="btn-edit" onClick={() => handleSaveGroupDirection(group.id)}>
-                                            Сохранить
-                                        </button>
                                     </td>
                                 </tr>
                             );
