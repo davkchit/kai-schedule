@@ -570,7 +570,7 @@ function validateLoadPlanCreateBody(body) {
         teacher_id: readInteger(body.teacher_id, 'teacher_id', { min: 1 }),
         discipline_id: readInteger(body.discipline_id, 'discipline_id', { min: 1 }),
         lesson_type: lessonType,
-        group_id: readInteger(body.group_id, 'group_id', { min: 1 }),
+        ...readPlanGroups(body),
         subgroup: body.subgroup === undefined ? 0 : readInteger(body.subgroup, 'Подгруппа', { min: 0, max: 2 }),
         // Optional: a plan row can be auto-created (e.g. the moment a schedule
         // lesson references a teacher/discipline/type/group combo with no plan
@@ -579,6 +579,29 @@ function validateLoadPlanCreateBody(body) {
         planned_hours: readOptionalPositiveInteger(body.planned_hours, 'Плановые часы'),
         entered_by: body.entered_by === 'teacher' ? 'teacher' : 'specialist'
     };
+}
+
+/**
+ * A plan row's groups: `group_ids` (a stream, e.g. 23303 + 23313) or a single
+ * `group_id`. Returns both — group_id is the first of group_ids.
+ */
+function readPlanGroups(body) {
+    if (body.group_ids === undefined) {
+        const groupId = readInteger(body.group_id, 'group_id', { min: 1 });
+        return { group_id: groupId, group_ids: [groupId] };
+    }
+
+    if (!Array.isArray(body.group_ids) || body.group_ids.length === 0 || body.group_ids.length > 8) {
+        throw createValidationError('Укажите от 1 до 8 групп');
+    }
+
+    const groupIds = body.group_ids.map((value) => readInteger(value, 'group_ids', { min: 1 }));
+
+    if (new Set(groupIds).size !== groupIds.length) {
+        throw createValidationError('Одна и та же группа указана дважды');
+    }
+
+    return { group_id: groupIds[0], group_ids: groupIds };
 }
 
 function readOptionalPositiveInteger(value, label) {
@@ -621,7 +644,9 @@ function validateLoadPlanUpdateBody(body) {
         result.discipline_id = readInteger(body.discipline_id, 'discipline_id', { min: 1 });
     }
 
-    if (body.group_id !== undefined) {
+    if (body.group_ids !== undefined) {
+        Object.assign(result, readPlanGroups(body));
+    } else if (body.group_id !== undefined) {
         result.group_id = readInteger(body.group_id, 'group_id', { min: 1 });
     }
 

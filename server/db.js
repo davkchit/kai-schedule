@@ -261,11 +261,11 @@ function initTables() {
         );
 
         -- One row = "this teacher owes this many hours of this discipline's
-        -- this lesson type, for this one group, this semester." Streams
-        -- (one lecture shared by several groups) and subgroups are both
-        -- expressed by entering separate rows per group/subgroup rather than
-        -- a multiplier — confirmed against how the university's own system
-        -- tracks it (one row per group, hours counted per row).
+        -- this lesson type, for this group (or stream), this semester."
+        -- Subgroups are separate rows. A stream — one pair taught to several
+        -- groups at once, e.g. 23303 / 23313 — is ONE row: group_id is its
+        -- first group, the rest are in load_plan_extra_groups, and a pair
+        -- held for all of them at once counts once (planProgress.js).
         CREATE TABLE IF NOT EXISTS load_plan (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             semester_id   INTEGER NOT NULL REFERENCES semesters(id) ON DELETE CASCADE,
@@ -317,6 +317,17 @@ function initTables() {
     }
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_lessons_load_plan ON lessons(load_plan_id)');
+
+    // The other groups of a stream row (see load_plan above). Only the groups
+    // beyond load_plan.group_id live here, so a row with one group needs none.
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS load_plan_extra_groups (
+            plan_id  INTEGER NOT NULL REFERENCES load_plan(id) ON DELETE CASCADE,
+            group_id INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+            PRIMARY KEY (plan_id, group_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_load_plan_extra_groups_group ON load_plan_extra_groups(group_id);
+    `);
 
     migrateSemesterScoping();
     migrateSemesterClosing();

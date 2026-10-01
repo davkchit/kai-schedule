@@ -74,6 +74,17 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--tex
 .load-unmatched-note { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: rgba(239,68,68,0.10); color: #991b1b; font-size: 14px; line-height: 1.5; }
 .load-unmatched-title { margin: 0 0 6px; font-weight: 600; }
 .load-unmatched-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+/* Same alert box, amber: nothing is lost, the hours are counted twice. */
+.load-streams-note { background: rgba(245,158,11,0.10); color: #92400e; }
+.load-streams-merge { margin-left: 4px; }
+/* A plan row's groups: one select per group, «+ группа» for a stream. */
+.load-groups-field { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.load-groups-item { display: inline-flex; align-items: center; gap: 2px; }
+.load-groups-field .form-input { width: auto; min-width: 110px; }
+.load-groups-remove { border: none; background: none; color: var(--text-secondary); font-size: 18px; line-height: 1; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.load-groups-remove:hover { background: rgba(239,68,68,0.10); color: #dc2626; }
+.load-groups-add { white-space: nowrap; font-size: 14px; padding: 6px 4px; }
+.load-edit-group-cell .load-groups-field .form-input { min-width: 96px; }
 .load-hours-empty { color: var(--text-secondary); }
 .btn-link {
     background: none; border: none; padding: 0; font: inherit; cursor: pointer;

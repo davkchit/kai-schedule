@@ -263,20 +263,36 @@ function buildCourseSheet(workbook, {
             sheet.getRow(row).height = 60;
             setCell(sheet, row, 3, `${stripLeadingZero(start)}-${stripLeadingZero(end)}`, FONTS.time);
 
-            // A lecture several groups attend is written in each group's own cell:
-            // the official sheet merges such cells only now and then, by hand,
-            // and far more often keeps them separate. Subgroups share the cell,
-            // one line each.
-            for (const block of blocks) {
-                merge(sheet, row, block.firstCol, row, block.lastDisciplineCol);
+            // Subgroups share a group's cell, one line each. A pair several
+            // groups side by side attend together (same subject, teacher, type
+            // and room) is written once across their columns, with the room in
+            // the last group's «Ауд.» — the way the branch's sheet shows a stream.
+            const cells = blocks.map((block) => {
                 const lessons = block.lessons.filter((lesson) =>
                     lesson.day_of_week === day && lesson.time_start === start && lesson.time_end === end);
+                const text = lessons.map(formatLessonText).join('\n');
+                const room = sanitizeCellText([...new Set(lessons.map((lesson) => lesson.room || '').filter(Boolean))].join(' / '));
+                return { block, text, room, key: lessons.length > 0 ? `${text}\u0000${room}` : null };
+            });
 
-                if (lessons.length > 0) {
-                    setCell(sheet, row, block.firstCol, lessons.map(formatLessonText).join('\n'), lessonFont);
-                    const rooms = lessons.map((lesson) => lesson.room || '').filter(Boolean);
-                    setCell(sheet, row, block.roomCol, sanitizeCellText([...new Set(rooms)].join(' / ')), lessonFont, ROOM);
+            for (let index = 0; index < cells.length;) {
+                let last = index;
+
+                while (cells[index].key !== null && last + 1 < cells.length && cells[last + 1].key === cells[index].key) {
+                    last += 1;
                 }
+
+                const { block, text, room } = cells[index];
+                const lastBlock = cells[last].block;
+                const discipline = last > index ? lastBlock.roomCol - 1 : block.lastDisciplineCol;
+                merge(sheet, row, block.firstCol, row, discipline);
+
+                if (cells[index].key !== null) {
+                    setCell(sheet, row, block.firstCol, text, lessonFont);
+                    setCell(sheet, row, lastBlock.roomCol, room, lessonFont, ROOM);
+                }
+
+                index = last + 1;
             }
 
             row += 1;

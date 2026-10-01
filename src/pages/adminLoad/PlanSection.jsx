@@ -1,10 +1,11 @@
 import { LESSON_TYPES } from './constants';
 import { pluralizeKinds, pluralizePairs, pluralizeRecords } from './format';
+import GroupsField from './GroupsField';
 import PlanRow from './PlanRow';
 
 // The plan table of the viewed semester, with its warnings, the add form and
 // the filters. Presentational only: moved verbatim from AdminLoadSection.jsx.
-export default function PlanSection({ viewedSemester, isLoading, semesters, planStats, unconfirmedWeeks, unmatchedPairs, planForm, setPlanForm, submitPlanForm, teachers, disciplines, groups, filterQuery, setFilterQuery, filterGroupId, setFilterGroupId, visibleRows, loadPlan, editingPlanId, saveEditRow, cancelEditRow, startEditRow, updatePlannedHours, openMenuId, toggleRowMenu, scheduleMenuClose, deletePlanRow }) {
+export default function PlanSection({ viewedSemester, isLoading, semesters, planStats, unconfirmedWeeks, unmatchedPairs, likelyStreams, mergeStream, planForm, setPlanForm, submitPlanForm, teachers, disciplines, groups, filterQuery, setFilterQuery, filterGroupId, setFilterGroupId, visibleRows, loadPlan, editingPlanId, saveEditRow, cancelEditRow, startEditRow, updatePlannedHours, openMenuId, toggleRowMenu, scheduleMenuClose, deletePlanRow }) {
     return (
         <>
         <div className="load-plan-heading-row">
@@ -65,6 +66,28 @@ export default function PlanSection({ viewedSemester, isLoading, semesters, plan
                     </div>
                 )}
 
+                {likelyStreams.length > 0 && !viewedSemester.closed && (
+                    <div className="load-unmatched-note load-streams-note">
+                        <p className="load-unmatched-title">
+                            Похоже на потоки — пара идёт у нескольких групп в одно время, а в плане она отдельной строкой
+                            на каждую группу, и преподавателю засчитывается несколько раз. Объедините в одну строку:
+                        </p>
+                        <ul className="load-unmatched-list">
+                            {likelyStreams.map((stream) => (
+                                <li key={stream.ids.join('-')}>
+                                    <b>{stream.group_names.join(' / ')}</b> · {stream.discipline_name} · {stream.teacher_name} · {stream.lesson_type}
+                                    {stream.subgroup > 0 ? `, ${stream.subgroup}-я подгруппа` : ''}
+                                    {` (вместе ${stream.shared_pairs} ${pluralizePairs(stream.shared_pairs)})`}
+                                    {' '}
+                                    <button type="button" className="btn-link load-streams-merge" onClick={() => mergeStream(stream)}>
+                                        Объединить
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+
                 {viewedSemester.closed && (
                     <p className="empty-message">
                         Семестр закрыт {viewedSemester.closed_at}: часы зафиксированы, изменения выключены.
@@ -97,14 +120,11 @@ export default function PlanSection({ viewedSemester, isLoading, semesters, plan
                     >
                         {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                     </select>
-                    <select
-                        className="form-input"
-                        value={planForm.group_id}
-                        onChange={(event) => setPlanForm((previous) => ({ ...previous, group_id: event.target.value }))}
-                    >
-                        <option value="">Группа</option>
-                        {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                    </select>
+                    <GroupsField
+                        groups={groups}
+                        value={planForm.group_ids}
+                        onChange={(groupIds) => setPlanForm((previous) => ({ ...previous, group_ids: groupIds }))}
+                    />
                     <select
                         className="form-input load-subgroup-input"
                         value={planForm.subgroup}

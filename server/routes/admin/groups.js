@@ -131,7 +131,10 @@ router.delete('/groups/:id', (req, res) => {
     }
 
     const lessonCount = db.prepare('SELECT COUNT(*) c FROM lessons WHERE group_id = ?').get(groupId).c;
-    const planCount = db.prepare('SELECT COUNT(*) c FROM load_plan WHERE group_id = ?').get(groupId).c;
+    const planCount = db.prepare(`
+        SELECT COUNT(*) c FROM load_plan
+        WHERE group_id = ? OR id IN (SELECT plan_id FROM load_plan_extra_groups WHERE group_id = ?)
+    `).get(groupId, groupId).c;
 
     if (lessonCount > 0 || planCount > 0) {
         const parts = [];

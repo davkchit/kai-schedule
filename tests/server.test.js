@@ -1371,6 +1371,8 @@ test('the Excel export writes a week the way the official sheet posted to VK doe
     insert.run(first, autumnId, 0, 1, '08:00', '09:30', 'Математика', '104', 'Лекция', 'Николаева Г.А.');
     insert.run(first, autumnId, 0, 2, '09:40', '11:10', 'Физическая культура и спорт', 'с/з', 'Практика', 'Кузнецов Н.П.');
     insert.run(first, autumnId, 1, 3, '11:30', '13:00', 'Информатика', '103', 'Лаб', 'Николаева Г.А.');
+    // The same lecture for the next group at the same time: one cell across both.
+    insert.run(addGroup('23103'), autumnId, 0, 1, '08:00', '09:30', 'Математика', '104', 'Лекция', 'Николаева Г.А.');
     // Two third-year groups with the same week share one block, as on the official sheet.
     for (const name of ['23303', '23313']) {
         insert.run(addGroup(name), autumnId, 0, 1, '11:30', '13:00', 'Базы данных', '205', 'Практика', 'Голубев С.В.');
@@ -1399,12 +1401,102 @@ test('the Excel export writes a week the way the official sheet posted to VK doe
         assert.ok(course1.includes(expected), `1 курс: expected «${expected}» among ${JSON.stringify(course1)}`);
     }
 
+    assert.equal(course1.filter((text) => text === 'Математика (лек.) Николаева Г.А.').length, 1, 'a shared lecture is one merged cell');
+    assert.equal(course1.filter((text) => text === '104').length, 1, 'its room is written once, in the last group\'s column');
+
     const course3 = texts(workbook.getWorksheet('3 курс'));
     assert.ok(course3.includes('РАСПИСАНИЕ ЗАНЯТИЙ на V семестр'));
     assert.ok(course3.includes('23303 / 23313'), 'identical groups share one block');
     assert.equal(course3.filter((text) => text === 'Базы данных (пр.) Голубев С.В.').length, 1);
 
     await context.close();
+});
+
+test('a stream pair (one lecture for 23303 and 23313 at once) counts once, and separate rows are offered for merging', async () => {
+    const context = await createTestContext();
+
+    try {
+        const db = getDb();
+        const json = (method, body) => ({ method, headers: { ...context.authHeaders, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(context.semesterId);
+        const universityId = db.prepare("SELECT id FROM universities WHERE short_name = 'КНИТУ-КАИ'").get().id;
+        const addGroup = (name) => db.prepare('INSERT INTO groups_ (university_id, name) VALUES (?, ?)').run(universityId, name).lastInsertRowid;
+        const g303 = addGroup('23303');
+        const g313 = addGroup('23313');
+        const teacherId = db.prepare("INSERT INTO teachers (full_name) VALUES ('Павлова Г.Р.')").run().lastInsertRowid;
+        const disciplineId = db.prepare("INSERT INTO disciplines (name) VALUES ('Базы данных')").run().lastInsertRowid;
+        const addPair = (groupId, week) => db.prepare(`
+            INSERT INTO lessons (group_id, semester_id, day_of_week, week_type, specific_week, time_start, time_end,
+                subject, lesson_type, teacher, teacher_id, discipline_id)
+            VALUES (?, ?, 1, 0, ?, '08:00', '09:30', 'Базы данных', 'Лекция', 'Павлова Г.Р.', ?, ?)
+        `).run(groupId, context.semesterId, week, teacherId, disciplineId);
+        // Weeks 1–2 entered for both groups, week 3 only for 23303: still one pair each week.
+        for (const week of [1, 2]) {
+            addPair(g303, week);
+            addPair(g313, week);
+        }
+        addPair(g303, 3);
+
+        // The old way: a row per group — each counts the shared pair, the teacher is paid twice.
+        const row = async (groupId, hours) => (await fetch(`${context.baseUrl}/api/admin/load-plan`, json('POST', {
+            semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId,
+            lesson_type: 'Лекция', group_id: groupId, planned_hours: hours
+        }))).json();
+        const row303 = await row(g303, 36);
+        const row313 = await row(g313, 40);
+        assert.equal(row303.progress.occurred_hours + row313.progress.occurred_hours, 10, 'separately: 6 + 4');
+
+        const unmatched = await (await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders })).json();
+        assert.equal(unmatched.streams.length, 1, 'the two rows are offered as one stream');
+        assert.deepEqual(unmatched.streams[0].group_names, ['23303', '23313']);
+        assert.equal(unmatched.streams[0].shared_pairs, 2);
+
+        const mergeResponse = await fetch(`${context.baseUrl}/api/admin/load-plan/merge`, json('POST', { ids: [row313.id, row303.id] }));
+        assert.equal(mergeResponse.status, 200);
+        const merged = await mergeResponse.json();
+        assert.equal(merged.id, row303.id, 'the first group\'s row is kept');
+        assert.equal(merged.group_name, '23303 / 23313');
+        assert.equal(merged.planned_hours, 36, 'planned hours are the stream\'s own, not a sum');
+        assert.equal(merged.progress.occurred_hours, 6, 'three pairs, each once');
+        assert.equal(db.prepare('SELECT COUNT(*) c FROM load_plan').get().c, 1);
+
+        const after = await (await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders })).json();
+        assert.equal(after.streams.length, 0);
+        assert.equal(after.items.filter((item) => item.subject === 'Базы данных').length, 0, 'pairs of both groups count toward the stream row');
+
+        // A plain 23313 row next to the stream would double the hours again.
+        const duplicate = await fetch(`${context.baseUrl}/api/admin/load-plan`, json('POST', {
+            semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция', group_id: g313
+        }));
+        assert.equal(duplicate.status, 409);
+
+        // The group filter and the teacher's own page both see the stream row.
+        const filtered = await (await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${context.semesterId}&group_id=${g313}`, { headers: context.authHeaders })).json();
+        assert.deepEqual(filtered.map((item) => item.id), [row303.id]);
+        const teacherPage = await (await fetch(`${context.baseUrl}/api/teachers/${teacherId}/load?semester_id=${context.semesterId}`)).json();
+        assert.equal(teacherPage.plan[0].group_name, '23303 / 23313');
+        assert.equal(teacherPage.plan[0].occurred_hours, 6);
+
+        // A group that is part of a stream cannot be deleted from under it.
+        assert.equal((await fetch(`${context.baseUrl}/api/admin/groups/${g313}`, { method: 'DELETE', headers: context.authHeaders })).status, 409);
+
+        // Created as a stream from the start, and edited back to one group.
+        db.prepare('DELETE FROM load_plan').run();
+        const createStream = await fetch(`${context.baseUrl}/api/admin/load-plan`, json('POST', {
+            semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId,
+            lesson_type: 'Лекция', group_ids: [g313, g303], planned_hours: 36
+        }));
+        assert.equal(createStream.status, 201);
+        const stream = await createStream.json();
+        assert.equal(stream.group_name, '23303 / 23313');
+        assert.equal(stream.progress.occurred_hours, 6);
+        const narrowed = await (await fetch(`${context.baseUrl}/api/admin/load-plan/${stream.id}`, json('PUT', { group_ids: [g313] }))).json();
+        assert.equal(narrowed.group_name, '23313');
+        assert.equal(narrowed.progress.occurred_hours, 4);
+        assert.equal(db.prepare('SELECT COUNT(*) c FROM load_plan_extra_groups').get().c, 0);
+    } finally {
+        await context.close();
+    }
 });
 
 test('teachers and disciplines: rename fixes a typo, delete is blocked while a load_plan row still references them', async () => {

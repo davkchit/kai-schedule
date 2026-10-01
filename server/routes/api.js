@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { addDaysToIsoDate, formatLocalDate, getSemesterWeekMeta, resolveFirstWeekParity } = require('../utils/date');
+const { attachPlanGroups } = require('../utils/planGroups');
 const { computePlanRowProgress } = require('../utils/planProgress');
 const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
 const { notify } = require('../alerts');
@@ -248,14 +249,14 @@ router.get('/teachers/:id/load', (req, res) => {
         return res.json({ teacher, semester: null, plan: [] });
     }
 
-    const planRows = db.prepare(`
-        SELECT lp.*, d.name AS discipline_name, g.name AS group_name
+    const planRows = attachPlanGroups(db, db.prepare(`
+        SELECT lp.*, d.name AS discipline_name
         FROM load_plan lp
         JOIN disciplines d ON d.id = lp.discipline_id
-        JOIN groups_ g ON g.id = lp.group_id
         WHERE lp.teacher_id = ? AND lp.semester_id = ?
-        ORDER BY d.name, lp.lesson_type, g.name
-    `).all(teacherId, semester.id);
+    `).all(teacherId, semester.id)).sort((a, b) => a.discipline_name.localeCompare(b.discipline_name, 'ru')
+        || a.lesson_type.localeCompare(b.lesson_type, 'ru')
+        || a.group_name.localeCompare(b.group_name, 'ru'));
 
     const progressCache = new Map();
 

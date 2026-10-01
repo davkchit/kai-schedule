@@ -30,6 +30,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
     const [unconfirmedWeeks, setUnconfirmedWeeks] = useState([]);
     // Pairs the schedule shows that no plan row claims — their hours are lost silently.
     const [unmatchedPairs, setUnmatchedPairs] = useState([]);
+    // Plan rows that look like one stream entered per group — the teacher is paid twice for each pair.
+    const [likelyStreams, setLikelyStreams] = useState([]);
     const [isEditingSemester, setIsEditingSemester] = useState(false);
     const [isAddingSemester, setIsAddingSemester] = useState(false);
     const [semesterEdit, setSemesterEdit] = useState({ start_date: '', weeks_count: 18, first_week_parity: 1 });
@@ -106,6 +108,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
 
             const unmatched = await (await api(`/api/admin/load-plan/unmatched?semester_id=${semesterId}`)).json();
             setUnmatchedPairs(Array.isArray(unmatched.items) ? unmatched.items : []);
+            setLikelyStreams(Array.isArray(unmatched.streams) ? unmatched.streams : []);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
                 setToastMessage('Не удалось загрузить план нагрузки');
@@ -506,9 +509,10 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             return;
         }
 
-        const { teacher_id, discipline_id, lesson_type, group_id, planned_hours } = planForm;
+        const { teacher_id, discipline_id, lesson_type, planned_hours } = planForm;
+        const groupIds = planForm.group_ids.filter(Boolean);
 
-        if (!teacher_id || !discipline_id || !group_id) {
+        if (!teacher_id || !discipline_id || groupIds.length === 0) {
             setToastMessage('Заполните преподавателя, дисциплину и группу');
             return;
         }
@@ -521,7 +525,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                     teacher_id: Number(teacher_id),
                     discipline_id: Number(discipline_id),
                     lesson_type,
-                    group_id: Number(group_id),
+                    group_ids: groupIds.map(Number),
                     subgroup: Number(planForm.subgroup) || 0,
                     planned_hours: planned_hours ? Number(planned_hours) : undefined
                 })
@@ -590,7 +594,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                     teacher_id: Number(form.teacher_id),
                     discipline_id: Number(form.discipline_id),
                     lesson_type: form.lesson_type,
-                    group_id: Number(form.group_id),
+                    group_ids: form.group_ids.filter(Boolean).map(Number),
                     subgroup: Number(form.subgroup),
                     planned_hours: form.planned_hours ? Number(form.planned_hours) : null
                 })
@@ -615,6 +619,38 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             return false;
         }
     }, [api, setToastMessage]);
+
+    async function mergeStream(stream) {
+        const label = `${stream.discipline_name} (${stream.lesson_type}), ${stream.teacher_name}`;
+        const hours = stream.planned_hours.filter((value) => value !== null);
+        const hoursNote = new Set(hours).size > 1
+            ? `\n\nПлановые часы у строк разные (${hours.join(' и ')}) — останутся ${stream.planned_hours[0] ?? hours[0]}, поправьте при необходимости.`
+            : '';
+
+        if (!window.confirm(`Объединить в одну строку плана «${stream.group_names.join(' / ')}»?\n${label}\n\nОбщая пара будет считаться преподавателю один раз.${hoursNote}`)) {
+            return;
+        }
+
+        try {
+            const response = await api('/api/admin/load-plan/merge', {
+                method: 'POST',
+                body: JSON.stringify({ ids: stream.ids })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                setToastMessage(data.error || 'Не удалось объединить строки');
+                return;
+            }
+
+            await refreshPlan();
+            setToastMessage('Строки объединены в поток');
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
 
     const deletePlanRow = useCallback(async (planId) => {
         setOpenMenuId(null);
@@ -666,7 +702,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
         const query = filterQuery.trim().toLowerCase();
 
         return loadPlan.filter((row) => {
-            if (filterGroupId && String(row.group_id) !== filterGroupId) {
+            if (filterGroupId && !(row.group_ids || [row.group_id]).map(String).includes(filterGroupId)) {
                 return false;
             }
             if (!query) {
@@ -733,6 +769,8 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
                 planStats={planStats}
                 unconfirmedWeeks={unconfirmedWeeks}
                 unmatchedPairs={unmatchedPairs}
+                likelyStreams={likelyStreams}
+                mergeStream={mergeStream}
                 planForm={planForm}
                 setPlanForm={setPlanForm}
                 submitPlanForm={submitPlanForm}
@@ -765,7 +803,7 @@ function emptyPlanForm() {
         teacher_id: '',
         discipline_id: '',
         lesson_type: LESSON_TYPES[0],
-        group_id: '',
+        group_ids: [''],
         subgroup: '0',
         planned_hours: ''
     };

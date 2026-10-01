@@ -48,6 +48,7 @@ function formatAuditAction(action) {
         'load_plan.create': 'Добавление строки плана',
         'load_plan.update': 'Изменение строки плана',
         'load_plan.delete': 'Удаление строки плана',
+        'load_plan.merge': 'Объединение строк плана в поток',
         'admin.update_credentials': 'Смена логина или пароля',
         'settings.update': 'Изменение настройки',
         'backup.create': 'Создание резервной копии',

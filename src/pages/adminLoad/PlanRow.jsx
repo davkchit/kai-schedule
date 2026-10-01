@@ -1,5 +1,6 @@
 import { Fragment, memo, useEffect, useState } from 'react';
 import { LESSON_TYPES } from './constants';
+import GroupsField from './GroupsField';
 
 // Memoized so opening/closing one row's kebab menu or edit form
 // doesn't re-render the other 100+ rows in the table — before this, every
@@ -10,7 +11,7 @@ function buildEditFormFromRow(row) {
         teacher_id: String(row.teacher_id),
         discipline_id: String(row.discipline_id),
         lesson_type: row.lesson_type,
-        group_id: String(row.group_id),
+        group_ids: (row.group_ids || [row.group_id]).map(String),
         subgroup: String(row.subgroup),
         planned_hours: row.planned_hours === null ? '' : String(row.planned_hours)
     };
@@ -78,13 +79,11 @@ const PlanRow = memo(function PlanRow({
                     </td>
                     <td>
                         <div className="load-edit-group-cell">
-                            <select
-                                className="form-input"
-                                value={form.group_id}
-                                onChange={(event) => setDraft({ ...form, group_id: event.target.value })}
-                            >
-                                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                            </select>
+                            <GroupsField
+                                groups={groups}
+                                value={form.group_ids}
+                                onChange={(groupIds) => setDraft({ ...form, group_ids: groupIds })}
+                            />
                             <select
                                 className="form-input load-edit-subgroup"
                                 value={form.subgroup}
