@@ -515,7 +515,9 @@ router.delete('/load-plan/:id', (req, res) => {
  * The same teacher, discipline, type, group and subgroup twice in one semester
  * is always a slip: the pairs count toward both rows and the teacher's hours
  * double. A stream row counts for each of its groups, so 23303 / 23313 next to
- * a plain 23313 row with the same teacher, discipline and type is the same slip.
+ * a plain 23313 row with the same teacher, discipline and type is the same slip
+ * — and so is a 23313 row next to a 23303 one once 23313 is joined to 23303:
+ * both read 23303's pairs.
  */
 function findDuplicatePlanRow(db, row, excludeId = null) {
     const candidates = attachPlanGroups(db, db.prepare(`
@@ -526,9 +528,9 @@ function findDuplicatePlanRow(db, row, excludeId = null) {
         WHERE lp.semester_id = ? AND lp.teacher_id = ? AND lp.discipline_id = ? AND lp.lesson_type = ?
           AND lp.subgroup = ? AND lp.id != ?
     `).all(row.semester_id, row.teacher_id, row.discipline_id, row.lesson_type, row.subgroup ?? 0, excludeId ?? 0));
-    const groupIds = new Set(row.group_ids ?? [row.group_id]);
+    const groupIds = new Set((row.group_ids ?? [row.group_id]).map((groupId) => scheduleGroupId(db, groupId)));
 
-    return candidates.find((candidate) => candidate.group_ids.some((groupId) => groupIds.has(groupId))) || null;
+    return candidates.find((candidate) => candidate.group_ids.some((groupId) => groupIds.has(scheduleGroupId(db, groupId)))) || null;
 }
 
 function duplicatePlanRowError(duplicate) {

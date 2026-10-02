@@ -1607,6 +1607,11 @@ test('a joined group (23313 with 23303) shows and counts the leader\'s pairs, an
             semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция', group_id: g313
         }))).json();
         assert.equal(planRow.progress.occurred_hours, 4);
+        // A 23303 row next to it would read the same pairs: refused, or the hours double.
+        const twin = await fetch(`${context.baseUrl}/api/admin/load-plan`, json('POST', {
+            semester_id: context.semesterId, teacher_id: teacherId, discipline_id: disciplineId, lesson_type: 'Лекция', group_id: g303
+        }));
+        assert.equal(twin.status, 409);
         const unmatched = await (await fetch(`${context.baseUrl}/api/admin/load-plan/unmatched?semester_id=${context.semesterId}`, { headers: context.authHeaders })).json();
         assert.equal(unmatched.items.filter((item) => item.subject === 'Базы данных').length, 0);
 
