@@ -111,9 +111,11 @@ function joinGroup(db, memberId, leaderId) {
 }
 
 /**
- * Splits a member off again. It gets a copy of the shared timetable of every
- * semester still open, so the day after looks the same and the two can then
- * drift apart. Closed semesters are history and stay as they are.
+ * Splits a member off again. It gets a copy of the shared timetable — of
+ * every semester, closed ones included: while joined, those pairs WERE its
+ * timetable, and without the copy its students would find last semester
+ * empty. Nothing in a closed semester changes for anyone (its hours are the
+ * stored totals). From then on the two groups can drift apart.
  */
 function unjoinGroup(db, memberId) {
     const member = db.prepare('SELECT id, joined_to FROM groups_ WHERE id = ?').get(memberId);
@@ -123,8 +125,7 @@ function unjoinGroup(db, memberId) {
     }
 
     const rows = db.prepare(`
-        SELECT l.* FROM lessons l JOIN semesters s ON s.id = l.semester_id
-        WHERE l.group_id = ? AND s.closed_at IS NULL
+        SELECT * FROM lessons WHERE group_id = ?
     `).all(member.joined_to);
     const insert = db.prepare(`
         INSERT INTO lessons (

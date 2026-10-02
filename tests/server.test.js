@@ -1630,7 +1630,9 @@ test('a joined group (23313 with 23303) shows and counts the leader\'s pairs, an
         // The leader can't be deleted from under its member.
         assert.equal((await fetch(`${context.baseUrl}/api/admin/groups/${g303}`, { method: 'DELETE', headers: context.authHeaders })).status, 409);
 
-        // Split off: 23313 gets a copy of the shared timetable and goes on its own.
+        // Split off after the semester is closed: 23313 still gets a copy, or its
+        // students would find that semester empty.
+        assert.equal((await fetch(`${context.baseUrl}/api/admin/semesters/${context.semesterId}/close`, json('POST', {}))).status, 200);
         const split = await fetch(`${context.baseUrl}/api/admin/groups/${g313}`, json('PUT', { joined_to: null }));
         assert.equal(split.status, 200);
         assert.equal((await split.json()).joined_to, null);
