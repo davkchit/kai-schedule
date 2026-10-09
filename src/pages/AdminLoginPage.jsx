@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AuroraBackground from '../components/AuroraBackground';
 import usePageAssets from '../hooks/usePageAssets';
 
 export default function AdminLoginPage() {
     const isAssetsReady = usePageAssets({
         title: 'Вход для администратора',
         description: 'Вход для администраторов системы расписания.',
-        stylesheets: ['/css/admin-login.css']
+        stylesheets: ['/css/welcome.css', '/css/admin-login.css']
     });
 
     const navigate = useNavigate();
@@ -77,14 +78,9 @@ export default function AdminLoginPage() {
     return (
         <div className="page-stack">
             <header className="page-logo">
-                <img src="/assets/logo.png" alt="Логотип КАИ" width="148" height="62" />
+                <img src="/assets/logo-trim.png" alt="Логотип КАИ" width="180" height="38" />
             </header>
-            <div className="background-circles">
-                <div className="circle circle-1"></div>
-                <div className="circle circle-2"></div>
-                <div className="circle circle-3"></div>
-                <div className="circle circle-4"></div>
-            </div>
+            <AuroraBackground />
             <div className="container">
                 <div className="card">
                     <h1 className="title">Вход для<br />администратора</h1>
@@ -93,8 +89,8 @@ export default function AdminLoginPage() {
                             <input
                                 type="text"
                                 id="loginInput"
-                                className="admin-input"
-                                placeholder="Введите логин"
+                                className="search-input admin-input"
+                                placeholder="Логин"
                                 autoComplete="username"
                                 required
                                 value={login}
@@ -108,8 +104,8 @@ export default function AdminLoginPage() {
                             <input
                                 type="password"
                                 id="passwordInput"
-                                className="admin-input"
-                                placeholder="Введите пароль"
+                                className="search-input admin-input"
+                                placeholder="Пароль"
                                 autoComplete="current-password"
                                 required
                                 value={password}
@@ -126,7 +122,7 @@ export default function AdminLoginPage() {
                         >
                             {errorMessage}
                         </div>
-                        <button type="submit" className="submit-button" disabled={isSubmitting}>
+                        <button type="submit" className="ui-btn ui-btn--primary ui-btn--lg login-submit" disabled={isSubmitting}>
                             {isSubmitting ? 'Вход...' : 'Войти'}
                         </button>
                     </form>

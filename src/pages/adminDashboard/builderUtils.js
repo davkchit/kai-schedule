@@ -66,7 +66,53 @@ function getCourseFromGroupName(name) {
     return match ? Number(match[1]) : null;
 }
 
+const VOWELS = 'аеёиоуыэюяАЕЁИОУЫЭЮЯ';
+const NO_BREAK_BEFORE = 'йьъЙЬЪ';
+
+// Soft hyphens (U+00AD) at Russian syllable boundaries, so a word wider than a
+// constructor cell breaks as "Информа-ционные" instead of "Информационны / е".
+// The browser shows a hyphen only where it actually breaks. A rough syllable
+// rule — between vowels, before a single consonant, inside a consonant pair —
+// keeping at least two letters on each side. Only long words (13+ letters)
+// get them: shorter ones fit a cell line and simply wrap whole — given soft
+// hyphens, the browser would split them just to fill a line.
+function softHyphenate(text) {
+    return String(text || '').replace(/[а-яё]{13,}/gi, (word) => {
+        const isVowel = (ch) => VOWELS.includes(ch);
+        const breaks = new Set();
+
+        for (let i = 1; i < word.length - 2; i += 1) {
+            if (!isVowel(word[i])) {
+                continue;
+            }
+
+            const next = word[i + 1];
+            const after = word[i + 2];
+
+            if (NO_BREAK_BEFORE.includes(next)) {
+                breaks.add(i + 2);
+            } else if (isVowel(next)) {
+                breaks.add(i + 1);
+            } else if (isVowel(after)) {
+                breaks.add(i + 1);
+            } else if (!NO_BREAK_BEFORE.includes(after)) {
+                breaks.add(i + 2);
+            }
+        }
+
+        let result = '';
+        for (let i = 0; i < word.length; i += 1) {
+            if (breaks.has(i) && i >= 2 && word.length - i >= 2) {
+                result += '­';
+            }
+            result += word[i];
+        }
+        return result;
+    });
+}
+
 export {
+    softHyphenate,
     DAY_NAMES,
     LESSON_TYPES,
     DEFAULT_EDIT_FORM,

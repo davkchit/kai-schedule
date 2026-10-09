@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AuroraBackground from '../components/AuroraBackground';
 import usePageAssets from '../hooks/usePageAssets';
 
 // Short badge + colour tone per lesson type. Keys match LESSON_TYPES in
@@ -190,15 +191,10 @@ export default function TeacherLookupPage() {
     return (
         <div className={`page-stack tl-page ${hasTable ? 'is-wide' : ''}`}>
             <header className="page-logo">
-                <img src="/assets/logo.png" alt="Логотип КАИ" />
+                <img src="/assets/logo-trim.png" alt="Логотип КАИ" width="180" height="38" />
             </header>
 
-            <div className="background-circles">
-                <div className="circle circle-1"></div>
-                <div className="circle circle-2"></div>
-                <div className="circle circle-3"></div>
-                <div className="circle circle-4"></div>
-            </div>
+            <AuroraBackground />
 
             <div className="container">
                 <div className={`card ${selectedTeacher ? 'tl-card-results' : ''}`}>

@@ -32,7 +32,7 @@ export default function BackupsSection({
                         <input type="file" accept=".db" hidden onChange={restoreFromFile} />
                     </label>
                     <button className="btn btn-primary" onClick={createBackup} disabled={isCreatingBackup}>
-                        {isCreatingBackup ? 'Создание...' : 'Создать backup'}
+                        {isCreatingBackup ? 'Создание...' : 'Создать копию'}
                     </button>
                 </div>
             </div>

@@ -2,77 +2,6 @@ html, body, #root {
     min-height: 100%;
 }
 
-/* The crash screen. Lives in the global stylesheet on purpose: a page whose
-   own CSS never loaded is exactly when this has to look like something. */
-.app-error {
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px 16px;
-    background: #f5f7f9;
-    color: #0f1a26;
-    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-}
-
-.app-error-card {
-    max-width: 460px;
-    background: #ffffff;
-    border-radius: 16px;
-    padding: 28px 26px;
-    box-shadow: 0 10px 30px rgba(15, 26, 38, 0.08);
-}
-
-.app-error-card h1 {
-    margin: 0 0 10px;
-    font-size: 22px;
-    line-height: 1.25;
-}
-
-.app-error-card p {
-    margin: 0 0 18px;
-    font-size: 15px;
-    line-height: 1.55;
-    color: #5b6b7c;
-}
-
-.app-error-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-}
-
-.app-error-actions button {
-    font: inherit;
-    font-weight: 600;
-    padding: 10px 18px;
-    border: none;
-    border-radius: 10px;
-    background: #12508c;
-    color: #ffffff;
-    cursor: pointer;
-}
-
-.app-error-actions a {
-    color: #12508c;
-    font-weight: 600;
-    text-decoration: none;
-}
-
-.app-error-detail {
-    margin: 18px 0 0;
-    font-size: 12px;
-    color: #8896a5;
-    word-break: break-word;
-}
-
-[data-theme="dark"] .app-error { background: #0c131b; color: #e7edf4; }
-[data-theme="dark"] .app-error-card { background: #131d28; box-shadow: none; }
-[data-theme="dark"] .app-error-card p { color: #93a3b4; }
-[data-theme="dark"] .app-error-actions button { background: #7cb1e6; color: #0c131b; }
-[data-theme="dark"] .app-error-actions a { color: #7cb1e6; }
-
 :root {
     /* Critically-damped "settle" curve — the default motion feel across the app.
        No overshoot: correct for menus/sheets/theme changes, not for flicks. */
@@ -94,14 +23,12 @@ html, body, #root {
 @media (prefers-reduced-transparency: reduce) {
     .burger-dropdown,
     .support-widget,
-    .cookie-banner,
     .tl-page-header {
         backdrop-filter: none !important;
         background-color: #ffffff !important;
     }
     [data-theme="dark"] .burger-dropdown,
     [data-theme="dark"] .support-widget,
-    [data-theme="dark"] .cookie-banner,
     [data-theme="dark"] .tl-page-header {
         background-color: #1e293b !important;
     }
@@ -117,7 +44,6 @@ html, body, #root {
 @media (prefers-contrast: more) {
     .burger-dropdown,
     .support-widget,
-    .cookie-banner,
     .date-picker-popup,
     .modal-card,
     .card {
@@ -140,3 +66,321 @@ button, input, textarea, select {
 a {
     color: inherit;
 }
+
+/* The drifting background — the welcome page and the error screen share it. */
+/* Живой фон: мягкие пятна того же голубого, что и фон (back.jpg), только чуть
+   глубже, медленно плывут и перетекают. У каждого свой цикл, поэтому рисунок
+   не повторяется. Пятна размыты самим градиентом и двигаются только
+   transform — без filter: blur, который на слабых телефонах тормозит. */
+.aurora {
+    --aurora-1: rgba(184, 213, 251, 0.95);
+    --aurora-2: rgba(195, 220, 252, 0.9);
+    --aurora-3: rgba(204, 227, 253, 0.95);
+    --aurora-4: rgba(178, 208, 250, 0.85);
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.aurora-blob {
+    position: absolute;
+    border-radius: 50%;
+    will-change: transform;
+}
+
+.aurora-blob-1 {
+    width: 60vmax;
+    height: 60vmax;
+    left: -18vmax;
+    top: -10vmax;
+    background: radial-gradient(circle, var(--aurora-1) 0%, transparent 65%);
+    animation: aurora-drift-1 28s ease-in-out infinite alternate;
+}
+
+.aurora-blob-2 {
+    width: 55vmax;
+    height: 55vmax;
+    right: -20vmax;
+    bottom: -18vmax;
+    background: radial-gradient(circle, var(--aurora-2) 0%, transparent 65%);
+    animation: aurora-drift-2 33s ease-in-out infinite alternate;
+}
+
+.aurora-blob-3 {
+    width: 45vmax;
+    height: 45vmax;
+    right: 5vmax;
+    top: -15vmax;
+    background: radial-gradient(circle, var(--aurora-3) 0%, transparent 65%);
+    animation: aurora-drift-3 22s ease-in-out infinite alternate;
+}
+
+.aurora-blob-4 {
+    width: 50vmax;
+    height: 50vmax;
+    left: 10vmax;
+    bottom: -25vmax;
+    background: radial-gradient(circle, var(--aurora-4) 0%, transparent 65%);
+    animation: aurora-drift-4 30s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift-1 {
+    0% { transform: translate3d(0, 0, 0) scale(1); }
+    50% { transform: translate3d(18vw, 13vh, 0) scale(1.18); }
+    100% { transform: translate3d(8vw, 28vh, 0) scale(0.92); }
+}
+
+@keyframes aurora-drift-2 {
+    0% { transform: translate3d(0, 0, 0) scale(1); }
+    50% { transform: translate3d(-21vw, -11vh, 0) scale(1.16); }
+    100% { transform: translate3d(-8vw, -26vh, 0) scale(0.88); }
+}
+
+@keyframes aurora-drift-3 {
+    0% { transform: translate3d(0, 0, 0) scale(0.9); }
+    50% { transform: translate3d(-16vw, 18vh, 0) scale(1.14); }
+    100% { transform: translate3d(-28vw, 5vh, 0) scale(1); }
+}
+
+@keyframes aurora-drift-4 {
+    0% { transform: translate3d(0, 0, 0) scale(1.05); }
+    50% { transform: translate3d(23vw, -15vh, 0) scale(0.88); }
+    100% { transform: translate3d(10vw, -5vh, 0) scale(1.16); }
+}
+
+[data-theme="dark"] .aurora {
+    --aurora-1: rgba(30, 64, 175, 0.32);
+    --aurora-2: rgba(37, 99, 235, 0.2);
+    --aurora-3: rgba(30, 58, 138, 0.35);
+    --aurora-4: rgba(29, 78, 216, 0.24);
+}
+
+
+/* Full-page error (src/components/ErrorScreen.jsx): the schedule failing to
+   load and the app crashing. Global on purpose — it has to look right even
+   when a page's own stylesheet never arrived. */
+.error-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    overflow-y: auto;
+    background: #f3f7fd;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.error-screen-stack {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 600px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 30px;
+}
+
+.error-screen-logo {
+    display: block;
+    width: min(180px, 55vw);
+    height: auto;
+}
+
+.error-screen-card {
+    width: 100%;
+    padding: 40px 48px 44px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    border-radius: 32px;
+    box-shadow: 0 30px 80px -24px rgba(31, 78, 154, 0.22), 0 8px 24px rgba(31, 78, 154, 0.06);
+    text-align: center;
+}
+
+.error-planet {
+    display: block;
+    margin: 0 auto 18px;
+    overflow: visible;
+    filter: drop-shadow(0 8px 22px rgba(59, 130, 246, 0.22));
+}
+
+.error-planet-ring {
+    stroke: #c7d9f6;
+    stroke-width: 2;
+}
+
+.error-planet-sphere {
+    stroke: rgba(255, 255, 255, 0.9);
+    stroke-width: 1;
+}
+
+.error-planet-mark {
+    fill: #2f63d6;
+}
+
+.error-screen-title {
+    margin: 0 0 16px;
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: #1e293b;
+}
+
+.error-screen-text {
+    margin: 0 0 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #64748b;
+}
+
+.error-screen-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px 16px;
+}
+
+
+.error-screen-detail {
+    margin: 24px 0 0;
+    font-size: 12px;
+    color: #94a3b8;
+    word-break: break-word;
+}
+
+@media (max-width: 480px) {
+    .error-screen-card { padding: 32px 22px 34px; border-radius: 24px; }
+    .error-screen-title { font-size: 26px; }
+    .error-screen-text { font-size: 15px; }
+}
+
+[data-theme="dark"] .error-screen { background: #0f172a; }
+[data-theme="dark"] .error-screen-card {
+    background: rgba(30, 41, 59, 0.9);
+    border-color: rgba(148, 163, 184, 0.14);
+    box-shadow: 0 30px 80px -24px rgba(0, 0, 0, 0.6);
+}
+[data-theme="dark"] .error-screen-title { color: #f1f5f9; }
+[data-theme="dark"] .error-screen-text { color: #94a3b8; }
+[data-theme="dark"] .error-planet-ring { stroke: #3b5b8f; }
+
+@media (prefers-reduced-motion: reduce) {
+    .aurora-blob { animation: none; }
+}
+
+/* ── Buttons: one set for the whole app ──────────────────────────────────
+   Four roles — primary (the one main action), secondary, ghost (text only)
+   and danger — in two sizes, light and dark. A pill shape, a soft top
+   highlight and a shadow that tightens when pressed. Icons go inside as an
+   <svg> before the text. */
+.ui-btn {
+    --btn-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    height: var(--btn-height);
+    padding: 0 22px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    /* The gradient starts under the (transparent) border, or its dark end
+       repeats there as a thin stripe along the top edge. */
+    background-origin: border-box;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease, transform 0.1s ease-out;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.ui-btn svg {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+}
+
+.ui-btn:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+.ui-btn:focus-visible {
+    outline: 3px solid rgba(59, 130, 246, 0.35);
+    outline-offset: 2px;
+}
+
+.ui-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.ui-btn--lg { --btn-height: 52px; padding: 0 28px; font-size: 16px; }
+.ui-btn--sm { --btn-height: 34px; padding: 0 14px; font-size: 13px; gap: 6px; }
+.ui-btn--sm svg { width: 15px; height: 15px; }
+
+/* Primary: solid blue with a soft shadow. */
+.ui-btn--primary {
+    background-image: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+    color: #ffffff;
+    box-shadow: 0 6px 16px -4px rgba(37, 99, 235, 0.45);
+}
+.ui-btn--primary:hover:not(:disabled) {
+    background-image: linear-gradient(180deg, #4b8df8 0%, #2b6cf0 100%);
+    box-shadow: 0 10px 22px -6px rgba(37, 99, 235, 0.55);
+}
+.ui-btn--primary:active:not(:disabled) {
+    box-shadow: 0 3px 8px -2px rgba(37, 99, 235, 0.45);
+}
+
+/* Secondary: white, a hairline border and a soft shadow. */
+.ui-btn--secondary {
+    background: #ffffff;
+    color: #1e293b;
+    border-color: rgba(15, 23, 42, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+.ui-btn--secondary:hover:not(:disabled) {
+    background: #f8fafc;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 4px 12px rgba(15, 23, 42, 0.1);
+}
+
+/* Ghost: text only, a light tint on hover. */
+.ui-btn--ghost {
+    background: transparent;
+    color: #2563eb;
+    padding: 0 14px;
+}
+.ui-btn--ghost:hover:not(:disabled) {
+    background: rgba(59, 130, 246, 0.08);
+}
+
+/* Danger: for removing things — red outline, never a solid red button. */
+.ui-btn--danger {
+    background: transparent;
+    color: #dc2626;
+    border-color: rgba(220, 38, 38, 0.55);
+}
+.ui-btn--danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.06);
+    border-color: #dc2626;
+}
+
+[data-theme="dark"] .ui-btn--secondary { background: #1e293b; color: #f1f5f9; border-color: #334155; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3); }
+[data-theme="dark"] .ui-btn--secondary:hover:not(:disabled) { background: #253247; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
+[data-theme="dark"] .ui-btn--ghost { color: #93c5fd; }
+[data-theme="dark"] .ui-btn--ghost:hover:not(:disabled) { background: rgba(96, 165, 250, 0.12); }
+[data-theme="dark"] .ui-btn--danger { color: #f87171; border-color: rgba(248, 113, 113, 0.6); }
+[data-theme="dark"] .ui-btn--danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.1); }
+[data-theme="dark"] .ui-btn--primary { box-shadow: 0 6px 18px -4px rgba(37, 99, 235, 0.6); }

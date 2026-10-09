@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
 const DATA_CACHE = `anti-vuz-data-${CACHE_VERSION}`;
@@ -15,7 +15,7 @@ const FIXED_STATIC_URLS = [
     '/css/schedule.css',
     '/css/schedule-mobile.css',
     '/assets/logo.png',
-    '/assets/back.png',
+    '/assets/back.jpg',
     '/assets/party-confetti.gif',
     OFFLINE_URL
 ];

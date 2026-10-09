@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AuroraBackground from '../components/AuroraBackground';
 import usePageAssets from '../hooks/usePageAssets';
 import { getSavedSelection, saveSelection } from '../lib/storage';
 
 const STEPS = [
     {
-        subtitle: 'Выберите Ваш университет',
+        subtitle: 'Выберите ваш университет',
         placeholder: 'Например КНИТУ-КАИ'
     },
     {
-        subtitle: 'Отлично. Теперь номер вашей группы',
-        placeholder: 'Например 23113'
+        subtitle: '',
+        placeholder: 'Номер группы'
     },
     {
         subtitle: 'А теперь выберите вашу подгруппу',
@@ -31,9 +32,13 @@ export default function WelcomePage() {
     const subtitleTimersRef = useRef([]);
 
     const [currentStep, setCurrentStep] = useState(0);
-    const [subtitle, setSubtitle] = useState(STEPS[0].subtitle);
+    // Empty until the universities arrive: with only one there is nothing to
+    // choose, and the page opens straight on the group step.
+    const [subtitle, setSubtitle] = useState('');
     const [subtitleAnimationClass, setSubtitleAnimationClass] = useState('');
     const [universities, setUniversities] = useState([]);
+    const [isUniversityLoaded, setIsUniversityLoaded] = useState(false);
+    const [isSingleUniversity, setIsSingleUniversity] = useState(false);
     const [groups, setGroups] = useState([]);
     const [formData, setFormData] = useState({
         university_id: null,
@@ -66,12 +71,31 @@ export default function WelcomePage() {
                 const response = await fetch('/api/universities');
                 const data = await response.json();
 
-                if (!ignore) {
-                    setUniversities(Array.isArray(data) ? data : []);
+                if (ignore) {
+                    return;
+                }
+
+                const list = Array.isArray(data) ? data : [];
+                setUniversities(list);
+                setIsUniversityLoaded(true);
+
+                if (list.length === 1) {
+                    setIsSingleUniversity(true);
+                    setFormData((previous) => ({
+                        ...previous,
+                        university_id: list[0].id,
+                        university_name: list[0].short_name
+                    }));
+                    setCurrentStep(1);
+                    setSubtitle(STEPS[1].subtitle);
+                } else {
+                    setSubtitle(STEPS[0].subtitle);
                 }
             } catch {
                 if (!ignore) {
                     setUniversities([]);
+                    setIsUniversityLoaded(true);
+                    setSubtitle(STEPS[0].subtitle);
                 }
             }
         }
@@ -121,6 +145,18 @@ export default function WelcomePage() {
     }, []);
 
     const suggestions = getSuggestions(currentStep, universities, groups, inputValue);
+    // The step the page starts on: the group one when the university was picked for you.
+    const firstStep = isSingleUniversity ? 1 : 0;
+    // Until the universities arrive the field already asks for the usual thing, a group.
+    // The example in the hint is a real group, picked at random on every visit —
+    // a made-up number sent people looking for a group that doesn't exist.
+    const exampleGroup = useMemo(
+        () => (groups.length > 0 ? groups[Math.floor(Math.random() * groups.length)].name : ''),
+        [groups]
+    );
+    const placeholder = currentStep === 1 || !isUniversityLoaded
+        ? (exampleGroup ? `Номер группы, например ${exampleGroup}` : STEPS[1].placeholder)
+        : STEPS[currentStep].placeholder;
     // Group numbers and subgroups are digits: a phone shows its number pad,
     // which is shorter than the letters and needs no switching.
     const isNumericStep = currentStep === 2 ||
@@ -230,7 +266,7 @@ export default function WelcomePage() {
     }
 
     function handleBack() {
-        if (currentStep === 0) {
+        if (currentStep <= firstStep) {
             return;
         }
 
@@ -293,14 +329,18 @@ export default function WelcomePage() {
                 return;
             }
 
-            setFormData((previous) => ({
-                ...previous,
+            // No subgroup step: no pair uses subgroups, so the whole group is
+            // shown. "0" = whole group; a non-empty value also marks the
+            // selection complete for the redirect on the next visit.
+            const nextSelection = {
+                ...formData,
                 group_id: selectedGroup.id,
                 group_name: selectedGroup.name,
-                subgroup: ''
-            }));
-            setInputValue('');
-            moveToStep(2);
+                subgroup: '0'
+            };
+
+            setFormData(nextSelection);
+            finishSelection(nextSelection);
             return;
         }
 
@@ -338,29 +378,26 @@ export default function WelcomePage() {
     return (
         <div className="page-stack">
             <header className="page-logo">
-                <img src="/assets/logo.png" alt="Логотип КАИ" width="148" height="62" />
+                <img src="/assets/logo-trim.png" alt="Логотип КАИ" width="180" height="38" />
             </header>
 
-            <div className="background-circles">
-                <div className="circle circle-1"></div>
-                <div className="circle circle-2"></div>
-                <div className="circle circle-3"></div>
-                <div className="circle circle-4"></div>
-            </div>
+            <AuroraBackground />
 
             <div className="container">
                 <div className="card">
                     <h1 className="title">Найдите своё расписание</h1>
 
-                    <p className={`subtitle ${subtitleAnimationClass}`} id="subtitle">
-                        {subtitle}
-                    </p>
+                    {subtitle && (
+                        <p className={`subtitle ${subtitleAnimationClass}`} id="subtitle">
+                            {subtitle}
+                        </p>
+                    )}
 
                     <form id="scheduleForm" onSubmit={handleSubmit}>
                         <button
                             type="button"
                             id="backButton"
-                            className={`back-button ${currentStep === 0 || isFinishing ? 'hidden' : ''}`}
+                            className={`back-button ${currentStep <= firstStep || isFinishing ? 'hidden' : ''}`}
                             onClick={handleBack}
                         >
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -375,7 +412,7 @@ export default function WelcomePage() {
                                 ref={inputRef}
                                 id="searchInput"
                                 className="search-input"
-                                placeholder={STEPS[currentStep].placeholder}
+                                placeholder={placeholder}
                                 autoComplete="off"
                                 value={inputValue}
                                 disabled={isFinishing}
@@ -396,8 +433,8 @@ export default function WelcomePage() {
                                 style={isInvalid ? { borderColor: '#EF4444' } : undefined}
                             />
                             <button type="submit" className="search-button" aria-label="Далее" disabled={isFinishing}>
-                                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM19 19l-4.35-4.35" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                <svg width="22" height="22" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM19 19l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                                 </svg>
                             </button>
                             <div
@@ -421,16 +458,11 @@ export default function WelcomePage() {
                         </div>
                     </form>
 
-                    {/* A second way in, kept inside the card as a quiet line rather than
-                        a separate button competing with the search. */}
-                    {currentStep === 0 && (
+                    {/* The second way in: a quiet blue link under the search. */}
+                    {currentStep === firstStep && !isFinishing && (
                         <div className="teacher-entry">
-                            <span>Вы преподаватель?</span>
                             <button type="button" className="teacher-link" onClick={() => navigate('/teacher')}>
-                                Моё расписание
-                                <svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                    <path d="M4 10h12M11 5l5 5-5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
+                                Вы преподаватель?
                             </button>
                         </div>
                     )}

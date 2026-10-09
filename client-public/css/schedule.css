@@ -35,12 +35,11 @@
 [data-theme="dark"] .dp-day-header { color: #475569; }
 [data-theme="dark"] .burger-dropdown { background: rgba(30, 41, 59, 0.75); border-color: #334155; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
 [data-theme="dark"] .support-widget { background-color: rgba(30, 41, 59, 0.75); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
-[data-theme="dark"] .cookie-banner { background-color: rgba(30, 41, 59, 0.75); color: var(--text-main); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-    font-family: 'Inter', sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background-color: var(--bg-color);
     color: var(--text-main);
     height: 100vh;
@@ -65,11 +64,14 @@ body {
 .header-controls { display: flex; align-items: center; gap: 16px; }
 
 .schedule-switch-btn {
-    text-decoration: none; color: var(--primary-blue); background-color: var(--card-bg);
-    padding: 10px 20px; border-radius: 12px; font-weight: 500; font-size: 14px;
+    text-decoration: none; background: #ffffff; color: #1e293b; border: 1px solid rgba(15, 23, 42, 0.08); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 2px 6px rgba(15, 23, 42, 0.08);
+    padding: 10px 20px; border-radius: 999px; font-weight: 600; font-size: 14px;
     transition: all 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); border: 1px solid transparent; cursor: pointer; display: inline-block;
 }
-.schedule-switch-btn:hover { background-color: var(--hover-bg); border-color: var(--border-color); transform: translateY(-1px); }
+.schedule-switch-btn:hover { background: #f8fafc; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 4px 12px rgba(15, 23, 42, 0.1); }
+/* Dark theme: a dark button like the date selector next to it, not a white one. */
+[data-theme="dark"] .schedule-switch-btn { background: #1e293b; color: #f1f5f9; border-color: #334155; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3); }
+[data-theme="dark"] .schedule-switch-btn:hover { background: #253247; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
 .schedule-switch-btn:active { transform: translateY(0) scale(0.97); transition: transform 0.1s ease-out; }
 
 /* Burger Menu Styles */
@@ -103,7 +105,7 @@ body {
                 border-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
                 visibility 0s linear 0s;
 }
-.dropdown-item { background: none; border: none; padding: 12px 16px; text-align: left; border-radius: 12px; font-size: 14px; font-weight: 500; color: var(--text-main); cursor: pointer; transition: all 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); display: flex; align-items: center; gap: 12px; font-family: 'Inter', sans-serif; }
+.dropdown-item { background: none; border: none; padding: 12px 16px; text-align: left; border-radius: 12px; font-size: 14px; font-weight: 500; color: var(--text-main); cursor: pointer; transition: all 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); display: flex; align-items: center; gap: 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
 .dropdown-item:hover { background-color: var(--hover-bg); color: var(--primary-blue); }
 .dropdown-item:active { transform: scale(0.98); }
 .dropdown-item svg { color: var(--text-secondary); transition: color 0.2s; }
@@ -114,20 +116,16 @@ body {
     .mobile-only { display: block; }
     .desktop-only { display: none !important; }
 
-    /* Group chip in the phone header — same white, softly bordered shape as
-       the day tabs right under it, so it reads as part of the same set. */
+    /* "Группа 23303" in the phone header: plain text, not a chip — it is a
+       label, and a pill shape made it look like a button. */
     .header-group.mobile-only {
-        display: inline-flex; align-items: center; gap: 8px; justify-self: center;
-        margin: 0; padding: 8px 16px; max-width: 100%; overflow: hidden; white-space: nowrap;
-        background: #ffffff; border: 1px solid var(--border-color); border-radius: 999px;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-        font-size: 15px; line-height: 1.2;
+        display: inline-flex; align-items: center; justify-self: center;
+        margin: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+        font-size: 16px; line-height: 1.2;
     }
     /* Slate rather than near-black: a label, quieter than the lesson titles. */
     .header-group-name { font-weight: 600; color: #334155; letter-spacing: -0.01em; }
-    .header-group-sub { font-size: 12px; font-weight: 500; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
     [data-theme="dark"] .header-group-name { color: #e2e8f0; }
-    [data-theme="dark"] .header-group.mobile-only { background: var(--card-bg); }
 }
 
 .date-selector {
@@ -138,7 +136,7 @@ body {
     padding: 10px 18px;
     background: #ffffff;
     border: 1px solid #d7e0ec;
-    border-radius: 14px;
+    border-radius: 999px;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
     font-family: inherit;
     font-size: 16px;
@@ -164,9 +162,23 @@ body {
 .date-selector svg { color: #334155; flex-shrink: 0; }
 
 .schedule-grid-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-bottom: 24px; box-sizing: border-box; }
+/* Desktop: the column lines stop as far from the bottom of the screen as they
+   start from the top (header + date button = 130px), so the grid sits balanced.
+   Only where the screen is tall enough: the gap shrinks with the screen down to
+   the old 24px, so the pairs never get less than about 700px of room (on a
+   short laptop that is the difference between scrolling a day or not). */
+@media (min-width: 769px) {
+    .schedule-grid-wrap { padding-bottom: clamp(24px, 100vh - 830px, 130px); }
+}
 .schedule-grid { flex: 1; min-height: 0; display: flex; flex-wrap: nowrap; overflow-anchor: none; overflow-x: auto; scrollbar-width: none; cursor: grab; user-select: none; }
 .schedule-grid::-webkit-scrollbar { display: none; }
-.day-column { border-right: 2px solid var(--border-color); padding: 20px; display: flex; flex-direction: column; gap: 16px; flex: 0 0 20%; min-width: 300px; }
+/* A whole number of days always fills the width — 5, 4, 3 or 2 by screen size —
+   so no column is ever left cut in half at an edge, and each stays wide enough
+   (~300px+) for the room, type and teacher to share a row. */
+.day-column { border-right: 2px solid var(--border-color); padding: 20px; display: flex; flex-direction: column; gap: 16px; flex: 0 0 var(--day-column-width, 20%); min-width: 0; }
+@media (max-width: 1599px) { .schedule-grid { --day-column-width: 25%; } }
+@media (max-width: 1249px) { .schedule-grid { --day-column-width: calc(100% / 3); } }
+@media (max-width: 959px) { .schedule-grid { --day-column-width: 50%; } }
 .day-column:last-child { border-right: none; }
 .day-header { margin-bottom: 12px; }
 .day-badge { background-color: var(--primary-blue); color: white; font-size: 12px; padding: 4px 12px; border-radius: 12px; display: table; width: fit-content; margin-bottom: 8px; }
@@ -179,25 +191,26 @@ body {
 .card-time { color: var(--tag-text); font-size: 14px; margin-bottom: 8px; }
 .card-subject { font-weight: 600; font-size: 15px; margin-bottom: 12px; line-height: 1.4; letter-spacing: -0.005em; transition: color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .card-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+/* The teacher: a tag like the room and type; a name too long even for a row of its own is cut with an ellipsis. */
+/* «Онлайн» in place of a room: light orange with a laptop icon. */
+.tag-room.tag-online, .mobile-tag-room.tag-online { display: inline-flex; align-items: center; gap: 5px; background-color: #ffedd5; color: #ea6c0a; }
+[data-theme="dark"] .tag-room.tag-online, [data-theme="dark"] .mobile-tag-room.tag-online { background-color: rgba(251, 146, 60, 0.16); color: #fdba74; }
+.tag-teacher { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-room, .tag-type { background-color: var(--tag-bg); color: var(--tag-text); font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; transition: background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .tag-subgroup { background-color: #fef3c7; color: #d97706; font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; }
 
-.support-widget { position: fixed; bottom: 80px; right: 30px; background-color: rgba(255, 255, 255, 0.75); backdrop-filter: blur(20px) saturate(180%); padding: 12px 20px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); display: flex; align-items: center; gap: 12px; cursor: pointer; transition: transform 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
+.support-widget { position: fixed; bottom: 20px; right: 30px; background-color: rgba(255, 255, 255, 0.75); backdrop-filter: blur(20px) saturate(180%); padding: 12px 20px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); display: flex; align-items: center; gap: 12px; cursor: pointer; transition: transform 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .support-widget:hover { transform: translateY(-2px); }
 .support-widget:active { transform: translateY(0) scale(0.98); transition: transform 0.1s ease-out; }
 .support-icon { display: flex; align-items: center; justify-content: center; padding: 6px 0; }
-.support-icon img { width: 72px; height: auto; display: block; }
+.support-icon img { width: 56px; height: auto; display: block; }
 .support-text { display: flex; flex-direction: column; }
 .support-title { font-size: 12px; color: var(--text-secondary); }
 .support-subtitle { font-size: 14px; font-weight: 500; color: var(--text-main); }
 .close-support { background: none; border: none; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; padding: 4px; margin-left: 4px; border-radius: 6px; flex-shrink: 0; transition: color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), background-color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 0.1s ease-out; }
 .close-support:hover { color: var(--text-main); background-color: var(--hover-bg); }
-.close-support:active, .close-cookie:active { transform: scale(0.85); }
+.close-support:active { transform: scale(0.85); }
 
-.cookie-banner { position: fixed; bottom: 20px; right: 30px; background-color: rgba(255, 255, 255, 0.75); backdrop-filter: blur(20px) saturate(180%); padding: 12px 20px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--text-main); z-index: 100; transition: background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
-.cookie-banner a { color: var(--primary-blue); text-decoration: none; border-bottom: 1px solid var(--primary-blue); }
-.close-cookie { background: none; border: none; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; transition: color 0.2s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), transform 0.1s ease-out; }
-.close-cookie:hover { color: var(--text-main); }
 
 /* min-height matches a lesson card (time + subject + tags), so a rest day lines up with its neighbours */
 .rest-day { position: relative; overflow: hidden; text-align: left; padding: 16px 20px; background-color: var(--card-bg); border-radius: 16px; border: 1px solid transparent; color: var(--primary-blue); display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 16px; height: auto; min-height: 113px; width: 100%; }
@@ -219,6 +232,19 @@ body {
 
 @media (max-width: 1400px) {
     .schedule-grid { padding-bottom: 10px; }
+}
+
+/* Between a phone and a laptop (a tablet upright, a narrow window) the phone
+   layout stretched cards edge to edge and looked heavy: the page keeps a
+   phone-like reading width in the middle instead. Below 550px nothing changes. */
+@media (min-width: 551px) and (max-width: 768px) {
+    .app-container { max-width: 600px; margin: 0 auto; }
+}
+
+/* On mid-size screens the centred title ("Расписание группы 23303") would run
+   into the buttons on the right: it joins the header row instead, a bit smaller. */
+@media (min-width: 769px) and (max-width: 1199px) {
+    .page-title { position: static; transform: none; font-size: 20px; margin: 0 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 
 @media (max-width: 768px) {

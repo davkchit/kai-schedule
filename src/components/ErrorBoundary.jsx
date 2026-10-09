@@ -1,4 +1,5 @@
 import { Component } from 'react';
+import ErrorScreen from './ErrorScreen';
 
 /**
  * Last line of defence for the whole app.
@@ -33,24 +34,28 @@ export default class ErrorBoundary extends Component {
         }
 
         return (
-            <div className="app-error">
-                <div className="app-error-card">
-                    <h1>Что-то сломалось на этой странице</h1>
-                    <p>
-                        Расписание никуда не делось — не отобразилась сама страница. Обычно помогает
-                        обновление; если нет, попробуйте позже или напишите администратору.
-                    </p>
-                    <div className="app-error-actions">
-                        <button type="button" onClick={() => window.location.reload()}>
-                            Обновить страницу
-                        </button>
-                        <a href="/">На главную</a>
-                    </div>
-                    <p className="app-error-detail">{this.state.message}</p>
-                </div>
-            </div>
+            <ErrorScreen
+                text={['Расписание никуда не делось — не отобразилась сама страница.', 'Обычно помогает обновление страницы.']}
+                onRetry={() => window.location.reload()}
+                onHome={goHome}
+                detail={this.state.message}
+            />
         );
     }
+}
+
+/**
+ * Back to the group search. The saved group is forgotten first: otherwise the
+ * welcome page would send the user straight back to the schedule — the very
+ * page that just crashed.
+ */
+function goHome() {
+    try {
+        localStorage.removeItem('kai_schedule_selection');
+    } catch {
+        // Storage unavailable: the search page still opens.
+    }
+    window.location.assign('/');
 }
 
 /**

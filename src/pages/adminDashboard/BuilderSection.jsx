@@ -1,13 +1,13 @@
 import { getWeekTypeForSemesterWeek } from '../../lib/date';
 import { resolveTemplateLessons } from '../../lib/templateResolve';
-import { BUILDER_DAYS, BUILDER_TIME_SLOTS, DAY_NAMES, formatDayMonth } from './builderUtils';
+import { BUILDER_DAYS, BUILDER_TIME_SLOTS, DAY_NAMES, formatDayMonth, softHyphenate } from './builderUtils';
 import GroupPicker from './GroupPicker';
 
 // The schedule builder: toolbar, week/template grid and its cells. Which pairs
 // a cell shows is decided here; saving, moving and deleting stay in the page.
 // Moved verbatim from AdminDashboardPage.jsx, every value and handler is a prop
 // of the same name.
-export default function BuilderSection({ activeSection, workingSemester, groups, selectedGroupId, setSelectedGroupId, lessons, builderMode, setBuilderMode, builderWeekStart, setBuilderWeekStart, builderWeekEnd, builderTemplateWeekType, setBuilderTemplateWeekType, builderWeekNumber, builderWeekMaterialized, isBuilderWeekBeforeSemester, todayWeekNumber, isExporting, handleClearWeek, handleExport, draggedLesson, setDraggedLesson, dragOverCellKey, setDragOverCellKey, handleDropOnCell, openEditModal, openCreateModal }) {
+export default function BuilderSection({ activeSection, workingSemester, groups, selectedGroupId, setSelectedGroupId, lessons, builderMode, setBuilderMode, builderWeekStart, setBuilderWeekStart, builderWeekEnd, builderTemplateWeekType, setBuilderTemplateWeekType, builderWeekNumber, builderWeekMaterialized, isBuilderWeekBeforeSemester, todayWeekNumber, isExporting, handleClearWeek, handleExport, draggedLesson, setDraggedLesson, dragOverCellKey, setDragOverCellKey, handleDropOnCell, openEditModal, openCreateModal, justSavedCell }) {
     function getBuilderCellLessons(day, timeStart, timeEnd) {
         if (builderWeekNumber === null) {
             return [];
@@ -73,7 +73,7 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
             return (
                 <button
                     type="button"
-                    className={`builder-lesson-card ${draggedLesson?.id === full.id ? 'is-dragging' : ''}`}
+                    className={`builder-lesson-card ${draggedLesson?.id === full.id ? 'is-dragging' : ''} ${justSavedCell === `${day}|${timeStart}` ? 'just-saved' : ''}`}
                     onClick={() => openEditModal(full, context)}
                     draggable
                     onDragStart={() => setDraggedLesson(full)}
@@ -82,7 +82,7 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
                         setDragOverCellKey(null);
                     }}
                 >
-                    <span className="builder-lesson-subject">{full.subject}</span>
+                    <span className="builder-lesson-subject">{softHyphenate(full.subject)}</span>
                     <span className="builder-lesson-meta">
                         {full.lesson_type && <span>{full.lesson_type}</span>}
                         {full.room && <span className="builder-lesson-room">{full.room}</span>}
@@ -111,7 +111,7 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
                             }}
                         >
                             <span className="builder-lesson-subgroup-tag">1 п/г</span>
-                            <span className="builder-lesson-subject">{sub1.subject}</span>
+                            <span className="builder-lesson-subject">{softHyphenate(sub1.subject)}</span>
                             {sub1.room && <span className="builder-lesson-room">{sub1.room}</span>}
                             {sub1.teacher && <span className="builder-lesson-teacher" title={sub1.teacher}>{sub1.teacher}</span>}
                         </button>
@@ -131,7 +131,7 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
                             }}
                         >
                             <span className="builder-lesson-subgroup-tag">2 п/г</span>
-                            <span className="builder-lesson-subject">{sub2.subject}</span>
+                            <span className="builder-lesson-subject">{softHyphenate(sub2.subject)}</span>
                             {sub2.room && <span className="builder-lesson-room">{sub2.room}</span>}
                             {sub2.teacher && <span className="builder-lesson-teacher" title={sub2.teacher}>{sub2.teacher}</span>}
                         </button>
@@ -162,16 +162,16 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
 
     return (
         <section className={`content-section ${activeSection === 'builder' ? 'active' : ''}`} id="sectionBuilder">
-            <h2 className="section-title">Конструктор расписания</h2>
-            <p className="section-desc">
-                Добавляйте и редактируйте занятия прямо на сетке недели — так они лягут и в само расписание.
+            {/* The working semester as a badge instead of a paragraph: the
+                person here every day needs to see it, not re-read how it works. */}
+            <div className="section-heading">
+                <h2 className="section-title">Конструктор расписания</h2>
                 {workingSemester && (
-                    <>
-                        {' '}Сейчас редактируется семестр <strong>{workingSemester.label}</strong>
-                        {' '}(с {workingSemester.start_date}); сменить — в разделе «Нагрузка».
-                    </>
+                    <span className="semester-badge" title="Сменить семестр — в разделе «Нагрузка»">
+                        {workingSemester.label}
+                    </span>
                 )}
-            </p>
+            </div>
 
             <div className="builder-toolbar">
                 <GroupPicker groups={groups} value={selectedGroupId} onChange={setSelectedGroupId} />
@@ -219,17 +219,21 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
                         <button type="button" className={`builder-tab ${builderTemplateWeekType === 2 ? 'active' : ''}`} onClick={() => setBuilderTemplateWeekType(2)}>Чётная</button>
                     </div>
                 )}
+
+                {builderMode === 'week' && builderWeekNumber !== null && (
+                    <button type="button" className="btn btn-secondary builder-export-btn" onClick={handleExport} disabled={isExporting} title="Расписание всех курсов на эту неделю">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+                        </svg>
+                        {isExporting ? 'Формирование...' : 'Скачать Excel'}
+                    </button>
+                )}
             </div>
 
-            {builderMode === 'week' && builderWeekNumber !== null && (
+            {builderMode === 'week' && builderWeekNumber !== null && selectedGroupId && builderWeekMaterialized && (
                 <div className="builder-export-row">
-                    {selectedGroupId && builderWeekMaterialized && (
-                        <button type="button" className="btn btn-delete" onClick={handleClearWeek}>
-                            Очистить и вернуть к шаблону
-                        </button>
-                    )}
-                    <button type="button" className="btn btn-secondary" onClick={handleExport} disabled={isExporting}>
-                        {isExporting ? 'Формирование...' : 'Скачать расписание всех курсов (.xlsx)'}
+                    <button type="button" className="btn btn-delete" onClick={handleClearWeek}>
+                        Очистить и вернуть к шаблону
                     </button>
                 </div>
             )}

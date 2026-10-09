@@ -12,16 +12,14 @@ import BackupsSection from './adminDashboard/BackupsSection';
 import AuditSection from './adminDashboard/AuditSection';
 import LessonEditModal from './adminDashboard/LessonEditModal';
 
+// localStorage key for the group last opened in the constructor.
+const LAST_GROUP_KEY = 'kai_admin_last_group';
+
 export default function AdminDashboardPage() {
     const isAssetsReady = usePageAssets({
         title: 'Панель администратора',
         description: 'Административная панель управления расписанием.',
-        stylesheets: ['/css/admin-dashboard.css'],
-        links: [
-            { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-            { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
-            { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' }
-        ]
+        stylesheets: ['/css/admin-dashboard.css']
     });
 
     const navigate = useNavigate();
@@ -35,7 +33,17 @@ export default function AdminDashboardPage() {
     const [newGroupDirection, setNewGroupDirection] = useState('');
     const [newGroupJoinedTo, setNewGroupJoinedTo] = useState('');
     const [isCreatingGroup, setIsCreatingGroup] = useState(false);
-    const [selectedGroupId, setSelectedGroupId] = useState('');
+    // The constructor reopens on the group last worked on, instead of an
+    // empty «Выберите группу» screen every visit.
+    const [selectedGroupId, setSelectedGroupId] = useState(() => {
+        try {
+            return localStorage.getItem(LAST_GROUP_KEY) || '';
+        } catch {
+            return '';
+        }
+    });
+    // "day|time" of the pair just saved: its card glows once in the grid.
+    const [justSavedCell, setJustSavedCell] = useState('');
     const [lessons, setLessons] = useState([]);
     const [semesterStartDate, setSemesterStartDate] = useState('');
     // The semester the constructor edits. Week numbers and parity are always
@@ -119,6 +127,34 @@ export default function AdminDashboardPage() {
 
         return () => window.clearTimeout(timeout);
     }, [toastMessage]);
+
+    useEffect(() => {
+        try {
+            if (selectedGroupId) {
+                localStorage.setItem(LAST_GROUP_KEY, String(selectedGroupId));
+            } else {
+                localStorage.removeItem(LAST_GROUP_KEY);
+            }
+        } catch {
+            // Storage unavailable: the group just isn't remembered.
+        }
+    }, [selectedGroupId]);
+
+    // A remembered group that no longer exists (deleted since) is dropped.
+    useEffect(() => {
+        if (selectedGroupId && groups.length > 0 && !groups.some((group) => String(group.id) === String(selectedGroupId))) {
+            setSelectedGroupId('');
+        }
+    }, [groups, selectedGroupId]);
+
+    useEffect(() => {
+        if (!justSavedCell) {
+            return undefined;
+        }
+
+        const timer = window.setTimeout(() => setJustSavedCell(''), 1600);
+        return () => window.clearTimeout(timer);
+    }, [justSavedCell]);
 
     useEffect(() => {
         if (!selectedGroupId) {
@@ -762,6 +798,7 @@ export default function AdminDashboardPage() {
                     : `, но в ${names.join(', ')} не добавлено: ${(await extra.json().catch(() => ({}))).error || 'ошибка'}`;
             }
 
+            setJustSavedCell(`${editForm.day_of_week}|${editForm.time_start}`);
             setIsEditModalOpen(false);
             setEditForm(DEFAULT_EDIT_FORM);
 
@@ -1041,6 +1078,7 @@ export default function AdminDashboardPage() {
                     handleDropOnCell={handleDropOnCell}
                     openEditModal={openEditModal}
                     openCreateModal={openCreateModal}
+                    justSavedCell={justSavedCell}
                 />
 
                 <section className={`content-section ${activeSection === 'load' ? 'active' : ''}`} id="sectionLoad">

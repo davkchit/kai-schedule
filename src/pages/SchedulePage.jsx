@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
 import { capitalize, formatLocalDateForApi, normalizeDate } from '../lib/date';
+import ErrorScreen from '../components/ErrorScreen';
 import { clearSelection, getSavedSelection, getSavedTheme, saveTheme } from '../lib/storage';
 import { resolveLessonsForDay } from '../lib/scheduleResolve';
 import {
@@ -36,16 +37,31 @@ const WINDOW_LIMITS = {
     latest: formatLocalDateForApi(MAX_DATE)
 };
 const CALENDAR_HEADERS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const BRAND_LOGO_SRC = '/assets/logo.png';
+const BRAND_LOGO_SRC = '/assets/logo-trim.png';
 // How long a pair that appeared or vanished in a live update animates — must
 // cover the lesson-leave / lesson-enter keyframes in schedule.css.
 const LESSON_MOTION_MS = 500;
 const REST_DAY_GIF_SRC = '/assets/party-confetti.gif';
 
+// Local development only: /schedule?preview=error shows the error screen
+// without breaking anything. Production builds drop it (DEV is false there).
+const PREVIEW_ERROR = import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('preview') === 'error';
+
+const LOAD_FAILED = 'load-failed';
+const NO_CONNECTION = 'no-connection';
+
 // Display only: the stored lesson_type 'Лаб' must stay as is, it's part of how a pair matches its load-plan row.
 const LESSON_TYPE_LABELS = { 'Лаб': 'Лаб.' };
 
 // A bare number is a room; named places like "с/з" or "КАМАЗ" are shown as they are.
+// A pair held online has «онлайн» for its room (the constructor's «Онлайн» box
+// writes exactly that); it gets its own orange tag instead of a room number.
+function isOnlineRoom(room) {
+    return /^\s*(онлайн|online|дистанционно)\s*$/i.test(room || '');
+}
+
 function formatRoom(room) {
     const trimmed = room.trim();
     return /^\d+[а-яa-z]?$/i.test(trimmed) ? `${trimmed} каб.` : trimmed;
@@ -55,12 +71,7 @@ export default function SchedulePage() {
     const isAssetsReady = usePageAssets({
         title: 'Расписание занятий',
         description: 'Расписание занятий для студентов. Просмотр пар по дням недели.',
-        stylesheets: ['/css/schedule.css', '/css/schedule-mobile.css'],
-        links: [
-            { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-            { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
-            { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' }
-        ]
+        stylesheets: ['/css/schedule.css', '/css/schedule-mobile.css']
     });
 
     const navigate = useNavigate();
@@ -84,7 +95,6 @@ export default function SchedulePage() {
     const [listExtraDays, setListExtraDays] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState('');
-    const [isCookieVisible, setIsCookieVisible] = useState(true);
     const [isSupportVisible, setIsSupportVisible] = useState(true);
     const [isMobileView, setIsMobileView] = useState(() => window.matchMedia('(max-width: 768px)').matches);
     const [currentView, setCurrentView] = useState('day');
@@ -252,9 +262,7 @@ export default function SchedulePage() {
                     );
                 } else {
                     setErrorMessage(
-                        navigator.onLine
-                            ? 'Ошибка загрузки расписания'
-                            : 'Нет интернета и сохранённой версии расписания для этой даты'
+                        navigator.onLine ? LOAD_FAILED : NO_CONNECTION
                     );
                 }
             } finally {
@@ -567,11 +575,26 @@ export default function SchedulePage() {
         const subgroupTag = lesson.subgroup > 0
             ? <span className={mobile ? 'mobile-tag-subgroup' : 'tag-subgroup'}>{lesson.subgroup} подгр.</span>
             : null;
-        const roomTag = lesson.room
-            ? <span className={mobile ? 'mobile-tag-room' : 'tag-room'}>{formatRoom(lesson.room)}</span>
-            : null;
+        const roomTag = !lesson.room
+            ? null
+            : isOnlineRoom(lesson.room)
+                ? (
+                    <span className={`${mobile ? 'mobile-tag-room' : 'tag-room'} tag-online`}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="4" y="5" width="16" height="11" rx="1.5" />
+                            <path d="M2 19h20" />
+                        </svg>
+                        Онлайн
+                    </span>
+                )
+                : <span className={mobile ? 'mobile-tag-room' : 'tag-room'}>{formatRoom(lesson.room)}</span>;
         const typeTag = lesson.lesson_type
             ? <span className={mobile ? 'mobile-tag-type' : 'tag-type'}>{LESSON_TYPE_LABELS[lesson.lesson_type] || lesson.lesson_type}</span>
+            : null;
+        // Same look as the room and type tags, in the same row; it moves to a row
+        // of its own only when there is no room left. title shows a name cut short.
+        const teacherTag = lesson.teacher
+            ? <span className={mobile ? 'mobile-tag-room tag-teacher' : 'tag-room tag-teacher'} title={lesson.teacher}>{lesson.teacher}</span>
             : null;
 
         if (mobile) {
@@ -583,6 +606,7 @@ export default function SchedulePage() {
                         {roomTag}
                         {typeTag}
                         {subgroupTag}
+                        {teacherTag}
                     </div>
                 </div>
             );
@@ -596,6 +620,7 @@ export default function SchedulePage() {
                     {roomTag}
                     {typeTag}
                     {subgroupTag}
+                    {teacherTag}
                 </div>
             </div>
         );
@@ -634,18 +659,17 @@ export default function SchedulePage() {
         <div className="app-container">
             <header className="main-header">
                 <div className="logo-area">
-                    <img src={BRAND_LOGO_SRC} alt="Логотип КАИ" width="110" height="46" />
+                    <img src={BRAND_LOGO_SRC} alt="Логотип КАИ" width="110" height="23" />
                 </div>
-                <h1 className="page-title desktop-only">Расписание занятий</h1>
+                <h1 className="page-title desktop-only">
+                    {savedSelection?.group_name ? `Расписание группы ${savedSelection.group_name}` : 'Расписание занятий'}
+                </h1>
                 {/* On a phone the header says whose schedule this is instead —
                     the page itself already makes "расписание" obvious. Just a
                     label: switching groups stays in the burger menu. */}
                 {savedSelection?.group_name && (
                     <p className="header-group mobile-only">
-                        <span className="header-group-name">{savedSelection.group_name}</span>
-                        {Number(savedSelection.subgroup) > 0 && (
-                            <span className="header-group-sub">{savedSelection.subgroup} подгруппа</span>
-                        )}
+                        <span className="header-group-name">Группа {savedSelection.group_name}</span>
                     </p>
                 )}
                 <div className="header-controls">
@@ -844,9 +868,6 @@ export default function SchedulePage() {
                             Загрузка...
                         </div>
                     )}
-                    {!isLoading && errorMessage && !scheduleData && (
-                        <div className="schedule-loading">{errorMessage}</div>
-                    )}
 
                     {!isLoading && staleNotice && scheduleData && (
                         <div className="schedule-stale" role="status">{staleNotice}</div>
@@ -897,6 +918,15 @@ export default function SchedulePage() {
                     </div>
                 </div>
                 <div className="day-content" id="mobileDayContent">
+                    {/* The phone's day view used to stay blank while loading and
+                        on a failure: both messages lived only in the grid above,
+                        which this view hides. */}
+                    {!scheduleData && isLoading && (
+                        <div className="schedule-loading">
+                            <div className="loading-spinner"></div>
+                            Загрузка...
+                        </div>
+                    )}
                     {scheduleDays.map((day) => (
                         <div
                             key={`${day.id}-content`}
@@ -915,7 +945,7 @@ export default function SchedulePage() {
             {isSupportVisible && (
                 <div className="support-widget">
                     <div className="support-icon">
-                        <img src={BRAND_LOGO_SRC} alt="Логотип КАИ" width="72" height="30" />
+                        <img src={BRAND_LOGO_SRC} alt="Логотип КАИ" width="56" height="12" />
                     </div>
                     <div className="support-text">
                         <div className="support-title">Есть вопросы?</div>
@@ -938,16 +968,17 @@ export default function SchedulePage() {
                 </div>
             )}
 
-            {isCookieVisible && (
-                <div className="cookie-banner" id="cookieBanner">
-                    <span>Мы используем <a href="#">cookies</a></span>
-                    <button className="close-cookie" id="closeCookie" onClick={() => setIsCookieVisible(false)}>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="18" y1="6" x2="6" y2="18"></line>
-                            <line x1="6" y1="6" x2="18" y2="18"></line>
-                        </svg>
-                    </button>
-                </div>
+            {/* Nothing to show and the load failed: the full-page error, with
+                the way out — the same load asked for again, or back to the
+                group search. */}
+            {((!isLoading && errorMessage && !scheduleData) || PREVIEW_ERROR) && (
+                <ErrorScreen
+                    text={errorMessage === NO_CONNECTION
+                        ? ['Нет подключения к интернету.', 'Проверьте связь и обновите страницу.']
+                        : ['Не удалось загрузить расписание.', 'Попробуйте обновить страницу через несколько секунд.']}
+                    onRetry={() => setRefreshKey((k) => k + 1)}
+                    onHome={switchSchedule}
+                />
             )}
         </div>
     );
