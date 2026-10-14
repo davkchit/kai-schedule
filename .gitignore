@@ -8,3 +8,7 @@ data/*.db-wal
 # Database copies — never commit or upload them
 backups/
 data/backups/
+
+# Live data: admin accounts and teachers. Kept local, never pushed.
+data/*.db
+seed/*.db
