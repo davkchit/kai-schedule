@@ -1,7 +1,23 @@
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
-const DATA_CACHE = `anti-vuz-data-${CACHE_VERSION}`;
+// Saved schedules are not tied to a release: a new version must not throw
+// away the copy a student's phone holds for the moments without signal.
+const DATA_CACHE = 'anti-vuz-data-v5';
+// The campus network tends to hang rather than fail: a request can sit for
+// 10–20 s without an error. Past these limits the saved copy is shown, and the
+// network's answer, when it does come, is saved for next time.
+const NAVIGATION_TIMEOUT_MS = 2000;
+const STYLESHEET_TIMEOUT_MS = 1500;
+const DATA_TIMEOUT_MS = 2500;
+// Set on a saved schedule handed out instead of the network's: 'unreachable'
+// (no answer in time) or 'refused' (the server answered with an error).
+const SAVED_COPY_HEADER = 'X-Kai-Saved-Copy';
+// When that copy was saved (ISO time), so the page can say how old it is.
+const SAVED_AT_HEADER = 'X-Kai-Saved-At';
+// A refresh of a schedule already on screen waits for the network: the saved
+// copy it would get instead is what it is trying to replace.
+const WAIT_HEADER = 'X-Kai-Wait';
 const APP_SHELL_URL = '/';
 const OFFLINE_URL = '/offline.html';
 const DEFAULT_SCHEDULE_RANGE_DAYS = 28;
@@ -16,7 +32,6 @@ const FIXED_STATIC_URLS = [
     '/css/schedule-mobile.css',
     '/assets/logo.png',
     '/assets/back.jpg',
-    '/assets/party-confetti.gif',
     OFFLINE_URL
 ];
 
@@ -47,20 +62,22 @@ self.addEventListener('fetch', (event) => {
     }
 
     if (isPublicDataRequest(url)) {
-        event.respondWith(networkFirstData(request));
+        event.respondWith(networkFirstData(event));
         return;
     }
 
     if (request.mode === 'navigate') {
-        event.respondWith(handleNavigation(request));
+        event.respondWith(handleNavigation(event));
         return;
     }
 
     // Stylesheets keep the same name across releases (unlike the hashed
     // bundles), so a cached copy would pair the new code with the old styles
-    // for one launch — on iOS that showed unstyled system-blue buttons.
+    // for one launch — on iOS that showed unstyled system-blue buttons. Hence
+    // the network first; the saved copy only when the network is slow, and
+    // then the page itself most likely came from the cache as well.
     if (url.pathname.startsWith('/css/')) {
-        event.respondWith(networkFirstStatic(request));
+        event.respondWith(networkFirstStatic(event));
         return;
     }
 
@@ -85,6 +102,33 @@ async function precacheAppShell() {
     const discoveredUrls = extractAssetUrlsFromHtml(html);
 
     await cacheUrls(staticCache, [...FIXED_STATIC_URLS, ...discoveredUrls]);
+    await cacheUrls(staticCache, await findLazyChunks(staticCache, discoveredUrls));
+}
+
+/**
+ * The code of each page is loaded only when the page is opened. A student who
+ * always goes straight to the schedule would otherwise have nothing saved for
+ * the group search or teacher pages, and on a hanging network those would
+ * stay blank. The admin's code is left out: students never need it.
+ */
+async function findLazyChunks(staticCache, urls) {
+    const chunks = [];
+
+    for (const url of urls.filter((value) => value.endsWith('.js'))) {
+        const response = await staticCache.match(url);
+
+        if (!response) {
+            continue;
+        }
+
+        for (const match of (await response.text()).matchAll(/assets\/[\w-]+\.js/g)) {
+            if (!/\/Admin/.test(match[0])) {
+                chunks.push(`/${match[0]}`);
+            }
+        }
+    }
+
+    return chunks;
 }
 
 async function cleanupOldCaches() {
@@ -140,64 +184,113 @@ function extractAssetUrlsFromHtml(html) {
     return urls;
 }
 
-async function handleNavigation(request) {
-    try {
-        const response = await fetch(request);
+/**
+ * Fetches `request` and saves a good answer into `cache` (as `cacheKey`).
+ * Resolves to the response, or null when the network failed. The event is
+ * kept alive until it settles, so an answer that arrives after the page was
+ * already served the saved copy still gets saved.
+ */
+function fetchAndSave(event, cache, cacheKey, prepare = (response) => response) {
+    const network = fetch(event.request)
+        .then(async (response) => {
+            if (isCacheableResponse(response)) {
+                await cache.put(cacheKey, prepare(response.clone()));
+            }
 
-        if (response.ok) {
-            const cache = await caches.open(SHELL_CACHE);
-            await cache.put(APP_SHELL_URL, response.clone());
             return response;
-        }
-    } catch {
-        const cache = await caches.open(SHELL_CACHE);
-        const cachedShell = (await cache.match(request)) || (await cache.match(APP_SHELL_URL));
+        })
+        .catch(() => null);
 
-        if (cachedShell) {
-            return cachedShell;
-        }
-    }
+    event.waitUntil(network);
 
-    return caches.match(OFFLINE_URL);
+    return network;
 }
 
-async function networkFirstData(request) {
-    const cache = await caches.open(DATA_CACHE);
+/** The promise's value, or null if it has not settled within `ms`. */
+function withinTimeout(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((resolve) => {
+            setTimeout(() => resolve(null), ms);
+        })
+    ]);
+}
 
-    try {
-        const response = await fetch(request);
+async function handleNavigation(event) {
+    const cache = await caches.open(SHELL_CACHE);
+    const network = fetchAndSave(event, cache, APP_SHELL_URL);
+    const cachedShell = (await cache.match(event.request)) || (await cache.match(APP_SHELL_URL));
+    const response = cachedShell
+        ? await withinTimeout(network, NAVIGATION_TIMEOUT_MS)
+        : await network;
 
-        if (isCacheableResponse(response)) {
-            await cache.put(request, response.clone());
-            return response;
-        }
-
-        // The request went through but the server refused it — rate limit,
-        // restart, bad gateway. A saved copy of the schedule is far more
-        // useful to a student standing in a corridor than an error screen.
-        const savedResponse = await findCachedDataResponse(request, cache);
-
-        return savedResponse || response;
-    } catch {
-        const cachedResponse = await findCachedDataResponse(request, cache);
-
-        if (cachedResponse) {
-            return cachedResponse;
-        }
-
-        return new Response(
-            JSON.stringify({
-                error: 'offline',
-                message: 'Нет интернета и сохранённой версии данных'
-            }),
-            {
-                status: 503,
-                headers: {
-                    'Content-Type': 'application/json; charset=utf-8'
-                }
-            }
-        );
+    if (response && response.ok) {
+        return response;
     }
+
+    return cachedShell || (await caches.match(OFFLINE_URL)) || response || Response.error();
+}
+
+async function networkFirstData(event) {
+    const { request } = event;
+    const cache = await caches.open(DATA_CACHE);
+    const network = fetchAndSave(event, cache, request, stampSavedAt);
+    const waitForNetwork = request.headers.get(WAIT_HEADER) === '1';
+    const saved = waitForNetwork ? null : await findCachedDataResponse(request, cache);
+    const response = saved
+        ? await withinTimeout(network, DATA_TIMEOUT_MS)
+        : await network;
+
+    if (isCacheableResponse(response)) {
+        return response;
+    }
+
+    // No answer in time, or the server refused — rate limit, restart, bad
+    // gateway. A saved copy of the schedule is far more useful to a student
+    // standing in a corridor than an error screen.
+    const savedResponse = saved || (await findCachedDataResponse(request, cache));
+
+    if (savedResponse) {
+        return markSavedCopy(savedResponse, response ? 'refused' : 'unreachable');
+    }
+
+    if (response) {
+        return response;
+    }
+
+    return new Response(
+        JSON.stringify({
+            error: 'offline',
+            message: 'Нет интернета и сохранённой версии данных'
+        }),
+        {
+            status: 503,
+            headers: {
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+        }
+    );
+}
+
+/** A copy of `response` carrying the time it was saved. */
+function stampSavedAt(response) {
+    return withHeader(response, SAVED_AT_HEADER, new Date().toISOString());
+}
+
+/** A copy of a saved `response` marked as such, with why it was used. */
+function markSavedCopy(response, reason) {
+    return withHeader(response, SAVED_COPY_HEADER, reason);
+}
+
+function withHeader(response, name, value) {
+    const headers = new Headers(response.headers);
+    headers.set(name, value);
+
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+    });
 }
 
 async function findCachedDataResponse(request, cache) {
@@ -267,22 +360,21 @@ async function findCachedDataResponse(request, cache) {
     return cache.match(candidates[0].cachedRequest);
 }
 
-/** The network's copy when online; the saved one only when offline. */
-async function networkFirstStatic(request) {
+/** The network's copy; the saved one when offline or slow to answer. */
+async function networkFirstStatic(event) {
+    const { request } = event;
     const cache = await caches.open(STATIC_CACHE);
+    const network = fetchAndSave(event, cache, request);
+    const cached = await cache.match(request);
+    const response = cached
+        ? await withinTimeout(network, STYLESHEET_TIMEOUT_MS)
+        : await network;
 
-    try {
-        const response = await fetch(request);
-
-        if (isCacheableResponse(response)) {
-            await cache.put(request, response.clone());
-            return response;
-        }
-
-        return (await cache.match(request)) || response;
-    } catch {
-        return (await cache.match(request)) || fetch(request);
+    if (isCacheableResponse(response)) {
+        return response;
     }
+
+    return cached || response || Response.error();
 }
 
 async function staleWhileRevalidate(request, cacheName) {

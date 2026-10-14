@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import usePageAssets from '../hooks/usePageAssets';
 import { capitalize, formatLocalDateForApi, normalizeDate } from '../lib/date';
 import ErrorScreen from '../components/ErrorScreen';
-import { clearSelection, getSavedSelection, getSavedTheme, saveTheme } from '../lib/storage';
+import { clearSelection, getSavedSelection } from '../lib/storage';
+import { chooseTheme, currentTheme, onThemeChange } from '../lib/theme';
 import { resolveLessonsForDay } from '../lib/scheduleResolve';
 import {
     maxIso,
@@ -41,7 +42,7 @@ const BRAND_LOGO_SRC = '/assets/logo-trim.png';
 // How long a pair that appeared or vanished in a live update animates — must
 // cover the lesson-leave / lesson-enter keyframes in schedule.css.
 const LESSON_MOTION_MS = 500;
-const REST_DAY_GIF_SRC = '/assets/party-confetti.gif';
+const REST_DAY_GIF_SRC = '/assets/party-confetti.webp';
 
 // Local development only: /schedule?preview=error shows the error screen
 // without breaking anything. Production builds drop it (DEV is false there).
@@ -100,12 +101,17 @@ export default function SchedulePage() {
     const [currentView, setCurrentView] = useState('day');
     const [isBurgerOpen, setIsBurgerOpen] = useState(false);
     const [activeMobileTab, setActiveMobileTab] = useState('');
-    const [isDark, setIsDark] = useState(() => getSavedTheme() === 'dark');
+    // Follows the system until the toggle is flipped (lib/theme), so the
+    // toggle has to hear about a change the system made on its own.
+    const [isDark, setIsDark] = useState(() => currentTheme() === 'dark');
     const [refreshKey, setRefreshKey] = useState(0);
     // Shown over the timetable when a refresh failed but the previously loaded
     // schedule is still on screen — better than replacing it with an error.
     const [staleNotice, setStaleNotice] = useState('');
     const lastFetchTimeRef = useRef(0);
+    // On screen is a saved copy shown because the network did not answer:
+    // the silent refresh then retries every few seconds instead of a minute.
+    const awaitingNetworkRef = useRef(false);
     const scheduleRef = useRef(null);
     scheduleRef.current = schedule;
     const currentDateRef = useRef(currentDate);
@@ -235,13 +241,16 @@ export default function SchedulePage() {
             setErrorMessage('');
 
             try {
-                const data = await fetchScheduleWindow(groupId, subgroup, from, to);
+                const { data, savedCopy, savedAt } = await fetchScheduleWindow(groupId, subgroup, from, to);
 
                 if (!ignore) {
                     anchorCounterRef.current += 1;
                     setSchedule({ groupId, subgroup, refreshKey, from, to, anchorToken: anchorCounterRef.current, data });
                     setListExtraDays(0);
-                    setStaleNotice('');
+                    // A saved copy is shown at once; the silent refresh below
+                    // then replaces it as soon as the network answers.
+                    setStaleNotice(savedCopy ? savedCopyNotice(savedCopy, savedAt) : '');
+                    awaitingNetworkRef.current = savedCopy === 'unreachable';
                     lastFetchTimeRef.current = Date.now();
                 }
             } catch (error) {
@@ -394,9 +403,7 @@ export default function SchedulePage() {
         };
     }, [isAssetsReady, isMobileView]);
 
-    useEffect(() => {
-        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    }, [isDark]);
+    useEffect(() => onThemeChange((theme) => setIsDark(theme === 'dark')), []);
 
     useEffect(() => {
         function handleVisibilityChange() {
@@ -417,29 +424,52 @@ export default function SchedulePage() {
     // Unlike refreshKey this is silent: same days, no loading state, no
     // re-anchoring — the reader's scroll position and chosen day stay put, and
     // nothing re-renders at all when the schedule hasn't changed. A hidden
-    // page (app in the background, phone locked) sends nothing.
+    // page (app in the background, phone locked) sends nothing. While a saved
+    // copy stands in for an unanswered request it retries every 5 s, and at
+    // once when the phone reports the network is back.
     useEffect(() => {
-        const timer = window.setInterval(async () => {
+        let isRefreshing = false;
+
+        async function refreshSilently() {
             const loaded = scheduleRef.current;
 
             if (document.visibilityState !== 'visible' || rollOverToNewDay()) {
                 return; // hidden, or midnight passed with the page open: reloaded around the new day
             }
 
-            if (!loaded || Date.now() - lastFetchTimeRef.current < 55_000) {
+            if (!loaded || isRefreshing) {
                 return;
             }
 
+            if (!awaitingNetworkRef.current && Date.now() - lastFetchTimeRef.current < 55_000) {
+                return;
+            }
+
+            isRefreshing = true;
+
             try {
                 // 'no-cache' revalidates with the server instead of reusing the
-                // browser's copy from up to a minute ago.
-                const data = await fetchScheduleWindow(loaded.groupId, loaded.subgroup, loaded.from, loaded.to, 'no-cache');
+                // browser's copy from up to a minute ago; `wait` asks for the
+                // network's answer, not the saved copy already on screen.
+                const { data, savedCopy } = await fetchScheduleWindow(
+                    loaded.groupId, loaded.subgroup, loaded.from, loaded.to,
+                    { cacheMode: 'no-cache', wait: true }
+                );
 
                 if (scheduleRef.current !== loaded) {
                     return; // the reader moved to another window meanwhile
                 }
 
                 lastFetchTimeRef.current = Date.now();
+
+                if (savedCopy) {
+                    return; // still no answer from the server: keep the copy and its notice
+                }
+
+                // The server answered: whatever notice said the schedule might
+                // be old is no longer true.
+                awaitingNetworkRef.current = false;
+                setStaleNotice('');
 
                 if (JSON.stringify(data) !== JSON.stringify(loaded.data)) {
                     // previousData lets buildScheduleDays keep a cancelled pair
@@ -454,10 +484,18 @@ export default function SchedulePage() {
                 }
             } catch {
                 // Keep what is on screen; the next tick tries again.
+            } finally {
+                isRefreshing = false;
             }
-        }, 60_000);
+        }
 
-        return () => window.clearInterval(timer);
+        const timer = window.setInterval(refreshSilently, 5_000);
+        window.addEventListener('online', refreshSilently);
+
+        return () => {
+            window.clearInterval(timer);
+            window.removeEventListener('online', refreshSilently);
+        };
     }, []);
 
     const scheduleDays = useMemo(() => buildScheduleDays(schedule), [schedule]);
@@ -501,11 +539,7 @@ export default function SchedulePage() {
     }
 
     function toggleTheme() {
-        setIsDark((previous) => {
-            const next = !previous;
-            saveTheme(next ? 'dark' : 'light');
-            return next;
-        });
+        chooseTheme(isDark ? 'light' : 'dark');
     }
 
     function toggleDatePicker() {
@@ -984,10 +1018,17 @@ export default function SchedulePage() {
     );
 }
 
-async function fetchScheduleWindow(groupId, subgroup, from, to, cacheMode = 'default') {
+/**
+ * The schedule of a window of days: `{ data, savedCopy, savedAt }`. On a slow
+ * or dead network the service worker answers with the copy the phone saved
+ * last time; `savedCopy` then says why ('unreachable' | 'refused') and
+ * `savedAt` when it was saved (null if unknown). `wait` skips that shortcut —
+ * for a refresh of what is already on screen.
+ */
+async function fetchScheduleWindow(groupId, subgroup, from, to, { cacheMode = 'default', wait = false } = {}) {
     const response = await fetch(
         `/api/schedule/${groupId}?subgroup=${subgroup}&date=${from}&days=${requestDays(from, to)}`,
-        { cache: cacheMode }
+        { cache: cacheMode, headers: wait ? { 'X-Kai-Wait': '1' } : {} }
     );
 
     if (!response.ok) {
@@ -996,7 +1037,32 @@ async function fetchScheduleWindow(groupId, subgroup, from, to, cacheMode = 'def
         throw error;
     }
 
-    return response.json();
+    return {
+        data: await response.json(),
+        savedCopy: response.headers.get('X-Kai-Saved-Copy'),
+        savedAt: response.headers.get('X-Kai-Saved-At')
+    };
+}
+
+/** The notice over a saved copy of the schedule. */
+function savedCopyNotice(savedCopy, savedAt) {
+    if (savedCopy === 'refused') {
+        return 'Сервер сейчас загружен — показываем сохранённое расписание';
+    }
+
+    const reason = navigator.onLine ? 'Связь тормозит' : 'Нет связи';
+    const saved = savedAt ? new Date(savedAt) : null;
+
+    if (!saved || Number.isNaN(saved.getTime())) {
+        return `${reason} — показываем сохранённое расписание, обновится само`;
+    }
+
+    const time = saved.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const when = formatLocalDateForApi(saved) === formatLocalDateForApi(new Date())
+        ? `в ${time}`
+        : `${saved.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} в ${time}`;
+
+    return `${reason} — показываем расписание, сохранённое ${when}, обновится само`;
 }
 
 /** Scrolls a horizontal strip so the element matching `selector` sits at its left edge. */

@@ -1,6 +1,5 @@
 const SELECTION_KEY = 'kai_schedule_selection';
 const ADMIN_TOKEN_KEY = 'admin_token';
-const THEME_KEY = 'kai_schedule_theme';
 
 export function getSavedSelection() {
     try {
@@ -31,10 +30,3 @@ export function clearAdminToken() {
     localStorage.removeItem(ADMIN_TOKEN_KEY);
 }
 
-export function getSavedTheme() {
-    return localStorage.getItem(THEME_KEY) || 'light';
-}
-
-export function saveTheme(theme) {
-    localStorage.setItem(THEME_KEY, theme);
-}
