@@ -42,6 +42,9 @@ const BRAND_LOGO_SRC = '/assets/logo-trim.png';
 // How long a pair that appeared or vanished in a live update animates — must
 // cover the lesson-leave / lesson-enter keyframes in schedule.css.
 const LESSON_MOTION_MS = 500;
+// How long the saved-copy notice takes to fade and close — must cover the
+// stale-notice keyframes in schedule.css.
+const STALE_NOTICE_LEAVE_MS = 650;
 const REST_DAY_GIF_SRC = '/assets/party-confetti.webp';
 
 // Local development only: /schedule?preview=error shows the error screen
@@ -876,6 +879,9 @@ export default function SchedulePage() {
                 className="schedule-grid-wrap"
                 style={isMobileView && currentView === 'day' ? { display: 'none' } : undefined}
             >
+                {/* Above the strip of days, not inside it: as the strip's first item
+                    it sat to the left of the chosen day, scrolled out of view. */}
+                {scheduleData && <StaleNotice text={isLoading ? '' : staleNotice} />}
                 <main
                     className="schedule-grid"
                     id="desktopSchedule"
@@ -903,9 +909,6 @@ export default function SchedulePage() {
                         </div>
                     )}
 
-                    {!isLoading && staleNotice && scheduleData && (
-                        <div className="schedule-stale" role="status">{staleNotice}</div>
-                    )}
                     {!isLoading && scheduleData && isMobileView && canShowEarlierDays && (
                         <button
                             type="button"
@@ -961,6 +964,7 @@ export default function SchedulePage() {
                             Загрузка...
                         </div>
                     )}
+                    {scheduleData && <StaleNotice text={isLoading ? '' : staleNotice} />}
                     {scheduleDays.map((day) => (
                         <div
                             key={`${day.id}-content`}
@@ -1042,6 +1046,40 @@ async function fetchScheduleWindow(groupId, subgroup, from, to, { cacheMode = 'd
         savedCopy: response.headers.get('X-Kai-Saved-Copy'),
         savedAt: response.headers.get('X-Kai-Saved-At')
     };
+}
+
+/**
+ * The amber «показываем сохранённое» notice. It fades in; when `text` empties
+ * (fresh data arrived) it keeps its last words on screen while it fades,
+ * shrinks a touch and closes its place, so the pairs below glide up instead
+ * of jumping. Timing must cover the stale-notice keyframes in schedule.css.
+ */
+function StaleNotice({ text }) {
+    const [lastText, setLastText] = useState(text);
+
+    useEffect(() => {
+        if (text) {
+            setLastText(text);
+            return undefined;
+        }
+
+        const timer = window.setTimeout(() => setLastText(''), STALE_NOTICE_LEAVE_MS);
+        return () => window.clearTimeout(timer);
+    }, [text]);
+
+    const shown = text || lastText;
+
+    if (!shown) {
+        return null;
+    }
+
+    return (
+        <div className={`schedule-stale-motion ${text ? '' : 'is-leaving'}`}>
+            <div className="schedule-stale-motion-inner">
+                <div className="schedule-stale" role="status">{shown}</div>
+            </div>
+        </div>
+    );
 }
 
 /** The notice over a saved copy of the schedule. */
