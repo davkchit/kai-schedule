@@ -12,3 +12,6 @@ data/backups/
 # Live data: admin accounts and teachers. Kept local, never pushed.
 data/*.db
 seed/*.db
+
+# Local Claude Code settings: personal, not part of the project.
+.claude/settings.local.json
