@@ -8,8 +8,8 @@ const { app, hasFrontendBuild } = createApp();
 
 if (require.main === module) {
     // A process that dies silently is the case this alerting exists for:
-    // Railway restarts the container, and without this nobody ever learns
-    // that it happened, or why.
+    // systemd restarts the service (Restart=always), and without this nobody
+    // ever learns that it happened, or why.
     process.on('uncaughtException', (error) => {
         notify(`Сервер упал: ${error.stack || error.message}`, { key: 'uncaught' });
         setTimeout(() => process.exit(1), 1000).unref();

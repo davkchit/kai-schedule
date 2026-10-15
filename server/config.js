@@ -84,7 +84,7 @@ function parseTrustProxy(value) {
 
     // A bare non-negative integer means "trust exactly this many hops" (what
     // Express and express-rate-limit want behind a single reverse proxy like
-    // Railway's edge) — checked BEFORE the word-based true/false so "1" and
+    // Caddy in production) — checked BEFORE the word-based true/false so "1" and
     // "0" resolve to the hop-count 1/0, not to the fully-permissive boolean
     // `true` (which trusts every hop and lets a client spoof X-Forwarded-For
     // to bypass IP-based rate limiting).

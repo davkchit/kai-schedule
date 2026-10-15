@@ -51,10 +51,10 @@ function ensureDataDirectory(dbPath) {
 }
 
 /**
- * A brand-new persistent volume (or a fresh deploy with no DB_PATH override)
- * starts with nothing at the target path. Rather than silently boot an empty
- * schema — which would look like every group/lesson/admin vanished — seed it
- * from the last known-good snapshot committed alongside the code. This only
+ * A new server or a fresh checkout starts with nothing at the target path.
+ * Rather than silently boot an empty schema — which would look like every
+ * group/lesson/admin vanished — seed it from the snapshot at SEED_DB_PATH
+ * when there is one (it is kept out of git: it holds real data). This only
  * ever fires when the target file doesn't exist yet; it never overwrites a
  * database that's already there.
  */

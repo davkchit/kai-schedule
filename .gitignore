@@ -13,5 +13,6 @@ data/backups/
 data/*.db
 seed/*.db
 
-# Local Claude Code settings: personal, not part of the project.
+# Personal Claude Code files: not part of the project.
 .claude/settings.local.json
+CLAUDE.local.md

@@ -11,14 +11,14 @@ const path = require('path');
 //   group deleted, a semester rebuilt by mistake) can be undone to yesterday
 //   without anyone having remembered to press "create backup".
 //
-// Copies live on the same volume as the database: they protect against bad
-// writes and bad migrations, not against losing the volume itself — for that,
-// download one from the admin panel now and then.
+// Copies live on the same disk as the database: they protect against bad
+// writes and bad migrations, not against losing the disk itself — production
+// also sends an encrypted copy off the server every 6 hours.
 
-// Sized for the 500 MB Railway volume: at ~14 MB of database (roughly ten
-// years of this app's data) 19 copies stay well under half of it.
+// Kept small on purpose: at ~14 MB of database (roughly ten years of this
+// app's data) 19 copies take under 300 MB of the server's disk.
 const RETENTION = { boot: 5, daily: 14 };
-// Leave the database room to grow: never fill the volume with copies.
+// Leave the database room to grow: never fill the disk with copies.
 const MIN_FREE_BYTES_FACTOR = 5;
 const DAY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
