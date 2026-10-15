@@ -4,8 +4,6 @@
 
 ![КАИ Расписание: группа в пару касаний, светлая и тёмная тема, работа без интернета, изменения приходят сами, версия для компьютера и страница преподавателя](docs/promo.webp)
 
-<p align="center"><a href="https://github.com/user-attachments/assets/c618409a-20ed-4d5a-92cf-11e1ffafcdbb">Видео в 60 fps</a></p>
-
 ![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)
 ![Express 5](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003b57?logo=sqlite&logoColor=white)
