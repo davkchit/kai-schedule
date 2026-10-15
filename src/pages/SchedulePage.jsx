@@ -8,6 +8,7 @@ import { chooseTheme, currentTheme, onThemeChange } from '../lib/theme';
 import { resolveLessonsForDay } from '../lib/scheduleResolve';
 import {
     maxIso,
+    minIso,
     planInitialWindow,
     parseIsoDate,
     requestDays,
@@ -244,11 +245,28 @@ export default function SchedulePage() {
             setErrorMessage('');
 
             try {
-                const { data, savedCopy, savedAt } = await fetchScheduleWindow(groupId, subgroup, from, to);
+                const { data, savedCopy, savedAt, savedRange } = await fetchScheduleWindow(groupId, subgroup, from, to);
+                // Days past the end of a partial copy are left out rather than
+                // guessed: a week changed after it was saved would show wrong.
+                const shownFrom = savedRange ? maxIso(from, savedRange.from) : from;
+                const shownTo = savedRange ? minIso(to, savedRange.to) : to;
+
+                if (wantedIso < shownFrom || wantedIso > shownTo) {
+                    throw new Error('The saved copy does not cover the chosen day');
+                }
 
                 if (!ignore) {
                     anchorCounterRef.current += 1;
-                    setSchedule({ groupId, subgroup, refreshKey, from, to, anchorToken: anchorCounterRef.current, data });
+                    setSchedule({
+                        groupId,
+                        subgroup,
+                        refreshKey,
+                        from: shownFrom,
+                        to: shownTo,
+                        requested: { from, to },
+                        anchorToken: anchorCounterRef.current,
+                        data
+                    });
                     setListExtraDays(0);
                     // A saved copy is shown at once; the silent refresh below
                     // then replaces it as soon as the network answers.
@@ -454,8 +472,11 @@ export default function SchedulePage() {
                 // 'no-cache' revalidates with the server instead of reusing the
                 // browser's copy from up to a minute ago; `wait` asks for the
                 // network's answer, not the saved copy already on screen.
+                // The whole window first asked for: a partial saved copy may
+                // have narrowed what is on screen.
+                const wanted = loaded.requested || loaded;
                 const { data, savedCopy } = await fetchScheduleWindow(
-                    loaded.groupId, loaded.subgroup, loaded.from, loaded.to,
+                    loaded.groupId, loaded.subgroup, wanted.from, wanted.to,
                     { cacheMode: 'no-cache', wait: true }
                 );
 
@@ -474,11 +495,15 @@ export default function SchedulePage() {
                 awaitingNetworkRef.current = false;
                 setStaleNotice('');
 
-                if (JSON.stringify(data) !== JSON.stringify(loaded.data)) {
+                const widened = wanted.from !== loaded.from || wanted.to !== loaded.to;
+
+                if (widened || JSON.stringify(data) !== JSON.stringify(loaded.data)) {
                     // previousData lets buildScheduleDays keep a cancelled pair
                     // on screen just long enough to animate it away (and mark a
-                    // new one to animate in); then it is dropped.
-                    setSchedule({ ...loaded, data, previousData: loaded.data });
+                    // new one to animate in); then it is dropped. A window cut
+                    // short by a partial copy grows back to its full length:
+                    // only at the end, so the scroll position stays put.
+                    setSchedule({ ...loaded, from: wanted.from, to: wanted.to, data, previousData: loaded.data });
                     window.setTimeout(() => {
                         setSchedule((current) => (current && current.data === data && current.previousData
                             ? { ...current, previousData: null }
@@ -1026,8 +1051,10 @@ export default function SchedulePage() {
  * The schedule of a window of days: `{ data, savedCopy, savedAt }`. On a slow
  * or dead network the service worker answers with the copy the phone saved
  * last time; `savedCopy` then says why ('unreachable' | 'refused') and
- * `savedAt` when it was saved (null if unknown). `wait` skips that shortcut —
- * for a refresh of what is already on screen.
+ * `savedAt` when it was saved (null if unknown). A copy saved on an earlier
+ * day covers only part of today's window: `savedRange` then names the days it
+ * covers, and only those can be shown. `wait` skips that shortcut — for a
+ * refresh of what is already on screen.
  */
 async function fetchScheduleWindow(groupId, subgroup, from, to, { cacheMode = 'default', wait = false } = {}) {
     const response = await fetch(
@@ -1041,10 +1068,13 @@ async function fetchScheduleWindow(groupId, subgroup, from, to, { cacheMode = 'd
         throw error;
     }
 
+    const [savedFrom, savedTo] = (response.headers.get('X-Kai-Saved-Range') || '').split('/');
+
     return {
         data: await response.json(),
         savedCopy: response.headers.get('X-Kai-Saved-Copy'),
-        savedAt: response.headers.get('X-Kai-Saved-At')
+        savedAt: response.headers.get('X-Kai-Saved-At'),
+        savedRange: savedFrom && savedTo ? { from: savedFrom, to: savedTo } : null
     };
 }
 

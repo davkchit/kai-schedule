@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
 // Saved schedules are not tied to a release: a new version must not throw
@@ -15,6 +15,9 @@ const DATA_TIMEOUT_MS = 2500;
 const SAVED_COPY_HEADER = 'X-Kai-Saved-Copy';
 // When that copy was saved (ISO time), so the page can say how old it is.
 const SAVED_AT_HEADER = 'X-Kai-Saved-At';
+// Set when the saved copy covers only part of the days asked for: the days
+// it does cover, as "from/to". The page shows those and no others.
+const SAVED_RANGE_HEADER = 'X-Kai-Saved-Range';
 // A refresh of a schedule already on screen waits for the network: the saved
 // copy it would get instead is what it is trying to replace.
 const WAIT_HEADER = 'X-Kai-Wait';
@@ -321,6 +324,10 @@ async function findCachedDataResponse(request, cache) {
     const requestedEnd = addDays(requestedStart, requestedRangeDays - 1);
     const keys = await cache.keys();
     const candidates = [];
+    // The window is laid around today, so from the next day on it reaches a
+    // day past every copy saved before: a copy covering most of it is still
+    // what a student offline needs, as long as the page knows where it ends.
+    let partial = null;
 
     for (const cachedRequest of keys) {
         const cachedUrl = new URL(cachedRequest.url);
@@ -348,16 +355,35 @@ async function findCachedDataResponse(request, cache) {
 
         if (cachedStart <= requestedStart && cachedEnd >= requestedEnd) {
             candidates.push({ cachedRequest, cachedStart });
+            continue;
+        }
+
+        const overlapStart = cachedStart > requestedStart ? cachedStart : requestedStart;
+        const overlapEnd = cachedEnd < requestedEnd ? cachedEnd : requestedEnd;
+        const overlapDays = (overlapEnd - overlapStart) / 86400000 + 1;
+
+        if (overlapDays > 0 && (!partial || overlapDays > partial.overlapDays)) {
+            partial = { cachedRequest, overlapStart, overlapEnd, overlapDays };
         }
     }
 
     candidates.sort((left, right) => right.cachedStart - left.cachedStart);
 
-    if (candidates.length === 0) {
+    if (candidates.length > 0) {
+        return cache.match(candidates[0].cachedRequest);
+    }
+
+    if (!partial) {
         return null;
     }
 
-    return cache.match(candidates[0].cachedRequest);
+    const response = await cache.match(partial.cachedRequest);
+
+    return response && withHeader(
+        response,
+        SAVED_RANGE_HEADER,
+        `${formatIsoDate(partial.overlapStart)}/${formatIsoDate(partial.overlapEnd)}`
+    );
 }
 
 /** The network's copy; the saved one when offline or slow to answer. */
@@ -441,6 +467,10 @@ function parseIntegerOrDefault(value, fallback) {
 function parseIsoDate(value) {
     const [year, month, day] = value.split('-').map((part) => Number.parseInt(part, 10));
     return new Date(Date.UTC(year, month - 1, day));
+}
+
+function formatIsoDate(date) {
+    return date.toISOString().slice(0, 10);
 }
 
 function addDays(date, amount) {
