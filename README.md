@@ -2,9 +2,9 @@
 
 Веб-приложение с расписанием занятий для студентов и учётом нагрузки преподавателей для учебной части. Разрабатывается для Набережночелнинского филиала КНИТУ-КАИ.
 
-![Как работает КАИ Расписание: группа, тёмная тема, работа без интернета, обновления, версия для компьютера и страница преподавателя](docs/promo.webp)
+![Расписание на компьютере и телефоне](docs/screenshots/hero.webp)
 
-<p align="center"><a href="docs/promo.mp4">Видео в хорошем качестве (MP4, 23 с)</a></p>
+<p align="center"><a href="docs/promo.mp4">Видео о проекте (MP4, 60 fps, 23 с)</a></p>
 
 ![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)
 ![Express 5](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white)
