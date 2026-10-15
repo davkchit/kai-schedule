@@ -2,9 +2,7 @@
 
 Веб-приложение с расписанием занятий для студентов и учётом нагрузки преподавателей для учебной части. Разрабатывается для Набережночелнинского филиала КНИТУ-КАИ.
 
-![Расписание на компьютере и телефоне](docs/screenshots/hero.webp)
-
-<p align="center"><a href="docs/promo.mp4">Видео о проекте (MP4, 60 fps, 23 с)</a></p>
+https://github.com/user-attachments/assets/c618409a-20ed-4d5a-92cf-11e1ffafcdbb
 
 ![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)
 ![Express 5](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white)
