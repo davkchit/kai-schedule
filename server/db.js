@@ -337,6 +337,37 @@ function initTables() {
         CREATE INDEX IF NOT EXISTS idx_load_plan_extra_groups_group ON load_plan_extra_groups(group_id);
     `);
 
+    // Экзамены, зачёты и консультации — see server/utils/attestations.js.
+    // Their own table, not lessons: they fall on a date with a free start time
+    // (15:00, 16:40), mostly after the teaching weeks, and a lessons row with a
+    // specific_week would make that whole week drop its template. They never
+    // count toward a plan row's hours; the «Сессия» section counts them per teacher.
+    // Teacher and discipline text come from the dictionaries by id at read time,
+    // so a rename shows everywhere; the *_text columns only hold names typed by
+    // hand that matched no dictionary entry.
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS attestations (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            semester_id     INTEGER NOT NULL REFERENCES semesters(id) ON DELETE CASCADE,
+            group_id        INTEGER NOT NULL REFERENCES groups_(id) ON DELETE CASCADE,
+            subgroup        INTEGER NOT NULL DEFAULT 0 CHECK(subgroup IN (0, 1, 2)),
+            kind            TEXT NOT NULL CHECK(kind IN ('exam', 'credit', 'consultation')),
+            date            TEXT NOT NULL,
+            time_start      TEXT NOT NULL,
+            time_end        TEXT,
+            room            TEXT,
+            discipline_id   INTEGER REFERENCES disciplines(id),
+            discipline_text TEXT,
+            teacher_id      INTEGER REFERENCES teachers(id),
+            teacher_text    TEXT,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_attestations_group_date ON attestations(group_id, date);
+        CREATE INDEX IF NOT EXISTS idx_attestations_semester ON attestations(semester_id);
+        CREATE INDEX IF NOT EXISTS idx_attestations_teacher ON attestations(teacher_id);
+    `);
+
     migrateSemesterScoping();
     migrateSemesterClosing();
     migrateLessonsTeacherDiscipline();

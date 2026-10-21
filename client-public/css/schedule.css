@@ -195,6 +195,9 @@ body {
 /* «Онлайн» in place of a room: light orange with a laptop icon. */
 .tag-room.tag-online, .mobile-tag-room.tag-online { display: inline-flex; align-items: center; gap: 5px; background-color: #ffedd5; color: #ea6c0a; }
 [data-theme="dark"] .tag-room.tag-online, [data-theme="dark"] .mobile-tag-room.tag-online { background-color: rgba(251, 146, 60, 0.16); color: #fdba74; }
+/* Экзамен, зачёт, консультация: only their tag is orange, the card stays as any pair's. */
+.tag-type.tag-attestation, .mobile-tag-type.tag-attestation { background-color: #ffedd5; color: #ea6c0a; }
+[data-theme="dark"] .tag-type.tag-attestation, [data-theme="dark"] .mobile-tag-type.tag-attestation { background-color: rgba(251, 146, 60, 0.16); color: #fdba74; }
 .tag-teacher { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag-room, .tag-type { background-color: var(--tag-bg); color: var(--tag-text); font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; transition: background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); }
 .tag-subgroup { background-color: #fef3c7; color: #d97706; font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 500; letter-spacing: 0.01em; }

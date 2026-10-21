@@ -22,6 +22,7 @@ const backupsRoutes = require('./admin/backups');
 const referencesRoutes = require('./admin/references');
 const semestersRoutes = require('./admin/semesters');
 const loadPlanRoutes = require('./admin/loadPlan');
+const attestationsRoutes = require('./admin/attestations');
 
 const router = express.Router();
 
@@ -102,5 +103,6 @@ router.use(backupsRoutes);
 router.use(referencesRoutes);
 router.use(semestersRoutes);
 router.use(loadPlanRoutes);
+router.use(attestationsRoutes);
 
 module.exports = router;

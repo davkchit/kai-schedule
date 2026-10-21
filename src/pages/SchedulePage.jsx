@@ -650,9 +650,13 @@ export default function SchedulePage() {
                     </span>
                 )
                 : <span className={mobile ? 'mobile-tag-room' : 'tag-room'}>{formatRoom(lesson.room)}</span>;
+        // An exam, credit or consultation: its kind in orange, like «Онлайн».
+        const isAttestation = lesson.kind === 'attestation';
         const typeTag = lesson.lesson_type
-            ? <span className={mobile ? 'mobile-tag-type' : 'tag-type'}>{LESSON_TYPE_LABELS[lesson.lesson_type] || lesson.lesson_type}</span>
+            ? <span className={`${mobile ? 'mobile-tag-type' : 'tag-type'}${isAttestation ? ' tag-attestation' : ''}`}>{LESSON_TYPE_LABELS[lesson.lesson_type] || lesson.lesson_type}</span>
             : null;
+        // Those have only a start time when the list gives no end.
+        const time = lesson.time_end ? `${lesson.time_start}—${lesson.time_end}` : lesson.time_start;
         // Same look as the room and type tags, in the same row; it moves to a row
         // of its own only when there is no room left. title shows a name cut short.
         const teacherTag = lesson.teacher
@@ -662,7 +666,7 @@ export default function SchedulePage() {
         if (mobile) {
             return (
                 <div className="mobile-class-card" key={`${lesson.id}-mobile`}>
-                    <div className="mobile-card-time">{lesson.time_start}—{lesson.time_end}</div>
+                    <div className="mobile-card-time">{time}</div>
                     <div className="mobile-card-subject">{lesson.subject}</div>
                     <div className="mobile-card-meta">
                         {roomTag}
@@ -676,7 +680,7 @@ export default function SchedulePage() {
 
         return (
             <div className="class-card" key={lesson.id}>
-                <div className="card-time">{lesson.time_start}—{lesson.time_end}</div>
+                <div className="card-time">{time}</div>
                 <div className="card-subject">{lesson.subject}</div>
                 <div className="card-meta">
                     {roomTag}
@@ -1195,9 +1199,13 @@ function buildScheduleDays(schedule) {
         // Any day without pairs gets the same «Отдыхаем · Занятий нет» card —
         // a weekday used to show a bare «Нет занятий» line instead.
         const isRestDay = lessons.length === 0;
-        const timeRange = lessons.length
-            ? `${lessons[0].time_start}—${lessons[lessons.length - 1].time_end}`
-            : '';
+        // An exam or consultation may have only a start time: just «15:00» then.
+        const dayEnd = lessons.reduce((latest, lesson) => (lesson.time_end && lesson.time_end > latest ? lesson.time_end : latest), '');
+        const timeRange = !lessons.length
+            ? ''
+            : dayEnd > lessons[lessons.length - 1].time_start
+                ? `${lessons[0].time_start}—${dayEnd}`
+                : lessons[0].time_start;
         const dateId = `day-${iterDate.getTime()}`;
 
         result.push({

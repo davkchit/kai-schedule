@@ -8,6 +8,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Stack:** React 19 + Vite (frontend), Express 5 (backend), SQLite via better-sqlite3.
 
+A Russian walkthrough for people is `docs/ARCHITECTURE.md`; `README.md` is the public, recruiter-facing page (formal Russian, no em dashes) — keep notes for agents out of it.
+
+## Invariants — read before changing anything
+
+Each of these was a real bug or a deliberate decision; the sections below explain them.
+
+1. **The past never changes.** Template edits start from the current week (`template_from_week` from the server clock); removals leave tombstones; a week with its own rows ignores the template entirely. Never rewrite or delete old template versions.
+2. **Hours are computed, never stored** (except `final_hours` of a closed semester). A pair counts only through the exact five-field identity with a plan row — no link column, no text matching.
+3. **Ids win over text.** When `teacher_id`/`discipline_id` is given, the text comes from the dictionary (`resolveTeacherDiscipline`). Renames propagate; deleting a referenced teacher/discipline is refused.
+4. **Three different "which semester" questions** (working / in effect on a date / viewed) — never substitute one for another.
+5. **A closed semester is frozen**: every write touching it returns 409.
+6. **Joined groups**: the member owns nothing; read through `scheduleGroupId`, refuse writes naming the member.
+7. **The client and the server resolve a day the same way** (`src/lib/scheduleResolve.js` + `templateResolve.js` ↔ `server/utils/templateResolve.js`, `attestationConflicts.js`); parity tests guard it — change both or neither.
+8. **No hard-coded calendar dates** in app code (`tests/codeGuards.test.js`); every audit action needs a Russian label in `src/pages/adminDashboard/format.js` (same test).
+9. **One-off data fixes run once per database** (`runDataFixOnce`); schema migrations must be idempotent; a boot snapshot is taken before them.
+10. **Never commit databases or real people's data** (`data/*.db`, `seed/*.db`, real teacher names in tests/fixtures — use made-up names).
+11. Run `npm test` after any change; it must stay green (94 tests).
+
 ## Commands
 
 ```bash
@@ -31,7 +49,7 @@ npm run start:build   # Build then start
 npm run seed          # Destructive — resets DB with demo data (dev only)
 
 # Tests
-npm test              # Node.js test runner (tests/server.test.js)
+npm test              # node --test: every file in tests/
 ```
 
 ## Environment Variables
@@ -75,7 +93,7 @@ In production, Express serves the Vite-built `dist/` and handles all `/api` rout
 Pages: `WelcomePage` → user selects university/group → `SchedulePage` renders the timetable. `AdminLoginPage` and `AdminDashboardPage` are separate flows.
 
 The admin pages keep state and handlers in the page and render through presentational pieces that take every value and handler as a prop of the same name:
-- `src/pages/adminDashboard/` — `useAdminApi.js` (every `/api/admin` request: JSON, CSRF token on writes, 401 → login), `BuilderSection.jsx` (the constructor grid and which pairs a cell shows), `GroupPicker.jsx` (searchable group field), plus the sidebar, settings, backups, audit and lesson modal.
+- `src/pages/adminDashboard/` — `useAdminApi.js` (every `/api/admin` request: JSON, CSRF token on writes, 401 → login), `BuilderSection.jsx` (the constructor grid and which pairs a cell shows), `GroupPicker.jsx` (searchable group field), `AttestationsSection.jsx` («Сессия», keeps its own state), plus the sidebar, settings, backups, audit and lesson modal.
 - `src/pages/adminLoad/` — the load page's `SemesterCard`, `ReferenceCards`, `PlanSection`, `PlanRow` and `format.js`; `AdminLoadSection.jsx` holds their state.
 
 `src/lib/storage.js` persists selection, theme preference, and admin token to `localStorage`.
@@ -122,6 +140,14 @@ Hours are never stored — they're computed live from whichever schedule rows cu
 Matching is exact, so one wrong field (type, subgroup) or a teacher typed by hand instead of picked is enough for a pair to stop counting — silently. `GET /api/admin/load-plan/unmatched` (`routes/admin/loadPlan.js`) names those pairs and the load page lists them; it considers only what the schedule currently shows, skipping retired template versions, removed rows and events.
 
 Because matching is live, editing a past week's identity (e.g., swapping the teacher) immediately moves hours between teachers with no extra step — the old teacher's count drops, the new one's rises, next time either is computed. Deleting a teacher or discipline is refused while **any** lesson (any semester, not just `load_plan` rows) still references it — checked in `routes/admin/references.js`. Renaming in the dictionary keeps every link (lessons reference the row by id) and also rewrites the `teacher`/`subject` text of the lessons linked to it, so students, the builder and exports show the new name too (`routes/admin/references.js`).
+
+### Сессия: exams, credits, consultations
+
+Экзамены, зачёты и консультации live in their own table `attestations` (`kind` = `exam` / `credit` / `consultation`), not in `lessons`: they fall on a real date with a free start time (end optional), mostly after `weeks_count`, and a `specific_week` row would wipe that week's template. `semester_id` is the semester in effect on the date (a June exam is spring's even when autumn is the working semester); a closed semester refuses writes. Teacher and discipline are ids into the dictionaries (text shown via JOIN, so a rename shows everywhere) or `*_text` when nothing matched; deleting a referenced teacher/discipline is refused. A member of a joined group owns none (writes refused, join moves them to the leader, split copies them back).
+
+They never count toward plan hours — the admin «Сессия» section (`AttestationsSection.jsx`, `routes/admin/attestations.js`) counts them per teacher. Students get them in `GET /api/schedule/:groupId` (`attestations`, placed by date in `scheduleResolve.js`, orange tag), teachers in `/api/teachers/:id/load`. `GET /api/admin/attestations/export?type=session|consultations` builds the branch's two documents (`server/exportAttestations.js`: «Расписание промежуточной аттестации» with зачет/экзамен date columns, «Расписание консультаций к экзаменам», one sheet per course). They are entered in the app, not imported.
+
+Collisions (`server/utils/attestationConflicts.js`): the same record twice is refused; anything else is a warning the specialist confirms (`confirm: true`) — the group's pair at that time (resolved exactly as the student page resolves the day), the teacher or the room busy with another group's pair or record (a joint exam of two groups at the same time is not a clash), a consultation after the subject's last exam, a Sunday. A start-only record counts as 60 min (consultation) or 90 min. The list re-checks on every read, so a pair added later in the constructor flags the record it now covers. See `tests/attestations.test.js`.
 
 ### Bulk Schedule Upload
 

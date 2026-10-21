@@ -104,6 +104,18 @@ function joinGroup(db, memberId, leaderId) {
 
     db.transaction(() => {
         db.prepare('DELETE FROM lessons WHERE group_id = ?').run(memberId);
+        // Exams and consultations move to the leader too; the ones it already
+        // has (the same event entered for both groups) are dropped.
+        db.prepare(`
+            DELETE FROM attestations AS a WHERE a.group_id = ? AND EXISTS (
+                SELECT 1 FROM attestations b
+                WHERE b.group_id = ? AND b.subgroup = a.subgroup AND b.kind = a.kind AND b.date = a.date
+                  AND b.time_start = a.time_start
+                  AND COALESCE(b.discipline_id, -1) = COALESCE(a.discipline_id, -1)
+                  AND COALESCE(b.discipline_text, '') = COALESCE(a.discipline_text, '')
+            )
+        `).run(memberId, leaderId);
+        db.prepare('UPDATE attestations SET group_id = ? WHERE group_id = ?').run(leaderId, memberId);
         db.prepare('UPDATE groups_ SET joined_to = ? WHERE id = ?').run(leaderId, memberId);
     })();
 
@@ -143,6 +155,15 @@ function unjoinGroup(db, memberId) {
             );
         }
 
+        db.prepare(`
+            INSERT INTO attestations (
+                semester_id, group_id, subgroup, kind, date, time_start, time_end, room,
+                discipline_id, discipline_text, teacher_id, teacher_text
+            )
+            SELECT semester_id, ?, subgroup, kind, date, time_start, time_end, room,
+                   discipline_id, discipline_text, teacher_id, teacher_text
+            FROM attestations WHERE group_id = ?
+        `).run(memberId, member.joined_to);
         db.prepare('UPDATE groups_ SET joined_to = NULL WHERE id = ?').run(memberId);
     })();
 

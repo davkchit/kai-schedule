@@ -58,6 +58,18 @@ export default function DashboardSidebar({
                     </svg>
                     Нагрузка
                 </button>
+                <button
+                    className={`nav-item ${activeSection === 'session' ? 'active' : ''}`}
+                    data-section="session"
+                    id="navSession"
+                    onClick={() => setActiveSection('session')}
+                >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 3h6a1 1 0 011 1v1h2a1 1 0 011 1v14a1 1 0 01-1 1H6a1 1 0 01-1-1V6a1 1 0 011-1h2V4a1 1 0 011-1z" />
+                        <path d="M9 13l2 2 4-4" />
+                    </svg>
+                    Сессия
+                </button>
                 <button className={`nav-item ${activeSection === 'settings' ? 'active' : ''}`} data-section="settings" id="navSettings" onClick={() => setActiveSection('settings')}>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <circle cx="12" cy="12" r="3" />

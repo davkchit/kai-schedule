@@ -66,6 +66,7 @@ export default function TeacherLookupPage() {
     const weekDays = useMemo(buildCurrentWeekDays, []);
 
     const planRows = useMemo(() => loadData?.plan ?? [], [loadData]);
+    const attestations = loadData?.attestations ?? [];
 
     const visibleRows = useMemo(() => {
         const normalizedQuery = listQuery.trim().toLowerCase();
@@ -415,11 +416,61 @@ export default function TeacherLookupPage() {
                                     )}
                                 </>
                             )}
+
+                            {!isLoading && !errorMessage && attestations.length > 0 && (
+                                <AttestationList items={attestations} />
+                            )}
                         </div>
                     )}
                 </div>
             </div>
         </div>
+    );
+}
+
+const ATTESTATION_KINDS = [
+    { kind: 'exam', label: 'Экзамен', plural: 'Экзамены' },
+    { kind: 'credit', label: 'Зачёт', plural: 'Зачёты' },
+    { kind: 'consultation', label: 'Консультация', plural: 'Консультации' }
+];
+
+/**
+ * Экзамены, зачёты и консультации of the semester: how many of each, then
+ * every one by date. They are not hours, so they stay out of the table above.
+ */
+function AttestationList({ items }) {
+    const labels = Object.fromEntries(ATTESTATION_KINDS.map(({ kind, label }) => [kind, label]));
+
+    return (
+        <section className="tl-session" aria-label="Сессия">
+            <h2 className="tl-session-title">Сессия</h2>
+            <div className="tl-session-counts">
+                {ATTESTATION_KINDS.map(({ kind, plural }) => (
+                    <div className="tl-session-count" key={kind}>
+                        <span className="tl-session-count-label">{plural}</span>
+                        <span className="tl-session-count-value">{items.filter((item) => item.kind === kind).length}</span>
+                    </div>
+                ))}
+            </div>
+            <ul className="tl-session-list">
+                {items.map((item) => (
+                    <li className="tl-session-row" key={item.id}>
+                        <span className="tl-session-date">
+                            {formatIsoDate(item.date)}
+                            <span className="tl-muted"> {item.time_end ? `${item.time_start}–${item.time_end}` : item.time_start}</span>
+                        </span>
+                        <span className="tl-session-kind">{labels[item.kind] || item.kind}</span>
+                        <span className="tl-session-main">
+                            <span className="tl-discipline">{item.subject}</span>
+                            <span className="tl-muted">
+                                {' · '}{item.group_name}{item.subgroup ? `, ${item.subgroup} п/г` : ''}
+                                {item.room ? ` · ауд. ${item.room}` : ''}
+                            </span>
+                        </span>
+                    </li>
+                ))}
+            </ul>
+        </section>
     );
 }
 

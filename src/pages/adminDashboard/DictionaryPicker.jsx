@@ -12,7 +12,10 @@ import { useEffect, useRef, useState } from 'react';
 // match (case-insensitive) is picked automatically, anything else is kept as
 // plain text with no id — same as before, just untracked — rather than
 // silently reverting to whatever was selected before this edit.
-export default function DictionaryPicker({ id, label, placeholder, options, valueId, valueText, onChange, onCreate }) {
+export default function DictionaryPicker({
+    id, label, placeholder, options, valueId, valueText, onChange, onCreate,
+    untrackedHint = 'Часы по этой паре не посчитаются, пока не выбрано из списка'
+}) {
     const [query, setQuery] = useState(valueText || '');
     const [isOpen, setIsOpen] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
@@ -109,7 +112,7 @@ export default function DictionaryPicker({ id, label, placeholder, options, valu
             />
             {!valueId && (
                 <span className="dict-picker-hint">
-                    {query.trim() ? 'Часы по этой паре не посчитаются, пока не выбрано из списка' : 'Начните вводить имя'}
+                    {query.trim() ? untrackedHint : 'Начните вводить имя'}
                 </span>
             )}
             {isOpen && (

@@ -154,6 +154,15 @@ router.delete('/teachers/:id', (req, res) => {
         });
     }
 
+    // Exams, credits and consultations name the teacher by id the same way.
+    const attestationCount = db.prepare('SELECT COUNT(*) c FROM attestations WHERE teacher_id = ?').get(teacherId).c;
+
+    if (attestationCount > 0) {
+        return res.status(409).json({
+            error: `Этот преподаватель стоит в сессии — экзаменов, зачётов и консультаций: ${attestationCount}. Удалить нельзя; можно переименовать.`
+        });
+    }
+
     db.prepare('DELETE FROM teachers WHERE id = ?').run(teacherId);
 
     writeAuditLog(db, {
@@ -288,6 +297,14 @@ router.delete('/disciplines/:id', (req, res) => {
     if (lessonCount > 0) {
         return res.status(409).json({
             error: `Эта дисциплина стоит в расписании — пар (включая прошлые недели): ${lessonCount}. Удалить нельзя, чтобы не потерять историю занятий; можно переименовать.`
+        });
+    }
+
+    const attestationCount = db.prepare('SELECT COUNT(*) c FROM attestations WHERE discipline_id = ?').get(disciplineId).c;
+
+    if (attestationCount > 0) {
+        return res.status(409).json({
+            error: `Эта дисциплина стоит в сессии — экзаменов, зачётов и консультаций: ${attestationCount}. Удалить нельзя; можно переименовать.`
         });
     }
 

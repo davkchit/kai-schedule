@@ -24,6 +24,43 @@ export function resolveLessonsForDay(scheduleData, date) {
         return [];
     }
 
+    const attestations = attestationsForDay(scheduleData, date);
+    const lessons = resolveTeachingForDay(scheduleData, date);
+
+    return attestations.length ? sortLessons([...lessons, ...attestations]) : lessons;
+}
+
+const ATTESTATION_LABELS = { exam: 'Экзамен', credit: 'Зачёт', consultation: 'Консультация' };
+
+/**
+ * Экзамены, зачёты и консультации fall on real dates, outside the weekly
+ * template: shown on their day like a pair (kind 'attestation'), even in a
+ * week past the last teaching one, and they never replace that day's pairs.
+ */
+function attestationsForDay(scheduleData, date) {
+    if (!Array.isArray(scheduleData.attestations)) {
+        return [];
+    }
+
+    const isoDate = formatLocalDateForApi(date);
+
+    return scheduleData.attestations
+        .filter((item) => item.date === isoDate)
+        .map((item) => ({
+            id: `attestation-${item.id}`,
+            kind: 'attestation',
+            attestation_kind: item.kind,
+            lesson_type: ATTESTATION_LABELS[item.kind] || item.kind,
+            subgroup: item.subgroup,
+            time_start: item.time_start,
+            time_end: item.time_end || null,
+            subject: item.subject,
+            room: item.room,
+            teacher: item.teacher
+        }));
+}
+
+function resolveTeachingForDay(scheduleData, date) {
     const isoDayOfWeek = date.getDay() === 0 ? 7 : date.getDay();
 
     if (!Array.isArray(scheduleData.semesters)) {

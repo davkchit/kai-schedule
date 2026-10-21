@@ -682,8 +682,62 @@ function validateLoadPlanUpdateBody(body) {
     return result;
 }
 
+const ATTESTATION_KINDS = ['exam', 'credit', 'consultation'];
+
+/**
+ * An экзамен, зачёт or консультация (server/utils/attestations.js). The whole
+ * row is sent every time, for a new one and an edit alike. Discipline and
+ * teacher: an id from the dictionary, or text when nothing there matches.
+ */
+function validateAttestationBody(body) {
+    assertPlainObject(body, 'Тело запроса должно быть объектом');
+
+    if (!ATTESTATION_KINDS.includes(body.kind)) {
+        throw createValidationError('Вид должен быть экзаменом, зачётом или консультацией');
+    }
+
+    const date = readRequiredString(body.date, 'Дата', 10);
+
+    if (!isValidIsoDate(date)) {
+        throw createValidationError('Некорректная дата. Ожидается формат YYYY-MM-DD');
+    }
+
+    const timeStart = readRequiredString(body.time_start, 'Время начала', 5);
+    const timeEnd = readOptionalString(body.time_end, 'Время окончания', 5);
+
+    if (!isValidTime(timeStart) || (timeEnd && !isValidTime(timeEnd))) {
+        throw createValidationError('Некорректное время');
+    }
+
+    if (timeEnd && timeEnd <= timeStart) {
+        throw createValidationError('Время окончания должно быть позже начала');
+    }
+
+    const result = {
+        kind: body.kind,
+        group_id: readInteger(body.group_id, 'group_id', { min: 1 }),
+        subgroup: body.subgroup === undefined ? 0 : readInteger(body.subgroup, 'Подгруппа', { min: 0, max: 2 }),
+        date,
+        time_start: timeStart,
+        time_end: timeEnd,
+        room: readOptionalString(body.room, 'Аудитория', 50),
+        discipline_id: readOptionalId(body.discipline_id, 'discipline_id'),
+        discipline_text: readOptionalString(body.discipline_text, 'Дисциплина'),
+        teacher_id: readOptionalId(body.teacher_id, 'teacher_id'),
+        teacher_text: readOptionalString(body.teacher_text, 'Преподаватель')
+    };
+
+    if (!result.discipline_id && !result.discipline_text) {
+        throw createValidationError('Укажите дисциплину');
+    }
+
+    return result;
+}
+
 module.exports = {
+    ATTESTATION_KINDS,
     createValidationError,
+    validateAttestationBody,
     validateAccountUpdateBody,
     validateBulkScheduleUploadBody,
     validateDisciplineCreateBody,

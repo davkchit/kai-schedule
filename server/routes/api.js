@@ -6,6 +6,7 @@ const { attachPlanGroups } = require('../utils/planGroups');
 const { computePlanRowProgress } = require('../utils/planProgress');
 const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
 const { notify } = require('../alerts');
+const { selectAttestations } = require('../utils/attestations');
 
 const router = express.Router();
 const DEFAULT_SCHEDULE_RANGE_DAYS = 28;
@@ -122,6 +123,19 @@ router.get('/schedule/:groupId', (req, res) => {
         lessons.push(...statement.all(...params));
     });
 
+    // Exams, credits and consultations fall on real dates, so they are simply
+    // the ones inside the requested range; the page places them by date.
+    const attestationWhere = ['a.group_id = ?', 'a.date BETWEEN ? AND ?'];
+    const attestationParams = [scheduleGroupId(db, groupId), dateStr, rangeEndDate];
+    if (subgroup === 1 || subgroup === 2) {
+        attestationWhere.push('(a.subgroup = 0 OR a.subgroup = ?)');
+        attestationParams.push(subgroup);
+    }
+    const attestations = selectAttestations(db, attestationWhere.join(' AND '), attestationParams)
+        .map(({ id, subgroup: ownSubgroup, kind, date, time_start, time_end, room, subject, teacher }) => ({
+            id, subgroup: ownSubgroup, kind, date, time_start, time_end, room, subject, teacher
+        }));
+
     const byDay = {};
     for (const lesson of lessons) {
         (byDay[lesson.day_of_week] ||= []).push(lesson);
@@ -157,7 +171,8 @@ router.get('/schedule/:groupId', (req, res) => {
         range_end: rangeEndDate,
         exception_weeks: primaryExceptionWeeks,
         lessons,
-        by_day: byDay
+        by_day: byDay,
+        attestations
     });
 });
 
@@ -248,7 +263,7 @@ router.get('/teachers/:id/load', (req, res) => {
     }
 
     if (!semester) {
-        return res.json({ teacher, semester: null, plan: [] });
+        return res.json({ teacher, semester: null, plan: [], attestations: [] });
     }
 
     const planRows = attachPlanGroups(db, db.prepare(`
@@ -282,7 +297,12 @@ router.get('/teachers/:id/load', (req, res) => {
     res.json({
         teacher,
         semester: { id: semester.id, label: semester.label, closed: Boolean(semester.closed_at) },
-        plan
+        plan,
+        // Counted, never turned into hours: see server/utils/attestations.js.
+        attestations: selectAttestations(db, 'a.teacher_id = ? AND a.semester_id = ?', [teacherId, semester.id])
+            .map(({ id, group_name, subgroup, kind, date, time_start, time_end, room, subject }) => ({
+                id, group_name, subgroup, kind, date, time_start, time_end, room, subject
+            }))
     });
 });
 

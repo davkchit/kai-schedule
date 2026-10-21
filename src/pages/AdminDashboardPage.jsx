@@ -10,6 +10,7 @@ import DashboardSidebar from './adminDashboard/DashboardSidebar';
 import SettingsSection from './adminDashboard/SettingsSection';
 import BackupsSection from './adminDashboard/BackupsSection';
 import AuditSection from './adminDashboard/AuditSection';
+import AttestationsSection from './adminDashboard/AttestationsSection';
 import LessonEditModal from './adminDashboard/LessonEditModal';
 
 // localStorage key for the group last opened in the constructor.
@@ -1091,6 +1092,17 @@ export default function AdminDashboardPage() {
                         />
                     )}
                 </section>
+
+                <AttestationsSection
+                    activeSection={activeSection}
+                    api={api}
+                    groups={builderGroups}
+                    teachers={teachers}
+                    disciplines={disciplines}
+                    onCreateTeacher={createTeacher}
+                    onCreateDiscipline={createDiscipline}
+                    setToastMessage={setToastMessage}
+                />
 
                 <SettingsSection
                     activeSection={activeSection}
