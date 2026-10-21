@@ -13,7 +13,8 @@ const {
     resolveFirstWeekParity
 } = require('../../utils/date');
 const { computePlanRowProgress } = require('../../utils/planProgress');
-const { getActiveSemester } = require('../../utils/semesters');
+const { resyncAttestationSemesters } = require('../../utils/attestations');
+const { findOverlappingSemester, getActiveSemester, overlappingSemesterError } = require('../../utils/semesters');
 const { validateSemesterCreateBody, validateSemesterUpdateBody } = require('../../validation');
 const {
     mapSemesterRow,
@@ -181,6 +182,12 @@ router.post('/semesters', (req, res) => {
     }
 
     const db = getDb();
+    const overlapping = findOverlappingSemester(db, payload);
+
+    if (overlapping) {
+        return res.status(409).json({ error: overlappingSemesterError(overlapping) });
+    }
+
     const result = db.prepare(`
         INSERT INTO semesters (label, start_date, weeks_count, is_active, first_week_parity)
         VALUES (?, ?, ?, 0, ?)
@@ -192,6 +199,7 @@ router.post('/semesters', (req, res) => {
         // only when not given does the calendar rule stand in for it.
         payload.first_week_parity ?? defaultFirstWeekParity(payload.start_date)
     );
+    resyncAttestationSemesters(db);
     const created = db.prepare('SELECT * FROM semesters WHERE id = ?').get(result.lastInsertRowid);
 
     writeAuditLog(db, {
@@ -233,6 +241,11 @@ router.put('/semesters/:id', (req, res) => {
     }
 
     const next = { ...existing, ...payload };
+    const overlapping = findOverlappingSemester(db, next);
+
+    if (overlapping) {
+        return res.status(409).json({ error: overlappingSemesterError(overlapping) });
+    }
 
     const transaction = db.transaction(() => {
         // Only one semester drives "which one am I entering/viewing load for"
@@ -256,6 +269,8 @@ router.put('/semesters/:id', (req, res) => {
         if (active) {
             syncSemesterStartDate(db, active.start_date);
         }
+
+        resyncAttestationSemesters(db);
     });
 
     transaction();

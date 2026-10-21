@@ -259,7 +259,10 @@ body {
     .page-title { font-size: 16px; position: static; left: auto; transform: none; width: 100%; text-align: center; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .header-controls { display: flex; justify-self: end; margin-left: 0; }
     .burger-btn { padding: 6px; }
-    .toolbar { display: none; }
+    /* No date button on a phone (it lives in the burger menu), but the toolbar
+       stays: the calendar it holds opens from there as a bottom sheet. */
+    .toolbar { margin: 0; height: 0; }
+    .toolbar .date-selector { display: none; }
     .schedule-grid { display: flex; flex-direction: column; gap: 16px; border-top: none; overflow-x: hidden; overflow-y: visible; padding-bottom: 100px; flex-wrap: nowrap; }
     .day-column { background-color: #ffffff; border-radius: 24px; padding: 20px; border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.02); flex: none; width: 100%; min-width: 0; }
     .day-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; flex-wrap: wrap; }
@@ -283,40 +286,6 @@ body {
     .rest-day.mobile .rest-day-icon, .day-column .rest-day .rest-day-icon { width: 60px; height: 60px; }
     .rest-day.mobile .rest-day-confetti, .day-column .rest-day .rest-day-confetti { width: 60px; height: 60px; max-width: 60px; }
 
-    /* Date picker becomes a bottom sheet on mobile, with a dimming scrim behind it */
-    .dp-scrim {
-        display: block;
-        position: fixed;
-        inset: 0;
-        z-index: 999;
-        background: rgba(15, 23, 42, 0.4);
-        opacity: 0;
-        visibility: hidden;
-        pointer-events: none;
-        transition: opacity 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), visibility 0s linear 0.3s;
-    }
-    .dp-scrim.active {
-        opacity: 1;
-        visibility: visible;
-        pointer-events: auto;
-        transition: opacity 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), visibility 0s linear 0s;
-    }
-    .date-picker-popup {
-        position: fixed;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        top: auto;
-        width: auto;
-        max-width: none;
-        border-radius: 24px 24px 0 0;
-        padding: 20px 20px calc(24px + env(safe-area-inset-bottom));
-        box-shadow: 0 -20px 60px rgba(15, 23, 42, 0.25);
-        transform: translateY(100%);
-    }
-    .date-picker-popup.active {
-        transform: translateY(0);
-    }
 }
 
 .date-selector-wrapper { position: relative; display: inline-flex; }
@@ -353,6 +322,44 @@ body {
                 background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
                 border-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
                 visibility 0s linear 0s;
+}
+/* On a phone the same calendar is a bottom sheet over a dimming scrim. After
+   the rules above on purpose: placed before them, as it once was, it lost to
+   them and never applied. */
+@media (max-width: 768px) {
+    .dp-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 999;
+        background: rgba(15, 23, 42, 0.4);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition: opacity 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), visibility 0s linear 0.3s;
+    }
+    .dp-scrim.active {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transition: opacity 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), visibility 0s linear 0s;
+    }
+    .date-picker-popup,
+    .date-picker-popup.active {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        top: auto;
+        width: auto;
+        max-width: none;
+        border-radius: 24px 24px 0 0;
+        padding: 20px 20px calc(24px + env(safe-area-inset-bottom));
+        box-shadow: 0 -20px 60px rgba(15, 23, 42, 0.25);
+        transform-origin: bottom center;
+    }
+    .date-picker-popup { transform: translateY(100%); }
+    .date-picker-popup.active { transform: translateY(0); }
 }
 .dp-header {
     display: flex;
@@ -566,6 +573,8 @@ body {
     /* hidden would make the container a scroll box of its own and pin the
        header to it, i.e. not at all; clip cuts the same overflow without that. */
     .app-container { overflow-x: clip; }
+    /* The list opens scrolled to the chosen day: it lands below the sticky header, not under it. */
+    .day-column { scroll-margin-top: 84px; }
     .main-header {
         position: sticky; top: 0; z-index: 50;
         margin: 0 -16px; padding: 16px;

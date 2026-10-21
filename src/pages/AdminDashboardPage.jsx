@@ -8,6 +8,7 @@ import BuilderSection from './adminDashboard/BuilderSection';
 import useAdminApi from './adminDashboard/useAdminApi';
 import DashboardSidebar from './adminDashboard/DashboardSidebar';
 import SettingsSection from './adminDashboard/SettingsSection';
+import SecuritySection from './adminDashboard/SecuritySection';
 import BackupsSection from './adminDashboard/BackupsSection';
 import AuditSection from './adminDashboard/AuditSection';
 import AttestationsSection from './adminDashboard/AttestationsSection';
@@ -46,7 +47,6 @@ export default function AdminDashboardPage() {
     // "day|time" of the pair just saved: its card glows once in the grid.
     const [justSavedCell, setJustSavedCell] = useState('');
     const [lessons, setLessons] = useState([]);
-    const [semesterStartDate, setSemesterStartDate] = useState('');
     // The semester the constructor edits. Week numbers and parity are always
     // measured in it — never in another semester's calendar.
     const [workingSemester, setWorkingSemester] = useState(null);
@@ -272,10 +272,6 @@ export default function AdminDashboardPage() {
             const response = await api('/api/admin/settings');
             const data = await response.json();
 
-            if (data.semester_start_date) {
-                setSemesterStartDate(data.semester_start_date);
-            }
-
             setWorkingSemester(data.active_semester || null);
 
             if (data.director_name) setDirectorName(data.director_name);
@@ -422,10 +418,11 @@ export default function AdminDashboardPage() {
             time_end: lesson.time_end,
             subject: lesson.subject,
             room: lesson.room || '',
-            lesson_type: lesson.lesson_type || 'Лекция',
+            lesson_type: lesson.lesson_type || (lesson.kind === 'event' ? '' : 'Лекция'),
             teacher: lesson.teacher || '',
             teacher_id: lesson.teacher_id ?? null,
             discipline_id: lesson.discipline_id ?? null,
+            kind: lesson.kind || 'lesson',
             subgroup: lesson.subgroup,
             week_type: lesson.week_type,
             specific_week: lesson.specific_week ?? ''
@@ -482,6 +479,7 @@ export default function AdminDashboardPage() {
             teacher: '',
             teacher_id: null,
             discipline_id: null,
+            kind: 'lesson',
             subgroup,
             week_type: context === 'template' ? builderTemplateWeekType : 0,
             specific_week: context === 'template' ? '' : targetWeekNumber,
@@ -490,6 +488,49 @@ export default function AdminDashboardPage() {
         setIsEditModalOpen(true);
     }
 
+
+    // Saved, but on top of an exam, credit or consultation of the group: said
+    // right away (the «Сессия» list also marks the record ⚠).
+    function attestationNote(saved) {
+        const warnings = saved?.attestation_warnings || [];
+        return warnings.length > 0
+            ? `Сохранено, но в это время у группы ${warnings.join('; ')} — пара будет засчитана, если её не убрать`
+            : '';
+    }
+
+    // A pair placed after the semester's last week would show to students but
+    // never count toward hours, so the server refuses it with needs_extension.
+    // Offered here in one step: extend the semester to that week, then the
+    // caller saves again. Returns true when the semester was extended.
+    async function offerSemesterExtension(data) {
+        if (!data?.needs_extension) {
+            return false;
+        }
+
+        const shouldExtend = window.confirm(
+            `Это ${data.weeks_needed}-я неделя, а семестр — до ${data.weeks_count}-й.\n\n`
+            + `Продлить семестр до ${data.weeks_needed} недель? Тогда пары этой недели будут засчитываться в часы. `
+            + 'Если в шаблоне есть пары, они тоже начнут показываться в добавленных неделях.'
+        );
+
+        if (!shouldExtend) {
+            return false;
+        }
+
+        const response = await api(`/api/admin/semesters/${data.semester_id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ weeks_count: data.weeks_needed })
+        });
+
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            setToastMessage(error.error || 'Не удалось продлить семестр');
+            return false;
+        }
+
+        await loadSettings();
+        return true;
+    }
 
     // Drag-and-drop moves a lesson to another slot. It deliberately calls the
     // dedicated move endpoint rather than doing a delete+create from here: the
@@ -520,7 +561,7 @@ export default function AdminDashboardPage() {
         }
 
         try {
-            const response = await api('/api/admin/schedule/move-lesson', {
+            const move = () => api('/api/admin/schedule/move-lesson', {
                 method: 'POST',
                 body: JSON.stringify({
                     lesson_id: lesson.id,
@@ -531,18 +572,27 @@ export default function AdminDashboardPage() {
                     time_end: timeEnd
                 })
             });
+            let response = await move();
+            let failure = response.ok ? null : await response.json();
 
-            if (!response.ok) {
-                const data = await response.json();
-                setToastMessage(data.error || 'Не удалось перенести занятие');
+            if (failure && await offerSemesterExtension(failure)) {
+                response = await move();
+                failure = response.ok ? null : await response.json();
+            }
+
+            if (failure) {
+                // Declining the extension is a choice, not an error to report.
+                if (!failure.needs_extension) {
+                    setToastMessage(failure.error || 'Не удалось перенести занятие');
+                }
                 return;
             }
 
-            setToastMessage(
+            setToastMessage(attestationNote(await response.json().catch(() => ({}))) || (
                 builderMode === 'template'
                     ? 'Пара перенесена — с этой недели и далее'
                     : 'Пара перенесена на этой неделе'
-            );
+            ));
             loadLessons(selectedGroupId);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
@@ -690,16 +740,26 @@ export default function AdminDashboardPage() {
     async function handleEditSubmit(event) {
         event.preventDefault();
 
+        const isEvent = editForm.kind === 'event';
+
+        // A pair's subject comes from the list only (what makes its hours
+        // count); a free title is what the «Мероприятие» box is for.
+        if (!isEvent && !editForm.discipline_id) {
+            setToastMessage('Выберите предмет из списка — или отметьте «Мероприятие», если это не занятие');
+            return;
+        }
+
         const body = {
             day_of_week: Number(editForm.day_of_week),
             time_start: editForm.time_start,
             time_end: editForm.time_end,
             subject: editForm.subject,
             room: editForm.room,
-            lesson_type: editForm.lesson_type,
-            teacher: editForm.teacher,
-            teacher_id: editForm.teacher_id,
-            discipline_id: editForm.discipline_id,
+            lesson_type: isEvent ? null : editForm.lesson_type,
+            teacher: isEvent ? null : editForm.teacher,
+            teacher_id: isEvent ? null : editForm.teacher_id,
+            discipline_id: isEvent ? null : editForm.discipline_id,
+            kind: isEvent ? 'event' : 'lesson',
             subgroup: Number(editForm.subgroup),
             week_type: Number(editForm.week_type),
             specific_week: editForm.specific_week
@@ -726,7 +786,14 @@ export default function AdminDashboardPage() {
 
                 if (!check.ok) {
                     const data = await check.json();
-                    setToastMessage(data.error || 'Не удалось проверить другие группы');
+
+                    if (await offerSemesterExtension(data)) {
+                        return handleEditSubmit(event);
+                    }
+
+                    if (!data.needs_extension) {
+                        setToastMessage(data.error || 'Не удалось проверить другие группы');
+                    }
                     return;
                 }
             }
@@ -758,12 +825,13 @@ export default function AdminDashboardPage() {
                         time_start: editForm.time_start,
                         time_end: editForm.time_end,
                         subgroup: Number(editForm.subgroup),
-                        subject: editForm.subject,
-                        room: editForm.room,
-                        lesson_type: editForm.lesson_type,
-                        teacher: editForm.teacher,
-                        teacher_id: editForm.teacher_id,
-                        discipline_id: editForm.discipline_id
+                        subject: body.subject,
+                        room: body.room,
+                        lesson_type: body.lesson_type,
+                        teacher: body.teacher,
+                        teacher_id: body.teacher_id,
+                        discipline_id: body.discipline_id,
+                        kind: body.kind
                     })
                 });
             } else if (editMode === 'create') {
@@ -780,7 +848,14 @@ export default function AdminDashboardPage() {
 
             if (!response.ok) {
                 const data = await response.json();
-                setToastMessage(data.error || (editMode === 'create' ? 'Не удалось добавить занятие' : 'Не удалось обновить занятие'));
+
+                if (await offerSemesterExtension(data)) {
+                    return handleEditSubmit(event);
+                }
+
+                if (!data.needs_extension) {
+                    setToastMessage(data.error || (editMode === 'create' ? 'Не удалось добавить занятие' : 'Не удалось обновить занятие'));
+                }
                 return;
             }
 
@@ -807,9 +882,9 @@ export default function AdminDashboardPage() {
             // separate link to lose track of any more. A substitute or a
             // swapped-in discipline just carries different ids and stops
             // matching the old plan row on its own.
-            setToastMessage(ownWeeks.length > 0
+            setToastMessage(attestationNote(saved) || (ownWeeks.length > 0
                 ? `Недели ${ownWeeks.join(', ')} отредактированы отдельно — в них это изменение не появится, поправьте их на вкладке недели.`
-                : (editMode === 'create' ? `Занятие добавлено${extraNote}` : 'Занятие обновлено'));
+                : (editMode === 'create' ? `Занятие добавлено${extraNote}` : 'Занятие обновлено')));
             loadLessons(selectedGroupId);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
@@ -823,17 +898,35 @@ export default function AdminDashboardPage() {
             return;
         }
 
-        const shouldClear = window.confirm(
-            'Стереть все правки этой недели и вернуться к шаблону? Действие необратимо.'
-        );
-
-        if (!shouldClear) {
-            return;
-        }
+        const weekQuery = `group_id=${selectedGroupId}&week_number=${builderWeekNumber}`;
 
         try {
+            // Said as it is: on the live site the template is empty, so
+            // "back to the template" would really mean an empty week.
+            const summaryResponse = await api(`/api/admin/schedule/week-summary?${weekQuery}`);
+            const summary = await summaryResponse.json();
+
+            if (!summaryResponse.ok) {
+                setToastMessage(summary.error || 'Не удалось очистить неделю');
+                return;
+            }
+
+            const shouldClear = window.confirm(summary.template_pairs > 0
+                ? `Удалить ${summary.pairs} пар(ы) этой недели и вернуть шаблон (${summary.template_pairs} пар(ы))? Действие необратимо.`
+                : `Удалить все ${summary.pairs} пар(ы) этой недели? Шаблона нет — неделя станет пустой. Действие необратимо.`);
+
+            if (!shouldClear) {
+                return;
+            }
+
+            if (summary.hours_lost > 0 && !window.confirm(
+                `Эти пары уже засчитаны преподавателям: они потеряют ${summary.hours_lost} ч. Всё равно удалить?`
+            )) {
+                return;
+            }
+
             const response = await api(
-                `/api/admin/schedule/week?group_id=${selectedGroupId}&week_number=${builderWeekNumber}`,
+                `/api/admin/schedule/week?${weekQuery}${summary.hours_lost > 0 ? '&confirm=1' : ''}`,
                 { method: 'DELETE' }
             );
 
@@ -843,7 +936,7 @@ export default function AdminDashboardPage() {
                 return;
             }
 
-            setToastMessage('Неделя очищена — показывается шаблон');
+            setToastMessage(summary.template_pairs > 0 ? 'Неделя очищена — показывается шаблон' : 'Неделя очищена');
             loadLessons(selectedGroupId);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
@@ -1012,7 +1105,6 @@ export default function AdminDashboardPage() {
             const response = await api('/api/admin/settings', {
                 method: 'PUT',
                 body: JSON.stringify({
-                    semester_start_date: semesterStartDate,
                     director_name: directorName,
                     director_title: directorTitle,
                     study_form: studyForm
@@ -1120,19 +1212,24 @@ export default function AdminDashboardPage() {
                     newGroupName={newGroupName}
                     newGroupUniversityId={newGroupUniversityId}
                     saveSettings={saveSettings}
-                    semesterStartDate={semesterStartDate}
                     setDirectorName={setDirectorName}
                     setDirectorTitle={setDirectorTitle}
                     setGroupDirectionDrafts={setGroupDirectionDrafts}
                     setNewGroupDirection={setNewGroupDirection}
                     setNewGroupName={setNewGroupName}
                     setNewGroupUniversityId={setNewGroupUniversityId}
-                    setSemesterStartDate={setSemesterStartDate}
                     setStudyForm={setStudyForm}
                     settingsStatus={settingsStatus}
                     studyForm={studyForm}
                     universities={universities}
-                />
+                >
+                    <SecuritySection
+                        isActive={activeSection === 'settings'}
+                        api={api}
+                        setToastMessage={setToastMessage}
+                        onLoggedOut={() => navigate('/admin', { replace: true })}
+                    />
+                </SettingsSection>
 
                 <BackupsSection
                     activeSection={activeSection}

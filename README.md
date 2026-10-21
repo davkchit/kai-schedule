@@ -8,7 +8,7 @@
 ![Express 5](https://img.shields.io/badge/Express-5-000000?logo=express&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-better--sqlite3-003b57?logo=sqlite&logoColor=white)
 ![PWA](https://img.shields.io/badge/PWA-офлайн-5a0fc8?logo=pwa&logoColor=white)
-![Тесты](https://img.shields.io/badge/тесты-94-22c55e)
+![Тесты](https://img.shields.io/badge/тесты-116-22c55e)
 
 **Статус:** готовится пилотный запуск в НЧФ КНИТУ-КАИ на 12 группах, первые студенты уже пользуются сайтом. На время пилота он доступен по временному адресу [194-226-123-13.sslip.io](https://194-226-123-13.sslip.io). Основной адрес `nch-kai.schedule.ru` подключается.
 
@@ -104,7 +104,7 @@ flowchart LR
 npm install
 cp .env.example .env     # заполнить JWT_SECRET
 npm run dev              # Vite :5173 + Express :3000
-npm test                 # 94 теста
+npm test                 # 116 тестов
 ```
 
 При первом запуске создаётся пустая база. Команда `npm run seed` заполняет её демо-данными и удаляет текущие, поэтому используется только локально.

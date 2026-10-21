@@ -6,13 +6,13 @@ import ErrorScreen from '../components/ErrorScreen';
 import { clearSelection, getSavedSelection } from '../lib/storage';
 import { chooseTheme, currentTheme, onThemeChange } from '../lib/theme';
 import { resolveLessonsForDay } from '../lib/scheduleResolve';
+import { useDaySwipe } from '../lib/useDaySwipe';
 import {
     maxIso,
     minIso,
     planInitialWindow,
     parseIsoDate,
-    requestDays,
-    shiftIsoDate
+    requestDays
 } from '../lib/scheduleWindow';
 
 // How far ahead the calendar lets you browse: the end of the month one year
@@ -97,7 +97,6 @@ export default function SchedulePage() {
     // 'YYYY-MM' of the day at the left edge of the strip, once the reader scrolls.
     const [visibleMonth, setVisibleMonth] = useState(null);
     // Mobile list view: how many days before the chosen date it also shows.
-    const [listExtraDays, setListExtraDays] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState('');
     const [isSupportVisible, setIsSupportVisible] = useState(true);
@@ -105,6 +104,12 @@ export default function SchedulePage() {
     const [currentView, setCurrentView] = useState('day');
     const [isBurgerOpen, setIsBurgerOpen] = useState(false);
     const [activeMobileTab, setActiveMobileTab] = useState('');
+    // How the newly shown day enters on the phone: from which side and from
+    // how far (px) — a later day from the right, an earlier one from the left,
+    // a swiped one from exactly where the finger let the old day go.
+    const [dayEntry, setDayEntry] = useState(null);
+    const dayViewRef = useRef(null);
+    const revealTabRef = useRef(false);
     // Follows the system until the toggle is flipped (lib/theme), so the
     // toggle has to hear about a change the system made on its own.
     const [isDark, setIsDark] = useState(() => currentTheme() === 'dark');
@@ -237,7 +242,6 @@ export default function SchedulePage() {
             return undefined;
         }
 
-        const { from, to } = planInitialWindow(wantedIso, WINDOW_LIMITS);
         let ignore = false;
 
         async function loadSchedule() {
@@ -245,7 +249,15 @@ export default function SchedulePage() {
             setErrorMessage('');
 
             try {
-                const { data, savedCopy, savedAt, savedRange } = await fetchScheduleWindow(groupId, subgroup, from, to);
+                // The whole semester around the chosen day: the reader scrolls
+                // from its first day to the end of its session, and only a
+                // date outside it (the calendar) loads anything new.
+                const { data, savedCopy, savedAt, savedRange } = await fetchScheduleWindow(groupId, subgroup, { around: wantedIso });
+                // A copy saved by an older version of the page has no
+                // range_start: it covers `range_days` from requested_date.
+                const fallback = planInitialWindow(wantedIso, WINDOW_LIMITS);
+                const from = data.range_start || data.requested_date || fallback.from;
+                const to = data.range_end || fallback.to;
                 // Days past the end of a partial copy are left out rather than
                 // guessed: a week changed after it was saved would show wrong.
                 const shownFrom = savedRange ? maxIso(from, savedRange.from) : from;
@@ -267,7 +279,6 @@ export default function SchedulePage() {
                         anchorToken: anchorCounterRef.current,
                         data
                     });
-                    setListExtraDays(0);
                     // A saved copy is shown at once; the silent refresh below
                     // then replaces it as soon as the network answers.
                     setStaleNotice(savedCopy ? savedCopyNotice(savedCopy, savedAt) : '');
@@ -324,6 +335,10 @@ export default function SchedulePage() {
 
         if (!isMobileView) {
             alignToElement(scheduleGridRef.current, `[data-date="${iso}"]`);
+        } else if (currentView === 'list') {
+            // The list holds the whole semester: it opens on the chosen day,
+            // with every earlier day above it, a scroll away.
+            scheduleGridRef.current?.querySelector(`[data-date="${iso}"]`)?.scrollIntoView({ block: 'start' });
         } else if (currentView === 'day') {
             // The day the reader last tapped comes first: after a refresh that
             // is the one they were looking at, not necessarily today.
@@ -476,7 +491,7 @@ export default function SchedulePage() {
                 // have narrowed what is on screen.
                 const wanted = loaded.requested || loaded;
                 const { data, savedCopy } = await fetchScheduleWindow(
-                    loaded.groupId, loaded.subgroup, wanted.from, wanted.to,
+                    loaded.groupId, loaded.subgroup, { from: wanted.from, to: wanted.to },
                     { cacheMode: 'no-cache', wait: true }
                 );
 
@@ -529,16 +544,6 @@ export default function SchedulePage() {
     const scheduleDays = useMemo(() => buildScheduleDays(schedule), [schedule]);
     const calendarDays = buildCalendarDays(pickerDate, currentDate);
 
-    // The list view on a phone starts at the chosen day. Earlier days are added
-    // by a button rather than by scrolling up: the page header sits above the
-    // list, and days appearing there would push it out of the reader's reach.
-    const currentIso = formatLocalDateForApi(currentDate);
-    const listStartIso = schedule
-        ? maxIso(shiftIsoDate(currentIso, -listExtraDays), schedule.from)
-        : currentIso;
-    const gridDays = isMobileView ? scheduleDays.filter((day) => day.iso >= listStartIso) : scheduleDays;
-    const canShowEarlierDays = Boolean(schedule) && listStartIso > schedule.from;
-
     // The date button names the month of the day at the left edge of the strip,
     // which is what the reader is looking at, not the day they once picked.
     const labelDate = visibleMonth
@@ -557,10 +562,6 @@ export default function SchedulePage() {
         pickerDate.getFullYear() === MIN_DATE.getFullYear() &&
         pickerDate.getMonth() === MIN_DATE.getMonth();
 
-    function showEarlierDays() {
-        setListExtraDays(listExtraDays + 14);
-    }
-
     function switchSchedule() {
         clearSelection();
         navigate('/', { replace: true });
@@ -569,6 +570,48 @@ export default function SchedulePage() {
     function toggleTheme() {
         chooseTheme(isDark ? 'light' : 'dark');
     }
+
+    /** Shows another day on the phone, entering from the side it lies on. */
+    function goToMobileDay(dayId, fromPx = null) {
+        const from = scheduleDays.findIndex((day) => day.id === activeMobileTab);
+        const to = scheduleDays.findIndex((day) => day.id === dayId);
+
+        if (to < 0 || dayId === activeMobileTab) {
+            return;
+        }
+
+        setDayEntry({
+            from: fromPx ?? (to > from ? 28 : -28),
+            // A swiped day was already visible at the edge; a tapped one fades in.
+            opacity: fromPx === null ? 0 : 1,
+            token: Date.now()
+        });
+        revealTabRef.current = true;
+        setActiveMobileTab(dayId);
+    }
+
+    function neighbourDay(direction) {
+        const index = scheduleDays.findIndex((day) => day.id === activeMobileTab);
+        return scheduleDays[index + (direction === 'next' ? 1 : -1)] || null;
+    }
+
+    useDaySwipe(dayViewRef, {
+        // isAssetsReady: before it the page renders nothing, so there is no container yet.
+        enabled: isAssetsReady && isMobileView && currentView === 'day',
+        canGo: (direction) => Boolean(neighbourDay(direction)),
+        onCommit: (direction, fromPx) => {
+            const day = neighbourDay(direction);
+            if (day) goToMobileDay(day.id, fromPx);
+        }
+    });
+
+    // A day reached by swiping may be off-screen in the tab strip: bring its tab into view.
+    useEffect(() => {
+        if (!revealTabRef.current) return;
+        revealTabRef.current = false;
+        dayTabsRef.current?.querySelector(`[data-target-id="${activeMobileTab}"]`)
+            ?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+    }, [activeMobileTab]);
 
     function toggleDatePicker() {
         setPickerDate(new Date(labelDate.getFullYear(), labelDate.getMonth(), 1));
@@ -794,6 +837,24 @@ export default function SchedulePage() {
                                 </svg>
                                 Сменить вид расписания
                             </button>
+                            {/* The phone has no date button in the toolbar: the same
+                                calendar opens from here, as a sheet from below. */}
+                            <button
+                                className="dropdown-item"
+                                id="burgerDateBtn"
+                                onClick={() => {
+                                    setIsBurgerOpen(false);
+                                    toggleDatePicker();
+                                }}
+                            >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                                </svg>
+                                Выбрать дату
+                            </button>
                             <button className="dropdown-item theme-dropdown-item" onClick={toggleTheme}>
                                 <div className="theme-dropdown-left">
                                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -891,7 +952,6 @@ export default function SchedulePage() {
                                         onClick={() => {
                                             setCurrentDate(item.date);
                                             setVisibleMonth(null);
-                                            setListExtraDays(0);
                                             setIsDatePickerOpen(false);
                                         }}
                                     >
@@ -905,7 +965,7 @@ export default function SchedulePage() {
             </div>
 
             <div
-                className="schedule-grid-wrap"
+                className={`schedule-grid-wrap ${isMobileView && currentView === 'list' ? 'view-enter' : ''}`}
                 style={isMobileView && currentView === 'day' ? { display: 'none' } : undefined}
             >
                 {/* Above the strip of days, not inside it: as the strip's first item
@@ -938,16 +998,7 @@ export default function SchedulePage() {
                         </div>
                     )}
 
-                    {!isLoading && scheduleData && isMobileView && canShowEarlierDays && (
-                        <button
-                            type="button"
-                            className="load-earlier-btn"
-                            onClick={showEarlierDays}
-                        >
-                            Показать предыдущие дни
-                        </button>
-                    )}
-                    {!isLoading && scheduleData && gridDays.map((day) => (
+                    {!isLoading && scheduleData && scheduleDays.map((day) => (
                         <div className="day-column" key={day.id} data-date={day.iso}>
                             <div className="day-header">
                                 <div className={`day-badge ${day.isToday ? '' : 'hidden'}`}>Сегодня</div>
@@ -964,10 +1015,11 @@ export default function SchedulePage() {
             </div>
 
             <div
-                className="mobile-day-view"
+                className={`mobile-day-view ${isMobileView && currentView === 'day' ? 'view-enter' : ''}`}
+                ref={dayViewRef}
                 style={isMobileView && currentView === 'day' ? { display: 'flex' } : { display: 'none' }}
             >
-                <div className="day-tabs-container">
+                <div className="day-tabs-container" data-swipe-ignore>
                     <div className="day-tabs" id="mobileDayTabs" ref={dayTabsRef}>
                         {scheduleDays.map((day) => (
                             <button
@@ -975,7 +1027,7 @@ export default function SchedulePage() {
                                 className={`day-tab ${activeMobileTab === day.id ? 'active' : ''} ${day.isToday ? 'is-today' : ''}`}
                                 data-target-id={day.id}
                                 data-date={day.iso}
-                                onClick={() => setActiveMobileTab(day.id)}
+                                onClick={() => goToMobileDay(day.id)}
                             >
                                 <div className="day-tab-name">{day.shortName}</div>
                                 <div className="day-tab-date">{day.shortDate}</div>
@@ -983,7 +1035,12 @@ export default function SchedulePage() {
                         ))}
                     </div>
                 </div>
-                <div className="day-content" id="mobileDayContent">
+                <div
+                    className="day-content"
+                    id="mobileDayContent"
+                    data-entry={dayEntry ? 'side' : undefined}
+                    style={dayEntry ? { '--day-from': `${dayEntry.from}px`, '--day-from-opacity': dayEntry.opacity } : undefined}
+                >
                     {/* The phone's day view used to stay blank while loading and
                         on a failure: both messages lived only in the grid above,
                         which this view hides. */}
@@ -994,10 +1051,12 @@ export default function SchedulePage() {
                         </div>
                     )}
                     {scheduleData && <StaleNotice text={isLoading ? '' : staleNotice} />}
-                    {scheduleDays.map((day) => (
+                    {/* Only the open day is drawn: a semester is some 130 days,
+                        and keeping them all in the page cost a slow phone for nothing. */}
+                    {scheduleDays.filter((day) => day.id === activeMobileTab).map((day) => (
                         <div
                             key={`${day.id}-content`}
-                            className={`day-schedule ${activeMobileTab === day.id ? 'active' : ''}`}
+                            className="day-schedule active"
                             id={day.id}
                         >
                             {day.isRestDay && (
@@ -1060,9 +1119,17 @@ export default function SchedulePage() {
  * covers, and only those can be shown. `wait` skips that shortcut — for a
  * refresh of what is already on screen.
  */
-async function fetchScheduleWindow(groupId, subgroup, from, to, { cacheMode = 'default', wait = false } = {}) {
+/**
+ * range: { around: iso } — the whole semester that day falls in (the server
+ * decides its first and last day, see span=semester in routes/api.js); or
+ * { from, to } — exactly those days, as the silent refresh re-asks them.
+ */
+async function fetchScheduleWindow(groupId, subgroup, range, { cacheMode = 'default', wait = false } = {}) {
+    const query = range.around
+        ? `date=${range.around}&span=semester`
+        : `date=${range.from}&days=${requestDays(range.from, range.to)}`;
     const response = await fetch(
-        `/api/schedule/${groupId}?subgroup=${subgroup}&date=${from}&days=${requestDays(from, to)}`,
+        `/api/schedule/${groupId}?subgroup=${subgroup}&${query}`,
         { cache: cacheMode, headers: wait ? { 'X-Kai-Wait': '1' } : {} }
     );
 

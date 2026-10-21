@@ -14,17 +14,17 @@ A Russian walkthrough for people is `docs/ARCHITECTURE.md`; `README.md` is the p
 
 Each of these was a real bug or a deliberate decision; the sections below explain them.
 
-1. **The past never changes.** Template edits start from the current week (`template_from_week` from the server clock); removals leave tombstones; a week with its own rows ignores the template entirely. Never rewrite or delete old template versions.
+1. **The past never changes.** Template edits start from the current week (`template_from_week` from the server clock), or the next one when that cell's pair this week has already ended (`utils/templateWeek.js`); removals leave tombstones; a week with its own rows ignores the template entirely. Never rewrite or delete old template versions.
 2. **Hours are computed, never stored** (except `final_hours` of a closed semester). A pair counts only through the exact five-field identity with a plan row — no link column, no text matching.
 3. **Ids win over text.** When `teacher_id`/`discipline_id` is given, the text comes from the dictionary (`resolveTeacherDiscipline`). Renames propagate; deleting a referenced teacher/discipline is refused.
 4. **Three different "which semester" questions** (working / in effect on a date / viewed) — never substitute one for another.
 5. **A closed semester is frozen**: every write touching it returns 409.
 6. **Joined groups**: the member owns nothing; read through `scheduleGroupId`, refuse writes naming the member.
-7. **The client and the server resolve a day the same way** (`src/lib/scheduleResolve.js` + `templateResolve.js` ↔ `server/utils/templateResolve.js`, `attestationConflicts.js`); parity tests guard it — change both or neither.
+7. **The client and the server resolve a day the same way** (`src/lib/scheduleResolve.js` + `templateResolve.js` ↔ `server/utils/templateResolve.js` + `server/utils/dayResolve.js`, the one server-side "what does group X have on date D" used by the Alice skill, the session clash checks and the Excel export); `tests/dayResolve.parity.test.js` and the other parity tests guard it — change both or neither.
 8. **No hard-coded calendar dates** in app code (`tests/codeGuards.test.js`); every audit action needs a Russian label in `src/pages/adminDashboard/format.js` (same test).
 9. **One-off data fixes run once per database** (`runDataFixOnce`); schema migrations must be idempotent; a boot snapshot is taken before them.
 10. **Never commit databases or real people's data** (`data/*.db`, `seed/*.db`, real teacher names in tests/fixtures — use made-up names).
-11. Run `npm test` after any change; it must stay green (94 tests).
+11. Run `npm test` after any change; it must stay green (116 tests).
 
 ## Commands
 
@@ -59,7 +59,7 @@ Required for production (see `.env.example`):
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — admin credentials
 - `NODE_ENV`, `PORT` (default 3000)
 
-Optional: `ADMIN_COOKIE_NAME`, `TRUST_PROXY`, `ADMIN_ALLOWED_IPS`, `BACKUPS_DIR`, `DB_PATH`, `API_RATE_LIMIT_MAX` (public reads, default 5000/min — a flood ceiling, since the whole campus shares one NAT address), `ADMIN_RATE_LIMIT_MAX` (default 300/min), `API_RATE_LIMIT_WINDOW_MS` (default 60000), `ALERT_WEBHOOK_URL` + `ALERT_CHAT_ID` (Telegram/Discord/Slack webhook for crash and 500 alerts — see `server/alerts.js`), `SEED_DB_PATH` (snapshot a missing database is created from, default `seed/schedule.seed.db`)
+Optional: `HOST` (set `127.0.0.1` behind Caddy so port 3000 is not on the network), `ALICE_WEBHOOK_TOKEN` (the Alice webhook then requires `?token=`), `ADMIN_COOKIE_NAME`, `TRUST_PROXY`, `ADMIN_ALLOWED_IPS`, `BACKUPS_DIR`, `DB_PATH`, `API_RATE_LIMIT_MAX` (public reads, default 5000/min — a flood ceiling, since the whole campus shares one NAT address), `ADMIN_RATE_LIMIT_MAX` (default 300/min), `API_RATE_LIMIT_WINDOW_MS` (default 60000), `ALERT_WEBHOOK_URL` + `ALERT_CHAT_ID` (Telegram/Discord/Slack webhook for crash and 500 alerts — see `server/alerts.js`), `SEED_DB_PATH` (snapshot a missing database is created from, default `seed/schedule.seed.db`)
 
 ## Architecture
 
@@ -108,7 +108,7 @@ The admin pages keep state and handlers in the page and render through presentat
 
 ### Critical Domain: Semesters
 
-Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours are computed inside the lesson's own semester. Three different "which semester" questions — never mix them: the **working** semester (admin writes; `getActiveSemester`), the semester **in effect on a date** (students per day, teachers by default; `getSemesterForDate`), and a semester **being viewed** in the load page (no server state). Parity of week N = strict alternation from `first_week_parity`; ISO-week parity is only the default for a new semester. Past `weeks_count` the template stops (schedule and hours alike). `tests/yearLifecycle.test.js` drives a whole year with `KAI_FAKE_NOW` (ignored in production).
+Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours are computed inside the lesson's own semester. Three different "which semester" questions — never mix them: the **working** semester (admin writes; `getActiveSemester`), the semester **in effect on a date** (students per day, teachers by default; `getSemesterForDate`), and a semester **being viewed** in the load page (no server state). Parity of week N = strict alternation from `first_week_parity`; ISO-week parity is only the default for a new semester. Past `weeks_count` the template stops (schedule and hours alike), and a pair cannot be placed there: the server answers `needs_extension` and the constructor offers to extend the semester first, so schedule and hours never disagree. Semesters may not overlap (each starts after the other's last teaching week, `findOverlappingSemester`). The start date is edited only on the semester (Нагрузка, with the impact preview) — Settings refuses it. `tests/yearLifecycle.test.js` drives a whole year with `KAI_FAKE_NOW` (ignored in production).
 
 ### Closing a semester
 
@@ -149,6 +149,10 @@ They never count toward plan hours — the admin «Сессия» section (`Atte
 
 Collisions (`server/utils/attestationConflicts.js`): the same record twice is refused; anything else is a warning the specialist confirms (`confirm: true`) — the group's pair at that time (resolved exactly as the student page resolves the day), the teacher or the room busy with another group's pair or record (a joint exam of two groups at the same time is not a clash), a consultation after the subject's last exam, a Sunday. A start-only record counts as 60 min (consultation) or 90 min. The list re-checks on every read, so a pair added later in the constructor flags the record it now covers. See `tests/attestations.test.js`.
 
+### Alice skill
+
+`POST /api/alice` (`server/alice.js`) is the Yandex Dialogs webhook: «какие пары завтра», «что в пятницу», «на неделе», a group number to remember («23 303» from speech is joined). Read-only — it answers from `utils/dayResolve.js` plus attestations, i.e. exactly what the student page shows (a joined group hears its leader's pairs). The group is kept in the skill's own storage: `user_state_update` for a logged-in Yandex user, `application_state` per device; nothing is written to our database. Evening with today's pairs over → tomorrow. Answers ≤ 1024 chars. See `tests/alice.test.js`.
+
 ### Bulk Schedule Upload
 
 Admin can upload schedules for multiple groups in one request:
@@ -163,19 +167,21 @@ Admin can upload schedules for multiple groups in one request:
 }
 ```
 
-Endpoint: `POST /api/admin/schedule/upload-bulk`. Atomic — either all groups succeed or none. Frontend auto-detects bulk vs single format by checking for `groups` array vs `group` string.
+Endpoint: `POST /api/admin/schedule/upload-bulk`. Atomic — either all groups succeed or none. **API-only — there is no button for it**; kept for a future «import a week from Excel». Uploaded rows are text without ids (they count toward no hours), and an upload refuses to replace rows already linked to a teacher/discipline. Week-by-week edits (move, materialize, clear week) live in `routes/admin/scheduleWeek.js`, uploads and the export in `routes/admin/schedule.js`.
 
 ### Dark Theme
 
 Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored in `localStorage` as `kai_schedule_theme`. Applied globally to `document.documentElement` via `data-theme="dark"` attribute on app startup (`src/main.jsx`). CSS variables are overridden under `[data-theme="dark"]` in `schedule.css` and `welcome.css`.
 
-### Schedule page: the window of days
+### Schedule page: the whole semester
 
-The page shows a window of 29 consecutive days around the chosen day: two weeks before it and two after, in one request (`GET /api/schedule/:groupId?date=&days=` — the server was not changed). Going further means picking a date in the calendar, which rebuilds the window around it. Browsing is bounded to a year either side of today (`getMinDate`/`getMaxDate` in `SchedulePage.jsx`). The window is planned in `src/lib/scheduleWindow.js`; the chosen day is scrolled to the left edge after each rebuild, and the date button names the month of the day at the left edge.
+The page loads the **whole semester the chosen day falls in** in one request: `GET /api/schedule/:groupId?date=&span=semester` (`semesterSpan` in `routes/api.js`) answers from the semester's first Monday to the day before the next semester — or, with no next semester yet, to the end of its session (teaching weeks + 8, never before the group's last exam). Outside any semester (before the first, a long summer gap) it answers two weeks either side of the date. Every schedule answer carries `range_start`/`range_end` and the header `X-Kai-Range: from/to`; the silent refresh re-asks the same days with `date=&days=` (up to 400). Picking a date inside the loaded semester only scrolls; a date outside loads that one. Browsing is bounded to a year either side of today (`getMinDate`/`getMaxDate` in `SchedulePage.jsx`). `tests/scheduleSpan.test.js` covers the edges.
 
-Endless scrolling was built and then taken out for now: `planExtension` and `mergeScheduleData` in the same module (joining neighbouring windows by id, verified by `tests/scheduleWindow.test.js` against a request for each single day, and against the real data of every group) are kept for bringing it back. What stopped it: dragging with the mouse across the moment days are added on the left made the position jump by 14 days per mouse move, because the drag handler works from the position at mouse-down while the days added on the left shift the scroll. Bringing it back needs that handled and a trial on real phones and trackpads first.
+Offline, the service worker answers a `span=semester` request with the newest saved answer of the same group whose `X-Kai-Range` covers the day (the URL's date moves every morning), and keeps only the last 3 saved schedules per group. `planExtension`/`mergeScheduleData` in `src/lib/scheduleWindow.js` (the old endless-scroll groundwork) are no longer used by the page; `planInitialWindow` remains only as a fallback for an old saved copy without `range_start`.
 
-On a phone the day tabs and the list use the same window; in the list view earlier days already in the window are revealed by a button.
+On a phone the day tabs and the list cover the same semester; the list opens scrolled to the chosen day (`scroll-margin-top` under the sticky header) with every earlier day above it, and the day view draws only the open day (a semester is ~130–180 days). The date picker opens from the burger menu («Выбрать дату») as a bottom sheet. In the day view a horizontal swipe turns the day (`src/lib/useDaySwipe.js`: 1:1 tracking on `transform` only, rubber band at the window's ends, the flick's projected landing decides; `touch-action: pan-y` keeps vertical scrolling native, the tab strip is `data-swipe-ignore`). A new day enters from its side (`--day-from` on `.day-content`).
+
+Motion across the app is one family: the `--ease-spring` curve (critically damped, no overshoot), pages fade in (`#root > *`, opacity only — a transform there would capture every fixed sheet), the theme switch is one View Transition cross-fade (`lib/theme.js`), and `prefers-reduced-motion` turns animations off globally (`styles/base.css`). Animations end on `transform: none`, never a zero translate, so nothing is left as a containing block.
 
 ### PWA Auto-Refresh
 
@@ -183,13 +189,15 @@ On a phone the day tabs and the list use the same window; in the list view earli
 
 ### Security Model
 
-- Admin auth: JWT stored in httpOnly, SameSite=Strict cookie
+- Admin auth: JWT in an httpOnly, SameSite=Strict cookie that only names a server-side session (`admin_sessions`, `server/sessions.js`): logout ends that session, a password change ends all others, «Выйти на всех устройствах» ends every one; 4 h idle / 12 h absolute timeout. A restore from a backup ends all sessions
+- Optional second factor (TOTP, `server/utils/totp.js`, `server/secondFactor.js`): turned on in Settings with the password + a code, secret stored AES-GCM-encrypted with a key derived from `JWT_SECRET`, 8 one-time recovery codes (hashed), each app code accepted once. With it on, `/login` returns a 5-minute ticket and `/login/second-factor` opens the session
+- Lockout recovery on the server: `node server/admin-tool.js unlock | reset-2fa <login> | set-password <login> | logout-all | list` (run with the service's env; refuses a missing DB_PATH instead of creating one)
 - State-changing admin endpoints require CSRF token
-- Login is rate-limited via `login_attempts` table; public reads get a high flood ceiling and `/api/admin` a tight one (`express-rate-limit`; per-IP budgets can't be per-person when a campus shares one address)
+- Login is throttled via `login_attempts` per username (5 free) and per address (20 free — the campus shares one), the pause doubling from 30 s to at most 15 min, never permanent; an unknown username answers and is counted the same way; failures go to the journal; public reads get a high flood ceiling and `/api/admin` a tight one (`express-rate-limit`; per-IP budgets can't be per-person when a campus shares one address)
 - `GET /api/health` (before the limiter, no auth) reports process + database state for an uptime monitor
 - Optional IP allowlist via `ADMIN_ALLOWED_IPS`
 - CSP and security headers set in `app.js`
-- `PUT /api/admin/account` changes the admin's username/password (requires current password) — the only account-management path that doesn't require the destructive `npm run seed`
+- Settings → «Вход и безопасность» (`SecuritySection.jsx`): change the password (`PUT /api/admin/account`, current password required, 12+ chars, not containing the login), turn the second factor on/off, new recovery codes, «Выйти на всех устройствах». Headers: CSP, HSTS (production), CORP, nosniff, frame-deny; JSON bodies 16 KB public / 2 MB admin; `/api/client-error` 10/min per address
 - Lesson creation derives `template_from_week` from the server clock, never from client input — an edit can only ever take effect from "now" forward, so a client can't retroactively rewrite what a past week showed
 
 ### Deployment Note (VPS)

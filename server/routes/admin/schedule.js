@@ -1,4 +1,4 @@
-// Schedule: JSON uploads, Excel export, drag-and-drop moves and editing a single week.
+// Schedule: JSON uploads and the Excel export. Week-by-week edits are in scheduleWeek.js.
 // Mounted by ../admin.js after authentication and CSRF checks.
 
 const express = require('express');
@@ -9,18 +9,14 @@ const {
     addDaysToIsoDate,
     formatLocalDate,
     getSemesterWeekMeta,
-    getSemesterWeekType,
     isValidIsoDate
 } = require('../../utils/date');
 const { getCourseFromGroupName, getSemesterLabel } = require('../../utils/course');
-const { resolveTemplateLessons } = require('../../utils/templateResolve');
 const { joinedLabels, joinedMemberError } = require('../../utils/groupJoin');
-const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../../utils/slots');
-const { getActiveSemester, getSemesterById, getSemesterForDate } = require('../../utils/semesters');
+const { resolveGroupLessons } = require('../../utils/dayResolve');
+const { getActiveSemester, getSemesterForDate } = require('../../utils/semesters');
 const {
     validateBulkScheduleUploadBody,
-    validateMaterializeWeekBody,
-    validateMoveLessonBody,
     validateScheduleUploadBody
 } = require('../../validation');
 const {
@@ -28,7 +24,7 @@ const {
     findClosedSemester,
     NO_WORKING_SEMESTER,
     getClientAddress,
-    resolveTeacherDiscipline
+    weekBeyondSemesterError
 } = require('./shared');
 
 const router = express.Router();
@@ -96,6 +92,12 @@ router.post('/schedule/upload', (req, res) => {
         specificWeek = getSemesterWeekMeta(semester, referenceDate || formatLocalDate()).weekNumber;
     } else if (typeof targetWeek === 'number') {
         specificWeek = targetWeek;
+    }
+
+    const beyond = lessons.length > 0 ? weekBeyondSemesterError(semester, specificWeek) : null;
+
+    if (beyond) {
+        return res.status(409).json(beyond);
     }
 
     const linkedToReplace = countLinkedLessonsToReplace(db, semester.id, groupRow.id, specificWeek);
@@ -207,6 +209,12 @@ router.post('/schedule/upload-bulk', (req, res) => {
         specificWeek = getSemesterWeekMeta(semester, referenceDate || formatLocalDate()).weekNumber;
     } else if (typeof targetWeek === 'number') {
         specificWeek = targetWeek;
+    }
+
+    const beyond = groupPayloads.some((entry) => entry.lessons.length > 0) ? weekBeyondSemesterError(semester, specificWeek) : null;
+
+    if (beyond) {
+        return res.status(409).json(beyond);
     }
 
     // Pre-resolve all groups before any writes — fail fast if any group is missing
@@ -374,25 +382,17 @@ router.get('/schedule/export', async (req, res) => {
             continue;
         }
 
-        const allLessons = db.prepare(`
-            SELECT id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
-                   time_start, time_end, subject, room, lesson_type, teacher, kind
-            FROM lessons
-            WHERE semester_id = ? AND group_id = ?
-        `).all(semester.id, group.id);
+        // Day by day, the very resolution the student page uses
+        // (utils/dayResolve.js): the sheet never shows a pair students don't
+        // see, or misses one they do.
+        const groupRows = db.prepare('SELECT * FROM lessons WHERE semester_id = ? AND group_id = ?').all(semester.id, group.id);
+        const lessonsForWeek = [];
 
-        const hasExceptionWeek = allLessons.some((lesson) => lesson.specific_week === weekMeta.weekNumber);
-        let lessonsForWeek;
-
-        if (hasExceptionWeek) {
-            // Removed markers only keep the week its own — they are not pairs.
-            lessonsForWeek = allLessons.filter((lesson) => lesson.specific_week === weekMeta.weekNumber && !lesson.is_removed);
-        } else {
-            const candidates = allLessons.filter((lesson) =>
-                lesson.specific_week === null &&
-                (lesson.week_type === 0 || lesson.week_type === weekMeta.weekTypeNumber)
-            );
-            lessonsForWeek = resolveTemplateLessons(candidates, weekMeta.weekNumber);
+        for (let offset = 0; offset < 7; offset += 1) {
+            lessonsForWeek.push(...resolveGroupLessons(db, group.id, addDaysToIsoDate(weekStart, offset), {
+                lessonsOf: () => groupRows,
+                semesterFor: () => semester
+            }).lessons);
         }
 
         if (!courseMap.has(course)) {
@@ -459,452 +459,6 @@ router.get('/schedule/export', async (req, res) => {
         console.error('Schedule export error:', error);
         res.status(500).json({ error: 'Не удалось сформировать файл расписания' });
     }
-});
-
-/**
- * Moves one lesson to a different day/time slot — what a drag-and-drop in the
- * builder ends up calling. Deliberately built on the same primitives the
- * normal edit flows already use rather than new logic:
- *
- * - template mode: append a tombstone at the old slot + a new row at the new
- *   one, both stamped from the current week, so past weeks keep resolving to
- *   where the lesson actually was (the same "edits never rewrite history"
- *   guarantee every other template edit has).
- * - week mode, already materialized: the row is real, so just move it.
- * - week mode, not yet materialized: clone the week's resolved template into
- *   real rows exactly like materialize-week does, but drop the moved lesson
- *   at its new slot instead of the old one.
- *
- * Every branch runs inside a single transaction: a move can't half-apply and
- * leave the lesson both gone from the old slot and missing from the new one.
- */
-router.post('/schedule/move-lesson', (req, res) => {
-    let payload;
-
-    try {
-        payload = validateMoveLessonBody(req.body);
-    } catch (error) {
-        return res.status(error.statusCode || 400).json({ error: error.message });
-    }
-
-    const db = getDb();
-    const lesson = db.prepare('SELECT * FROM lessons WHERE id = ?').get(payload.lesson_id);
-
-    if (!lesson) {
-        return res.status(404).json({ error: 'Занятие не найдено' });
-    }
-
-    const isSameSlot =
-        lesson.day_of_week === payload.day_of_week &&
-        lesson.time_start === payload.time_start &&
-        lesson.time_end === payload.time_end;
-
-    if (isSameSlot) {
-        return res.json({ success: true, moved: false });
-    }
-
-    // Week numbers only mean something within the lesson's own semester —
-    // moving an autumn pair must never be measured against spring's calendar.
-    const semester = getSemesterById(db, lesson.semester_id) || getActiveSemester(db);
-
-    if (!semester) {
-        return res.status(400).json({ error: NO_WORKING_SEMESTER });
-    }
-
-    if (findClosedSemester(db, semester.id)) {
-        return res.status(409).json({ error: SEMESTER_CLOSED });
-    }
-
-    const currentWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
-
-    const insertLesson = () => db.prepare(`
-        INSERT INTO lessons (
-            group_id, subgroup, day_of_week, week_type, specific_week,
-            template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
-            kind, semester_id
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    try {
-        if (payload.mode === 'template') {
-            // Shared with POST /lessons: resolves through tombstones (so an
-            // emptied cell reads as free) and treats "every week" as
-            // overlapping both parities (the raw query this replaced did not,
-            // so an "every week" pair could be dropped onto a чётная one).
-            const occupied = findTemplateSlotOccupant(db, {
-                semesterId: semester.id,
-                groupId: lesson.group_id,
-                dayOfWeek: payload.day_of_week,
-                timeStart: payload.time_start,
-                timeEnd: payload.time_end,
-                subgroup: lesson.subgroup,
-                weekType: lesson.week_type,
-                targetWeek: currentWeek,
-                ignoreLessonId: lesson.id
-            });
-
-            if (occupied) {
-                return res.status(409).json({ error: `В этой ячейке уже есть занятие: ${occupied.subject}` });
-            }
-
-            const transaction = db.transaction(() => {
-                const statement = insertLesson();
-
-                // Tombstone at the old slot, effective from this week forward.
-                statement.run(
-                    lesson.group_id, lesson.subgroup, lesson.day_of_week, lesson.week_type, null,
-                    currentWeek, 1,
-                    lesson.time_start, lesson.time_end, lesson.subject, lesson.room,
-                    lesson.lesson_type, lesson.teacher, lesson.teacher_id, lesson.discipline_id, lesson.sort_order,
-                    lesson.kind, semester.id
-                );
-
-                // Same lesson, new slot, same effective week.
-                statement.run(
-                    lesson.group_id, lesson.subgroup, payload.day_of_week, lesson.week_type, null,
-                    currentWeek, 0,
-                    payload.time_start, payload.time_end, lesson.subject, lesson.room,
-                    lesson.lesson_type, lesson.teacher, lesson.teacher_id, lesson.discipline_id, lesson.sort_order,
-                    lesson.kind, semester.id
-                );
-            });
-
-            transaction();
-        } else {
-            const alreadyMaterialized = db.prepare(
-                'SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1'
-            ).get(semester.id, lesson.group_id, payload.week_number);
-
-            const occupied = findWeekSlotOccupant(db, {
-                semesterId: semester.id,
-                groupId: lesson.group_id,
-                weekNumber: payload.week_number,
-                dayOfWeek: payload.day_of_week,
-                timeStart: payload.time_start,
-                timeEnd: payload.time_end,
-                subgroup: lesson.subgroup,
-                ignoreLessonId: lesson.id
-            });
-
-            if (occupied) {
-                return res.status(409).json({ error: `В этой ячейке уже есть занятие: ${occupied.subject}` });
-            }
-
-            if (alreadyMaterialized) {
-                db.prepare(`
-                    UPDATE lessons
-                    SET day_of_week = ?, time_start = ?, time_end = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                `).run(payload.day_of_week, payload.time_start, payload.time_end, lesson.id);
-            } else {
-                const weekTypeNumber = getSemesterWeekType(semester, payload.week_number);
-                const templateRows = db.prepare(`
-                    SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
-                           time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
-                           kind
-                    FROM lessons
-                    WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
-                `).all(semester.id, lesson.group_id, weekTypeNumber);
-
-                const resolved = resolveTemplateLessons(templateRows, payload.week_number);
-                const movedKey = `${lesson.day_of_week}|${lesson.time_start}|${lesson.time_end}|${lesson.subgroup}`;
-
-                const transaction = db.transaction(() => {
-                    const statement = insertLesson();
-                    let sortOrder = 0;
-
-                    for (const row of resolved) {
-                        const key = `${row.day_of_week}|${row.time_start}|${row.time_end}|${row.subgroup}`;
-                        const isMoved = key === movedKey;
-
-                        statement.run(
-                            lesson.group_id,
-                            row.subgroup,
-                            isMoved ? payload.day_of_week : row.day_of_week,
-                            0,
-                            payload.week_number,
-                            1,
-                            0,
-                            isMoved ? payload.time_start : row.time_start,
-                            isMoved ? payload.time_end : row.time_end,
-                            row.subject, row.room, row.lesson_type, row.teacher, row.teacher_id, row.discipline_id,
-                            sortOrder, row.kind, semester.id
-                        );
-                        sortOrder += 1;
-                    }
-                });
-
-                transaction();
-            }
-        }
-    } catch (error) {
-        console.error('Move lesson error:', error);
-        return res.status(500).json({ error: 'Не удалось перенести занятие' });
-    }
-
-    writeAuditLog(db, {
-        adminId: req.admin.id,
-        action: 'lesson.move',
-        entityType: 'lesson',
-        entityId: lesson.id,
-        ipAddress: getClientAddress(req),
-        details: {
-            mode: payload.mode,
-            week_number: payload.week_number ?? null,
-            from: { day_of_week: lesson.day_of_week, time_start: lesson.time_start, time_end: lesson.time_end },
-            to: { day_of_week: payload.day_of_week, time_start: payload.time_start, time_end: payload.time_end }
-        }
-    });
-
-    res.json({ success: true, moved: true });
-});
-
-router.post('/schedule/materialize-week', (req, res) => {
-    let payload;
-
-    try {
-        payload = validateMaterializeWeekBody(req.body);
-    } catch (error) {
-        return res.status(error.statusCode || 400).json({ error: error.message });
-    }
-
-    const db = getDb();
-    const group = db.prepare('SELECT id FROM groups_ WHERE id = ?').get(payload.group_id);
-
-    if (!group) {
-        return res.status(404).json({ error: 'Группа не найдена' });
-    }
-
-    if (joinedMemberError(db, payload.group_id)) {
-        return res.status(409).json({ error: joinedMemberError(db, payload.group_id) });
-    }
-
-    // The constructor edits the working semester; "week N" means week N of it.
-    const semester = getActiveSemester(db);
-
-    if (!semester) {
-        return res.status(400).json({ error: NO_WORKING_SEMESTER });
-    }
-
-    if (findClosedSemester(db, semester.id)) {
-        return res.status(409).json({ error: SEMESTER_CLOSED });
-    }
-
-    // This endpoint only makes sense the first time a week is touched — once it has
-    // its own rows, edits should go through the normal single-lesson endpoints.
-    const alreadyMaterialized = db.prepare(
-        'SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1'
-    ).get(semester.id, payload.group_id, payload.week_number);
-
-    if (alreadyMaterialized) {
-        return res.status(409).json({ error: 'Эта неделя уже содержит собственные записи' });
-    }
-
-    // The dropdown's ids resolve to the dictionary's own current text, same
-    // as POST /lessons — never trust text sent alongside an id.
-    let identity = null;
-
-    if (payload.action === 'upsert') {
-        try {
-            identity = resolveTeacherDiscipline(db, {
-                teacherId: payload.teacher_id, teacherText: payload.teacher,
-                disciplineId: payload.discipline_id, disciplineText: payload.subject
-            });
-        } catch (error) {
-            return res.status(error.statusCode || 400).json({ error: error.message });
-        }
-    }
-
-    const weekTypeNumber = getSemesterWeekType(semester, payload.week_number);
-    const templateRows = db.prepare(`
-        SELECT id, subgroup, day_of_week, week_type, template_from_week, is_removed,
-               time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, kind
-        FROM lessons
-        WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
-    `).all(semester.id, payload.group_id, weekTypeNumber);
-
-    const resolved = resolveTemplateLessons(templateRows, payload.week_number);
-    const slotKey = (lesson) => `${lesson.day_of_week}|${lesson.time_start}|${lesson.time_end}|${lesson.subgroup}`;
-    const touchedKey = `${payload.day_of_week}|${payload.time_start}|${payload.time_end}|${payload.subgroup}`;
-
-    const finalLessons = [];
-    let touchedHandled = false;
-
-    for (const lesson of resolved) {
-        if (slotKey(lesson) === touchedKey) {
-            touchedHandled = true;
-
-            if (payload.action === 'upsert') {
-                // Editing a slot in place — a substitute, a swapped-in subject,
-                // a room fix — just writes this week's own teacher_id/
-                // discipline_id. Whether it counts toward anyone's hours is
-                // decided live from those ids every time hours are asked for;
-                // nothing here needs to reason about "is this still the same
-                // teaching assignment" any more.
-                finalLessons.push({
-                    day_of_week: payload.day_of_week,
-                    time_start: payload.time_start,
-                    time_end: payload.time_end,
-                    subgroup: payload.subgroup,
-                    subject: identity.discipline,
-                    room: payload.room,
-                    lesson_type: payload.lesson_type,
-                    teacher: identity.teacher,
-                    teacher_id: identity.teacherId,
-                    discipline_id: identity.disciplineId,
-                    kind: lesson.kind
-                });
-            } else {
-                // action === 'remove': kept as a removed marker, never just left
-                // out. If this was the week's only pair, leaving it out would
-                // insert nothing — the week would have no rows of its own, and
-                // the template (with this very pair) would silently apply again,
-                // for students and for the hour counter alike.
-                finalLessons.push({
-                    day_of_week: lesson.day_of_week,
-                    time_start: lesson.time_start,
-                    time_end: lesson.time_end,
-                    subgroup: lesson.subgroup,
-                    subject: lesson.subject,
-                    room: lesson.room,
-                    lesson_type: lesson.lesson_type,
-                    teacher: lesson.teacher,
-                    teacher_id: lesson.teacher_id,
-                    discipline_id: lesson.discipline_id,
-                    kind: lesson.kind,
-                    is_removed: 1
-                });
-            }
-        } else {
-            finalLessons.push({
-                day_of_week: lesson.day_of_week,
-                time_start: lesson.time_start,
-                time_end: lesson.time_end,
-                subgroup: lesson.subgroup,
-                subject: lesson.subject,
-                room: lesson.room,
-                lesson_type: lesson.lesson_type,
-                teacher: lesson.teacher,
-                teacher_id: lesson.teacher_id,
-                discipline_id: lesson.discipline_id,
-                kind: lesson.kind
-            });
-        }
-    }
-
-    if (!touchedHandled && payload.action === 'upsert') {
-        finalLessons.push({
-            day_of_week: payload.day_of_week,
-            time_start: payload.time_start,
-            time_end: payload.time_end,
-            subgroup: payload.subgroup,
-            subject: identity.discipline,
-            room: payload.room,
-            lesson_type: payload.lesson_type,
-            teacher: identity.teacher,
-            teacher_id: identity.teacherId,
-            discipline_id: identity.disciplineId,
-            kind: 'lesson'
-        });
-    }
-
-    const transaction = db.transaction(() => {
-        const insert = db.prepare(`
-            INSERT INTO lessons (
-                group_id, subgroup, day_of_week, week_type, specific_week,
-                template_from_week, is_removed,
-                time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
-                kind, semester_id
-            )
-            VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        let count = 0;
-
-        for (const lesson of finalLessons) {
-            insert.run(
-                payload.group_id,
-                lesson.subgroup,
-                lesson.day_of_week,
-                payload.week_number,
-                lesson.is_removed ? 1 : 0,
-                lesson.time_start,
-                lesson.time_end,
-                lesson.subject,
-                lesson.room,
-                lesson.lesson_type,
-                lesson.teacher,
-                lesson.teacher_id ?? null,
-                lesson.discipline_id ?? null,
-                count,
-                lesson.kind || 'lesson',
-                semester.id
-            );
-            count += 1;
-        }
-
-        return count;
-    });
-
-    try {
-        const count = transaction();
-
-        writeAuditLog(db, {
-            adminId: req.admin.id,
-            action: 'schedule.materialize_week',
-            entityType: 'group_schedule',
-            entityId: payload.group_id,
-            ipAddress: getClientAddress(req),
-            details: { group_id: payload.group_id, week_number: payload.week_number, lesson_count: count }
-        });
-
-        res.status(201).json({ success: true, count });
-    } catch (error) {
-        console.error('Materialize week error:', error);
-        res.status(500).json({ error: 'Не удалось сохранить неделю' });
-    }
-});
-
-router.delete('/schedule/week', (req, res) => {
-    const db = getDb();
-    const groupId = Number.parseInt(req.query.group_id, 10);
-    const weekNumber = Number.parseInt(req.query.week_number, 10);
-
-    if (!Number.isInteger(groupId) || groupId <= 0) {
-        return res.status(400).json({ error: 'Укажите корректный group_id' });
-    }
-
-    if (!Number.isInteger(weekNumber) || weekNumber <= 0) {
-        return res.status(400).json({ error: 'Укажите корректный week_number' });
-    }
-
-    const semester = getActiveSemester(db);
-
-    if (!semester) {
-        return res.status(400).json({ error: NO_WORKING_SEMESTER });
-    }
-
-    if (findClosedSemester(db, semester.id)) {
-        return res.status(409).json({ error: SEMESTER_CLOSED });
-    }
-
-    // Week N of the working semester only — the same number in another
-    // semester is a different calendar week with its own history.
-    const result = db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?')
-        .run(semester.id, groupId, weekNumber);
-
-    writeAuditLog(db, {
-        adminId: req.admin.id,
-        action: 'schedule.clear_week',
-        entityType: 'group_schedule',
-        entityId: groupId,
-        ipAddress: getClientAddress(req),
-        details: { group_id: groupId, week_number: weekNumber, deleted: result.changes }
-    });
-
-    res.json({ success: true, deleted: result.changes });
 });
 
 /**

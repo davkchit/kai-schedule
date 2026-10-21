@@ -16,6 +16,7 @@ const { parseTrustProxy } = require('../server/config');
 const { formatLocalDate, getWeekMeta } = require('../server/utils/date');
 const { resolveTemplateLessons } = require('../server/utils/templateResolve');
 const { computeLoadProgress } = require('../server/utils/loadCalc');
+const { templateWeekForSlot } = require('../server/utils/templateWeek');
 
 test.afterEach(async () => {
     closeDb();
@@ -303,7 +304,7 @@ test('settings updates are written to the audit log', async () => {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            semester_start_date: '2026-02-16'
+            study_form: 'очная форма обучения'
         })
     });
 
@@ -320,7 +321,7 @@ test('settings updates are written to the audit log', async () => {
     const settingsLog = logs.find((entry) => entry.action === 'settings.update');
 
     assert.ok(settingsLog);
-    assert.equal(settingsLog.details.semester_start_date, '2026-02-16');
+    assert.equal(settingsLog.details.study_form, 'очная форма обучения');
     assert.equal(settingsLog.admin_username, 'admin');
 
     await context.close();
@@ -348,7 +349,7 @@ test('cookie-authenticated admin mutations require a CSRF token', async () => {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            semester_start_date: '2026-02-16'
+            study_form: 'очная форма обучения'
         })
     });
     const blockedBody = await blockedResponse.json();
@@ -364,7 +365,7 @@ test('cookie-authenticated admin mutations require a CSRF token', async () => {
             'X-CSRF-Token': sessionBody.csrf_token
         },
         body: JSON.stringify({
-            semester_start_date: '2026-02-16'
+            study_form: 'очная форма обучения'
         })
     });
 
@@ -468,7 +469,7 @@ test('audit log CSV export returns text/csv with audit entries', async () => {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            semester_start_date: '2026-02-16'
+            study_form: 'очная форма обучения'
         })
     });
 
@@ -480,7 +481,7 @@ test('audit log CSV export returns text/csv with audit entries', async () => {
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /text\/csv/);
     assert.match(body, /settings\.update/);
-    assert.match(body, /semester_start_date/);
+    assert.match(body, /study_form/);
 
     await context.close();
 });
@@ -562,7 +563,11 @@ test('POST /lessons ignores a client-supplied template_from_week and always anch
 
     assert.equal(response.status, 201);
 
-    const expectedWeek = getWeekMeta('2026-02-09', formatLocalDate()).weekNumber;
+    // "Now" on the server clock: this week, or next week once this week's
+    // Saturday 18:10 is over (templateWeekForSlot).
+    const semester = getDb().prepare('SELECT * FROM semesters WHERE id = ?').get(context.semesterId);
+    const expectedWeek = templateWeekForSlot(semester, 6, '18:10');
+    assert.ok(expectedWeek - getWeekMeta('2026-02-09', formatLocalDate()).weekNumber <= 1);
     assert.equal(created.template_from_week, expectedWeek);
     assert.notEqual(created.template_from_week, 1);
 
@@ -595,7 +600,7 @@ test('materialize-week clones the rest of the template, not just the touched slo
             subgroup: 0,
             subject: 'Новый предмет',
             room: '101 каб.',
-            lesson_type: 'Семинар',
+            lesson_type: 'Практика',
             teacher: 'Сидоров С.С.'
         })
     });
@@ -635,7 +640,7 @@ test('a materialized week fully suppresses the template for that week (no merge)
             subgroup: 0,
             subject: 'Новый предмет',
             room: '101 каб.',
-            lesson_type: 'Семинар',
+            lesson_type: 'Практика',
             teacher: 'Сидоров С.С.'
         })
     });
@@ -715,16 +720,18 @@ test('PUT /account rejects a wrong current password', async () => {
     await context.close();
 });
 
-test('PUT /account rejects a new password shorter than 8 characters', async () => {
+test('PUT /account rejects a new password shorter than 12 characters, or one containing the login', async () => {
     const context = await createTestContext();
 
-    const response = await fetch(`${context.baseUrl}/api/admin/account`, {
-        method: 'PUT',
-        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ current_password: 'admin123', new_password: 'short' })
-    });
+    for (const newPassword of ['short', 'elevenchars', 'my-admin-password']) {
+        const response = await fetch(`${context.baseUrl}/api/admin/account`, {
+            method: 'PUT',
+            headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ current_password: 'admin123', new_password: newPassword })
+        });
 
-    assert.equal(response.status, 400);
+        assert.equal(response.status, 400, newPassword);
+    }
 
     await context.close();
 });
@@ -1059,7 +1066,14 @@ test('move in template mode: tombstones the old slot and creates the new one, wi
     assert.equal(untouched.day_of_week, original.day_of_week);
     assert.equal(untouched.is_removed, 0);
 
-    const currentWeek = getWeekMeta('2026-02-09', formatLocalDate()).weekNumber;
+    // This test runs on the real clock: both halves take the later of the two
+    // cells' weeks — next week for a cell whose pair this week is already over.
+    const semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(context.semesterId);
+    const currentWeek = Math.max(
+        templateWeekForSlot(semester, original.day_of_week, original.time_end),
+        templateWeekForSlot(semester, 3, '14:40')
+    );
+    assert.ok(currentWeek - getWeekMeta('2026-02-09', formatLocalDate()).weekNumber <= 1);
 
     const tombstone = db.prepare(`
         SELECT * FROM lessons
@@ -2181,7 +2195,7 @@ test('rebuilding load_plan does not leave lessons.load_plan_id pointing at a dro
     await fs.rm(tempDir, { recursive: true, force: true });
 });
 
-test('the schedule\'s semester start and the load semester\'s start move together, from either side', async () => {
+test('the semester start is changed only on the semester, and the schedule setting follows it', async () => {
     const context = await createTestContext();
     const db = getDb();
 
@@ -2193,15 +2207,16 @@ test('the schedule\'s semester start and the load semester\'s start move togethe
     const settingsDate = () => db.prepare("SELECT value v FROM settings WHERE key = 'semester_start_date'").get()?.v;
     const semesterDate = () => db.prepare('SELECT start_date FROM semesters WHERE id = ?').get(semesterId).start_date;
 
-    // Changing it through Settings must move the active semester too.
+    // Settings no longer moves it: there it shifted every entered week with no
+    // preview, and even a closed semester's.
+    const before = semesterDate();
     const viaSettings = await fetch(`${context.baseUrl}/api/admin/settings`, {
         method: 'PUT',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ semester_start_date: '2026-09-07' })
+        body: JSON.stringify({ semester_start_date: '2026-09-07', director_name: 'Иванов И.И.' })
     });
-    assert.equal(viaSettings.status, 200);
-    assert.equal(settingsDate(), '2026-09-07');
-    assert.equal(semesterDate(), '2026-09-07', 'the load semester must follow the schedule setting');
+    assert.equal(viaSettings.status, 400);
+    assert.equal(semesterDate(), before);
 
     // And changing it through the semester must move the setting.
     const viaSemester = await fetch(`${context.baseUrl}/api/admin/semesters/${semesterId}`, {
@@ -2596,6 +2611,16 @@ async function createTestContext() {
     };
 }
 
+// Servers a test opened and did not close — a failed assertion skips the
+// test's own close(), and an open server kept the whole run from ever ending.
+const openServers = new Set();
+
+test.afterEach(async () => {
+    for (const close of [...openServers]) {
+        await close().catch(() => {});
+    }
+});
+
 async function startTestServer() {
     const { app } = createApp();
     const server = http.createServer(app);
@@ -2606,21 +2631,22 @@ async function startTestServer() {
 
     const address = server.address();
     const baseUrl = `http://127.0.0.1:${address.port}`;
+    const close = () => new Promise((resolve, reject) => {
+        openServers.delete(close);
+        server.closeAllConnections?.();
+        server.close((error) => {
+            if (error) {
+                reject(error);
+                return;
+            }
 
-    return {
-        baseUrl,
-        close: () => new Promise((resolve, reject) => {
-            server.close((error) => {
-                if (error) {
-                    reject(error);
-                    return;
-                }
+            closeDb();
+            resolve();
+        });
+    });
+    openServers.add(close);
 
-                closeDb();
-                resolve();
-            });
-        })
-    };
+    return { baseUrl, close };
 }
 
 function seedTestDatabase() {

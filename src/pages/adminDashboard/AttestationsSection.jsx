@@ -134,7 +134,7 @@ export default function AttestationsSection({
         });
     }
 
-    async function submitForm(event, confirm = false) {
+    async function submitForm(event, confirm = false, removePairs = false) {
         event?.preventDefault();
         setIsSaving(true);
 
@@ -153,7 +153,8 @@ export default function AttestationsSection({
                     discipline_text: form.subject,
                     teacher_id: form.teacher_id,
                     teacher_text: form.teacher,
-                    confirm
+                    confirm,
+                    remove_pairs: removePairs
                 })
             });
             const data = await response.json();
@@ -161,9 +162,20 @@ export default function AttestationsSection({
             // A pair at that time, the teacher or the room busy…: the server
             // names it, and saving anyway is the specialist's call.
             if (response.status === 409 && data.needs_confirm) {
-                if (window.confirm(`Обратите внимание:\n\n• ${data.warnings.join('\n• ')}\n\nСохранить всё равно?`)) {
-                    await submitForm(null, true);
+                if (!window.confirm(`Обратите внимание:\n\n• ${data.warnings.join('\n• ')}\n\nСохранить всё равно?`)) {
+                    return;
                 }
+
+                // A pair left under the exam would still count toward the
+                // teacher's hours. Taking it out of that one day is offered,
+                // never done silently.
+                const pairs = data.covered_pairs || [];
+                const removePairsToo = pairs.length > 0 && window.confirm(
+                    `У группы в это время ${pairs.length > 1 ? 'пары' : 'пара'}: ${pairs.map((pair) => `${pair.subject} ${pair.time_start}`).join(', ')}.\n\n`
+                    + 'Убрать её в этот день? Тогда студенты увидят только запись сессии, а пара не засчитается преподавателю.\n\n'
+                    + 'ОК — убрать пару, Отмена — оставить её.'
+                );
+                await submitForm(null, true, removePairsToo);
                 return;
             }
 
@@ -172,7 +184,8 @@ export default function AttestationsSection({
                 return;
             }
 
-            setToastMessage(form.id ? 'Изменения сохранены' : `${KIND_LABEL[form.kind]} добавлен${form.kind === 'consultation' ? 'а' : ''}`);
+            setToastMessage((form.id ? 'Изменения сохранены' : `${KIND_LABEL[form.kind]} добавлен${form.kind === 'consultation' ? 'а' : ''}`)
+                + (data.removed_pairs > 0 ? ` — пара в этот день убрана (${data.removed_pairs})` : ''));
             setForm(null);
             // The date may have moved it into another semester: show that one.
             await load(data.semester_id);

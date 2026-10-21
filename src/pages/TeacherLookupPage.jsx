@@ -202,7 +202,6 @@ export default function TeacherLookupPage() {
                     {!selectedTeacher ? (
                         <>
                             <h1 className="title">Проверить свои часы</h1>
-                            <p className="subtitle">Введите вашу фамилию</p>
 
                             <form onSubmit={handleSubmit}>
                                 <button
@@ -220,7 +219,7 @@ export default function TeacherLookupPage() {
                                     <input
                                         type="text"
                                         className="search-input"
-                                        placeholder="Например Сафронов"
+                                        placeholder="Ваша фамилия"
                                         autoComplete="off"
                                         value={inputValue}
                                         onChange={(event) => {

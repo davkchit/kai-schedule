@@ -6,7 +6,7 @@ const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { getActiveSemester } = require('../../utils/semesters');
 const { validateSettingsBody } = require('../../validation');
-const { mapSemesterRow, syncSemesterStartDate, getClientAddress } = require('./shared');
+const { mapSemesterRow, getClientAddress } = require('./shared');
 
 const router = express.Router();
 
@@ -43,10 +43,7 @@ router.put('/settings', (req, res) => {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `);
 
-    const updatedKeys = { semester_start_date: settingsPayload.semester_start_date };
-    // Writes both places at once — the schedule's week numbering and the
-    // active semester the hour counter walks must never disagree.
-    syncSemesterStartDate(db, settingsPayload.semester_start_date);
+    const updatedKeys = {};
 
     for (const key of ['director_name', 'director_title', 'academic_year', 'study_form', 'term_parity']) {
         if (settingsPayload[key] !== null && settingsPayload[key] !== undefined) {
@@ -59,7 +56,7 @@ router.put('/settings', (req, res) => {
         adminId: req.admin.id,
         action: 'settings.update',
         entityType: 'settings',
-        entityId: 'semester_start_date',
+        entityId: 'settings',
         ipAddress: getClientAddress(req),
         details: updatedKeys
     });
@@ -163,7 +160,15 @@ function buildAuditCsv(logs) {
 }
 
 function escapeCsvCell(value) {
-    const normalized = String(value ?? '');
+    let normalized = String(value ?? '');
+
+    // A cell starting with = + - @ is run as a formula when the file is
+    // opened in Excel — a group or subject name could carry one. A leading
+    // apostrophe makes it plain text.
+    if (/^[=+\-@\t\r]/.test(normalized)) {
+        normalized = `'${normalized}`;
+    }
+
     const escaped = normalized.replaceAll('"', '""');
     return `"${escaped}"`;
 }

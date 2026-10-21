@@ -139,29 +139,6 @@ body > #root {
     transition: color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
-/* Подзаголовок */
-.subtitle {
-    font-size: 16px;
-    color: var(--text-secondary);
-    margin-top: -16px;
-    margin-bottom: 40px;
-    font-weight: 400;
-    animation: slideDown 0.6s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) 0.2s both;
-    transition: opacity 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                transform 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)),
-                color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1));
-    min-height: 24px;
-}
-
-.subtitle.fade-out {
-    opacity: 0;
-    transform: translateY(-10px);
-}
-
-.subtitle.fade-in {
-    animation: fadeIn 0.4s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) forwards;
-}
-
 @keyframes fadeIn {
     from {
         opacity: 0;
@@ -419,10 +396,6 @@ html.keyboard-open .page-stack {
     .title {
         font-size: 38px;
     }
-
-    .subtitle {
-        font-size: 15px;
-    }
 }
 
 /* Адаптивность для мобильных */
@@ -443,12 +416,6 @@ html.keyboard-open .page-stack {
     .title {
         font-size: 32px;
         margin-bottom: 30px;
-    }
-
-    .subtitle {
-        font-size: 14px;
-        margin-top: -12px;
-        margin-bottom: 32px;
     }
 
     .search-input {
@@ -487,10 +454,6 @@ html.keyboard-open .page-stack {
         font-size: 29px;
     }
 
-    .subtitle {
-        font-size: 13px;
-    }
-
     .search-input {
         font-size: 16px;
     }
@@ -506,7 +469,6 @@ html.keyboard-open .page-stack {
     box-shadow: 0 20px 60px rgba(0,0,0,0.4);
 }
 [data-theme="dark"] .title { color: #f1f5f9; }
-[data-theme="dark"] .subtitle { color: #94a3b8; }
 [data-theme="dark"] .search-input {
     background: #0f172a;
     color: #f1f5f9;

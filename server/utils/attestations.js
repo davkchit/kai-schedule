@@ -4,7 +4,35 @@
 // the admin «Сессия» section counts them per teacher. They never add to a plan row's hours:
 // the norms a department uses for them are not pair hours.
 
+const { getSemesterForDate } = require('./semesters');
+
 const KIND_LABELS = { exam: 'Экзамен', credit: 'Зачёт', consultation: 'Консультация' };
+
+/**
+ * A record belongs to the semester in effect on its date, fixed when it is
+ * saved. Creating a semester or moving one's dates can change that answer
+ * (spring now starting before a late January consultation), so records follow
+ * — except into or out of a closed semester, whose contents are frozen.
+ * Returns how many moved.
+ */
+function resyncAttestationSemesters(db) {
+    const rows = db.prepare(`
+        SELECT a.id, a.date, a.semester_id, s.closed_at FROM attestations a JOIN semesters s ON s.id = a.semester_id
+    `).all();
+    const move = db.prepare('UPDATE attestations SET semester_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+    let moved = 0;
+
+    for (const row of rows) {
+        const target = row.closed_at ? null : getSemesterForDate(db, row.date);
+
+        if (target && target.id !== row.semester_id && !target.closed_at) {
+            move.run(target.id, row.id);
+            moved += 1;
+        }
+    }
+
+    return moved;
+}
 
 /** Rows with their display text resolved: the dictionary's current name wins over typed text. */
 function selectAttestations(db, where, params) {
@@ -62,5 +90,6 @@ module.exports = {
     KIND_LABELS,
     countByTeacher,
     insertAttestation,
+    resyncAttestationSemesters,
     selectAttestations
 };

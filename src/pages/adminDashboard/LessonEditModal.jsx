@@ -27,6 +27,7 @@ export default function LessonEditModal({
     const teacherOptions = teachers.map((teacher) => ({ id: teacher.id, label: teacher.full_name }));
     const disciplineOptions = disciplines.map((discipline) => ({ id: discipline.id, label: discipline.name }));
     const isOnline = /^\s*(онлайн|online|дистанционно)\s*$/i.test(editForm.room || '');
+    const isEvent = editForm.kind === 'event';
     const cardRef = useRef(null);
     const lastPressRef = useRef(null);
 
@@ -72,46 +73,88 @@ export default function LessonEditModal({
                 )}
                 <form id="editForm" className="edit-form" onSubmit={handleEditSubmit}>
                     <input type="hidden" id="editId" value={editForm.id} readOnly />
-                    <DictionaryPicker
-                        id="editSubject"
-                        label="Предмет"
-                        placeholder="Начните вводить название"
-                        options={disciplineOptions}
-                        valueId={editForm.discipline_id}
-                        valueText={editForm.subject}
-                        onChange={(picked) => setEditForm((previous) => ({
-                            ...previous,
-                            discipline_id: picked ? picked.id : null,
-                            subject: picked ? picked.label : ''
-                        }))}
-                        onCreate={onCreateDiscipline}
-                    />
-                    <DictionaryPicker
-                        id="editTeacher"
-                        label="Преподаватель"
-                        placeholder="Например: Кузнецов Н.П."
-                        options={teacherOptions}
-                        valueId={editForm.teacher_id}
-                        valueText={editForm.teacher}
-                        onChange={(picked) => setEditForm((previous) => ({
-                            ...previous,
-                            teacher_id: picked ? picked.id : null,
-                            teacher: picked ? picked.label : ''
-                        }))}
-                        onCreate={onCreateTeacher}
-                    />
-                    <div className="form-row-pair">
+                    {/* A pair takes its subject and teacher from the dictionaries
+                        only — that is what makes its hours count. Anything else
+                        (линейка, кураторский час, спартакиада) is an event: any
+                        title, no teacher, never counted toward anyone's hours. */}
+                    <label className="online-toggle event-toggle">
+                        <input
+                            type="checkbox"
+                            id="editIsEvent"
+                            checked={isEvent}
+                            onChange={(event) => setEditForm((previous) => ({
+                                ...previous,
+                                kind: event.target.checked ? 'event' : 'lesson',
+                                subject: '',
+                                discipline_id: null,
+                                teacher: '',
+                                teacher_id: null,
+                                lesson_type: event.target.checked ? '' : 'Лекция'
+                            }))}
+                        />
+                        Мероприятие, а не занятие (не идёт в часы)
+                    </label>
+                    {isEvent ? (
                         <div className="form-row">
-                            <label>Тип</label>
-                            <select
-                                id="editType"
+                            <label htmlFor="editSubject">Название</label>
+                            <input
+                                type="text"
+                                id="editSubject"
                                 className="form-input"
-                                value={editForm.lesson_type}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, lesson_type: event.target.value }))}
-                            >
-                                {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-                            </select>
+                                placeholder="Например: Торжественная линейка"
+                                value={editForm.subject}
+                                required
+                                onChange={(event) => setEditForm((previous) => ({ ...previous, subject: event.target.value }))}
+                            />
                         </div>
+                    ) : (
+                        <>
+                            <DictionaryPicker
+                                id="editSubject"
+                                label="Предмет"
+                                placeholder="Начните вводить название"
+                                options={disciplineOptions}
+                                valueId={editForm.discipline_id}
+                                valueText={editForm.subject}
+                                onChange={(picked) => setEditForm((previous) => ({
+                                    ...previous,
+                                    discipline_id: picked ? picked.id : null,
+                                    subject: picked ? picked.label : ''
+                                }))}
+                                onCreate={onCreateDiscipline}
+                                listOnly
+                            />
+                            <DictionaryPicker
+                                id="editTeacher"
+                                label="Преподаватель"
+                                placeholder="Например: Кузнецов Н.П."
+                                options={teacherOptions}
+                                valueId={editForm.teacher_id}
+                                valueText={editForm.teacher}
+                                onChange={(picked) => setEditForm((previous) => ({
+                                    ...previous,
+                                    teacher_id: picked ? picked.id : null,
+                                    teacher: picked ? picked.label : ''
+                                }))}
+                                onCreate={onCreateTeacher}
+                                listOnly
+                            />
+                        </>
+                    )}
+                    <div className="form-row-pair">
+                        {!isEvent && (
+                            <div className="form-row">
+                                <label>Тип</label>
+                                <select
+                                    id="editType"
+                                    className="form-input"
+                                    value={editForm.lesson_type}
+                                    onChange={(event) => setEditForm((previous) => ({ ...previous, lesson_type: event.target.value }))}
+                                >
+                                    {LESSON_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                                </select>
+                            </div>
+                        )}
                         <div className="form-row">
                             <div className="room-label-row">
                                 <label htmlFor="editRoom">Кабинет</label>

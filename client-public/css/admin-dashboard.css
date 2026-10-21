@@ -143,6 +143,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helv
 .setting-input { padding: 10px 16px; border: 1px solid var(--border); border-radius: 12px; font-size: 14px; outline: none; width: 100%; background: var(--card); }
 .setting-input:focus { border-color: var(--primary); }
 
+/* «Вход и безопасность» */
+.security-block { margin-bottom: 32px; }
+.security-gap { margin-top: 8px; }
+.security-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.security-qr { width: 200px; height: 200px; padding: 8px; background: #fff; border-radius: 12px; border: 1px solid var(--border); }
+.security-qr svg { width: 100%; height: 100%; display: block; }
+.security-secret { font-family: ui-monospace, Consolas, monospace; font-size: 14px; letter-spacing: 0.04em; margin: 8px 0 12px; word-break: break-all; }
+.security-codes ul { columns: 2; list-style: none; padding: 12px 16px; margin: 0; border: 1px dashed var(--border); border-radius: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 15px; line-height: 1.9; }
+.security-on { font-size: 14px; font-weight: 600; color: #16a34a; margin: 0 0 4px; }
+
 /* Schedule builder */
 .builder-toolbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
 .builder-tabs { display: flex; gap: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 4px; }

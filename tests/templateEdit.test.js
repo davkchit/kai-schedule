@@ -115,10 +115,13 @@ test('template view: edit, move and remove keep past weeks and hours right', asy
     assert.equal(corrected.id, fresh.id);
     assert.equal(db.prepare('SELECT COUNT(*) AS c FROM lessons').get().c, rowsBefore);
 
-    // After the semester: both pairs ran in weeks 1–6 only.
+    // After the semester: both pairs ran in weeks 1–7. They were removed on
+    // week 7's Wednesday at noon, when that week's Monday and Wednesday pairs
+    // had already been held — so the removal starts with week 8 and those
+    // two stay counted (templateWeekForSlot).
     at('2026-11-20T12:00:00');
-    assert.equal(await hours(mondayPlan.id), 12);
-    assert.equal(await hours(wednesdayPlan.id), 12);
+    assert.equal(await hours(mondayPlan.id), 14);
+    assert.equal(await hours(wednesdayPlan.id), 14);
 });
 
 test('a substitute teacher or a one-off replacement simply stops matching the original plan row, no explicit step needed', async (t) => {

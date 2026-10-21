@@ -1,16 +1,59 @@
 const express = require('express');
 const { getDb } = require('../db');
-const { addDaysToIsoDate, formatLocalDate, getSemesterWeekMeta, resolveFirstWeekParity } = require('../utils/date');
+const { addDaysToIsoDate, formatLocalDate, getSemesterWeekMeta, isValidIsoDate, resolveFirstWeekParity } = require('../utils/date');
 const { scheduleGroupId } = require('../utils/groupJoin');
 const { attachPlanGroups } = require('../utils/planGroups');
 const { computePlanRowProgress } = require('../utils/planProgress');
 const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
 const { notify } = require('../alerts');
 const { selectAttestations } = require('../utils/attestations');
+const { handleAlice } = require('../alice');
+const { ALICE_WEBHOOK_TOKEN } = require('../config');
 
 const router = express.Router();
 const DEFAULT_SCHEDULE_RANGE_DAYS = 28;
-const MAX_SCHEDULE_RANGE_DAYS = 60;
+// A whole semester with its session, as the page asks for it (span=semester,
+// then the same days again for its silent refresh). The load test showed a
+// thousand such requests at once answered in well under a second.
+const MAX_SCHEDULE_RANGE_DAYS = 400;
+// Without a next semester yet, how long after the last teaching week the
+// semester's days still run: the session and the holidays after it.
+const SESSION_WEEKS = 8;
+// Around a date no semester covers (before the first one, a long summer gap).
+const FALLBACK_DAYS_AROUND = 14;
+
+/**
+ * The days of the semester `isoDate` falls in: from its first Monday to the
+ * day before the next semester starts — or, with no next semester yet, to the
+ * end of its session (and never before the group's last exam). Outside any
+ * semester, two weeks either side of the date, as the page always showed.
+ */
+function semesterSpan(db, isoDate, scheduleOwnerId) {
+    const fallback = { from: addDaysToIsoDate(isoDate, -FALLBACK_DAYS_AROUND), to: addDaysToIsoDate(isoDate, FALLBACK_DAYS_AROUND) };
+    const semester = getSemesterForDate(db, isoDate);
+
+    if (!semester) {
+        return fallback;
+    }
+
+    const next = db.prepare('SELECT start_date FROM semesters WHERE start_date > ? ORDER BY start_date LIMIT 1').get(semester.start_date);
+    let to;
+
+    if (next) {
+        to = addDaysToIsoDate(next.start_date, -1);
+    } else {
+        to = addDaysToIsoDate(semester.start_date, (semester.weeks_count + SESSION_WEEKS) * 7 - 1);
+        const lastExam = db.prepare('SELECT MAX(date) AS d FROM attestations WHERE semester_id = ? AND group_id = ?').get(semester.id, scheduleOwnerId).d;
+        if (lastExam && lastExam > to) to = lastExam;
+    }
+
+    if (isoDate > to) {
+        return fallback;
+    }
+
+    const longest = addDaysToIsoDate(semester.start_date, MAX_SCHEDULE_RANGE_DAYS - 1);
+    return { from: semester.start_date, to: to < longest ? to : longest };
+}
 
 router.get('/universities', (req, res) => {
     const db = getDb();
@@ -69,14 +112,18 @@ router.get('/schedule/:groupId', (req, res) => {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
 
-    const dateStr = typeof req.query.date === 'string' ? req.query.date : formatLocalDate();
-    let rangeEndDate;
+    const wantedDate = typeof req.query.date === 'string' ? req.query.date : formatLocalDate();
 
-    try {
-        rangeEndDate = addDaysToIsoDate(dateStr, rangeDays - 1);
-    } catch {
+    if (!isValidIsoDate(wantedDate)) {
         return res.status(400).json({ error: 'Некорректная дата. Ожидается формат YYYY-MM-DD' });
     }
+
+    // span=semester: the whole semester the date falls in, so the page can
+    // scroll from its first day to the end of its session in one go;
+    // otherwise `days` days from the date.
+    const { from: dateStr, to: rangeEndDate } = req.query.span === 'semester'
+        ? semesterSpan(db, wantedDate, scheduleGroupId(db, groupId))
+        : { from: wantedDate, to: addDaysToIsoDate(wantedDate, rangeDays - 1) };
 
     // Every day is resolved against the semester in effect ON THAT DAY, not
     // against whichever semester the admin has open. A view that crosses the
@@ -153,8 +200,13 @@ router.get('/schedule/:groupId', (req, res) => {
     // A minute of browser caching: flipping between days inside the window
     // then costs nothing, and a page reopened right away doesn't re-ask.
     res.set('Cache-Control', 'private, max-age=60');
+    // The days this answer covers. The service worker reads it to find a saved
+    // copy covering today when the phone is offline (the URL's own date may be
+    // any day inside the semester).
+    res.set('X-Kai-Range', `${dateStr}/${rangeEndDate}`);
     res.json({
         group: { id: group.id, name: group.name },
+        range_start: dateStr,
         semesters: semesters.map((semester) => ({
             id: semester.id,
             label: semester.label,
@@ -174,6 +226,22 @@ router.get('/schedule/:groupId', (req, res) => {
         by_day: byDay,
         attestations
     });
+});
+
+// The Alice skill's webhook (server/alice.js): Yandex Dialogs posts every
+// phrase here. Read-only. When ALICE_WEBHOOK_TOKEN is set, the URL given to
+// Yandex must carry it (?token=…), so nobody else can use the endpoint.
+router.post('/alice', (req, res) => {
+    if (ALICE_WEBHOOK_TOKEN && req.query.token !== ALICE_WEBHOOK_TOKEN) {
+        return res.status(403).json({ error: 'forbidden' });
+    }
+
+    try {
+        res.json(handleAlice(getDb(), req.body));
+    } catch (error) {
+        console.error('Alice error:', error);
+        res.json({ version: '1.0', response: { text: 'Что-то пошло не так, попробуйте ещё раз чуть позже.', end_session: false } });
+    }
 });
 
 // A crash in someone's browser is otherwise invisible: nothing reaches the

@@ -236,7 +236,7 @@ function validateLessonUpdateBody(body) {
     }
 
     if (body.lesson_type !== undefined) {
-        payload.lesson_type = readOptionalString(body.lesson_type, 'Тип занятия');
+        payload.lesson_type = readLessonType(body.lesson_type);
     }
 
     if (body.teacher !== undefined) {
@@ -285,10 +285,11 @@ function validateMaterializeWeekBody(body) {
     if (body.action === 'upsert') {
         result.subject = readRequiredString(body.subject, 'Предмет');
         result.room = readOptionalString(body.room, 'Кабинет');
-        result.lesson_type = readOptionalString(body.lesson_type, 'Тип занятия');
+        result.lesson_type = readLessonType(body.lesson_type);
         result.teacher = readOptionalString(body.teacher, 'Преподаватель');
         result.teacher_id = readOptionalId(body.teacher_id, 'teacher_id');
         result.discipline_id = readOptionalId(body.discipline_id, 'discipline_id');
+        result.kind = readLessonKind(body.kind);
     }
 
     return result;
@@ -365,7 +366,7 @@ function validateLessonCreateBody(body) {
         time_end: timeEnd,
         subject: readRequiredString(body.subject, 'Предмет'),
         room: readOptionalString(body.room, 'Кабинет'),
-        lesson_type: readOptionalString(body.lesson_type, 'Тип занятия'),
+        lesson_type: readLessonType(body.lesson_type),
         teacher: readOptionalString(body.teacher, 'Преподаватель'),
         teacher_id: readOptionalId(body.teacher_id, 'teacher_id'),
         discipline_id: readOptionalId(body.discipline_id, 'discipline_id'),
@@ -377,6 +378,21 @@ function validateLessonCreateBody(body) {
             ? null
             : readInteger(body.replaces_lesson_id, 'replaces_lesson_id', { min: 1 })
     };
+}
+
+/**
+ * A pair's type on the schedule. Hours match a plan row on it exactly, and the plan only
+ * knows these three — «лекция» typed through the API would silently count for nobody.
+ * Empty is fine (an event, or a pair that counts for nobody anyway).
+ */
+function readLessonType(value) {
+    const type = readOptionalString(value, 'Тип занятия', 50);
+
+    if (type !== null && !LOAD_PLAN_LESSON_TYPES.includes(type)) {
+        throw createValidationError(`Тип занятия должен быть одним из: ${LOAD_PLAN_LESSON_TYPES.join(', ')}`);
+    }
+
+    return type;
 }
 
 const LESSON_KINDS = ['lesson', 'event'];
@@ -401,8 +417,16 @@ function readLessonKind(value) {
 function validateSettingsBody(body) {
     assertPlainObject(body, 'Тело запроса должно быть объектом');
 
-    const allowedKeys = ['semester_start_date', 'director_name', 'director_title', 'academic_year', 'study_form', 'term_parity'];
+    const allowedKeys = ['director_name', 'director_title', 'academic_year', 'study_form', 'term_parity'];
     const bodyKeys = Object.keys(body);
+
+    // The start date moves every entered week and every teacher's hours, so it
+    // is changed only on the semester itself (Нагрузка), behind the impact
+    // preview and the closed-semester guard — never as a side effect of saving
+    // the director's name.
+    if (bodyKeys.includes('semester_start_date')) {
+        throw createValidationError('Дата начала семестра меняется в разделе «Нагрузка» — там видно, как это повлияет на часы');
+    }
 
     for (const key of bodyKeys) {
         if (!allowedKeys.includes(key)) {
@@ -414,14 +438,7 @@ function validateSettingsBody(body) {
         throw createValidationError('term_parity должен быть fall или spring');
     }
 
-    const semesterStartDate = readRequiredString(body.semester_start_date, 'Дата начала семестра', 10);
-
-    if (!isValidIsoDate(semesterStartDate)) {
-        throw createValidationError('Дата начала семестра должна быть в формате YYYY-MM-DD');
-    }
-
     return {
-        semester_start_date: mondayOfWeek(semesterStartDate),
         director_name: readOptionalString(body.director_name, 'ФИО директора', 200),
         director_title: readOptionalString(body.director_title, 'Должность', 200),
         academic_year: readOptionalString(body.academic_year, 'Учебный год', 20),
@@ -444,8 +461,10 @@ function validateAccountUpdateBody(body) {
     if (body.new_password !== undefined) {
         const newPassword = readRequiredString(body.new_password, 'Новый пароль', 255);
 
-        if (newPassword.length < 8) {
-            throw createValidationError('Новый пароль должен быть не короче 8 символов');
+        // Length is what makes a password hard to guess; no rules about
+        // digits and symbols, which mostly produce «Password1!».
+        if (newPassword.length < 12) {
+            throw createValidationError('Новый пароль должен быть не короче 12 символов');
         }
 
         result.new_password = newPassword;

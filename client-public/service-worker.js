@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v7';
+const CACHE_VERSION = 'v8';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
 // Saved schedules are not tied to a release: a new version must not throw
@@ -21,6 +21,10 @@ const SAVED_RANGE_HEADER = 'X-Kai-Saved-Range';
 // A refresh of a schedule already on screen waits for the network: the saved
 // copy it would get instead is what it is trying to replace.
 const WAIT_HEADER = 'X-Kai-Wait';
+// Set by the server on every schedule answer: the days it covers, "from/to".
+const RANGE_HEADER = 'X-Kai-Range';
+// Saved schedules kept per group and subgroup (older ones are deleted).
+const SAVED_SCHEDULES_KEPT = 3;
 const APP_SHELL_URL = '/';
 const OFFLINE_URL = '/offline.html';
 const DEFAULT_SCHEDULE_RANGE_DAYS = 28;
@@ -198,6 +202,11 @@ function fetchAndSave(event, cache, cacheKey, prepare = (response) => response) 
         .then(async (response) => {
             if (isCacheableResponse(response)) {
                 await cache.put(cacheKey, prepare(response.clone()));
+
+                const url = new URL(event.request.url);
+                if (url.pathname.startsWith('/api/schedule/')) {
+                    await pruneSavedSchedules(cache, url);
+                }
             }
 
             return response;
@@ -296,6 +305,61 @@ function withHeader(response, name, value) {
     });
 }
 
+/** "from/to" a saved schedule answer covers (X-Kai-Range from the server), or null. */
+async function savedRange(cache, cachedRequest) {
+    const response = await cache.match(cachedRequest);
+    const [from, to] = (response?.headers.get(RANGE_HEADER) || '').split('/');
+    return from && to ? { from, to, savedAt: response.headers.get(SAVED_AT_HEADER) || '' } : null;
+}
+
+/**
+ * A whole-semester request (span=semester) names one day inside it, and the
+ * day moves every morning — so the URL is no guide. The newest saved answer of
+ * the same group and subgroup whose range covers that day is the one.
+ */
+async function findSavedSemester(requestUrl, cache) {
+    const day = requestUrl.searchParams.get('date');
+    const subgroup = requestUrl.searchParams.get('subgroup') || '0';
+    let best = null;
+
+    for (const cachedRequest of await cache.keys()) {
+        const cachedUrl = new URL(cachedRequest.url);
+
+        if (cachedUrl.pathname !== requestUrl.pathname || (cachedUrl.searchParams.get('subgroup') || '0') !== subgroup) {
+            continue;
+        }
+
+        const range = await savedRange(cache, cachedRequest);
+
+        if (range && day && range.from <= day && day <= range.to && (!best || range.savedAt > best.savedAt)) {
+            best = { cachedRequest, savedAt: range.savedAt };
+        }
+    }
+
+    return best ? cache.match(best.cachedRequest) : null;
+}
+
+/**
+ * Keeps the last few saved schedules of each group and subgroup: one per day
+ * the page was opened used to pile up for the whole year.
+ */
+async function pruneSavedSchedules(cache, requestUrl) {
+    const subgroup = requestUrl.searchParams.get('subgroup') || '0';
+    const saved = [];
+
+    for (const cachedRequest of await cache.keys()) {
+        const cachedUrl = new URL(cachedRequest.url);
+
+        if (cachedUrl.pathname === requestUrl.pathname && (cachedUrl.searchParams.get('subgroup') || '0') === subgroup) {
+            const response = await cache.match(cachedRequest);
+            saved.push({ cachedRequest, savedAt: response?.headers.get(SAVED_AT_HEADER) || '' });
+        }
+    }
+
+    saved.sort((left, right) => (left.savedAt < right.savedAt ? 1 : -1));
+    await Promise.all(saved.slice(SAVED_SCHEDULES_KEPT).map(({ cachedRequest }) => cache.delete(cachedRequest)));
+}
+
 async function findCachedDataResponse(request, cache) {
     const exactMatch = await cache.match(request);
 
@@ -307,6 +371,10 @@ async function findCachedDataResponse(request, cache) {
 
     if (!requestUrl.pathname.startsWith('/api/schedule/')) {
         return null;
+    }
+
+    if (requestUrl.searchParams.get('span') === 'semester') {
+        return findSavedSemester(requestUrl, cache);
     }
 
     const requestedSubgroup = requestUrl.searchParams.get('subgroup') || '0';

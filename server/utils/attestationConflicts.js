@@ -10,8 +10,8 @@
 
 const { getSemesterForDate } = require('./semesters');
 const { getSemesterWeekMeta } = require('./date');
-const { resolveTemplateLessons } = require('./templateResolve');
 const { scheduleGroupId } = require('./groupJoin');
+const { resolveGroupLessons } = require('./dayResolve');
 
 // The lists give a start time only. For an overlap a consultation without an
 // end counts as an hour (the branch puts them back to back: 9:00, 10:00), an
@@ -75,27 +75,10 @@ function createDayIndex(db) {
         const pairs = [];
 
         if (semester) {
-            const { weekNumber, weekTypeNumber } = getSemesterWeekMeta(semester, isoDate);
-            const [year, month, day] = isoDate.split('-').map(Number);
-            const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7;
-
             for (const group of groups) {
-                const lessons = groupLessons(group.id, semester.id);
-                const ownWeek = lessons.some((lesson) => lesson.specific_week === weekNumber);
-                const onDay = lessons.filter((lesson) => lesson.day_of_week === weekday);
-                let resolved;
-
-                if (ownWeek) {
-                    resolved = onDay.filter((lesson) => lesson.specific_week === weekNumber && !lesson.is_removed);
-                } else if (Number.isInteger(semester.weeks_count) && weekNumber > semester.weeks_count) {
-                    resolved = [];
-                } else {
-                    resolved = resolveTemplateLessons(onDay.filter((lesson) => lesson.specific_week == null
-                        && (lesson.week_type === 0 || lesson.week_type === weekTypeNumber)), weekNumber);
-                }
-
+                const { lessons } = resolveGroupLessons(db, group.id, isoDate, { lessonsOf: groupLessons, semesterFor: () => semester });
                 const name = labels.has(group.id) ? `${group.name} / ${labels.get(group.id)}` : group.name;
-                resolved.forEach((lesson) => pairs.push({ ...lesson, group_name: name }));
+                lessons.forEach((lesson) => pairs.push({ ...lesson, group_name: name }));
             }
         }
 
@@ -114,6 +97,9 @@ function createDayIndex(db) {
 function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(db)) {
     const groupId = scheduleGroupId(db, record.group_id);
     const warnings = [];
+    // The group's own pairs this record lands on — the specialist may take
+    // them out of that day, so they stop counting toward anyone's hours.
+    const covered = [];
     let duplicate = null;
 
     const [year, month, day] = record.date.split('-').map(Number);
@@ -127,6 +113,11 @@ function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(
 
         if (pair.group_id === groupId && subgroupsMeet(record, pair)) {
             warnings.push(`У группы в это время пара: ${what}`);
+            // Only a pair the record takes over entirely can be taken out: a
+            // credit of п/г 1 over a whole-group pair leaves п/г 2 that pair.
+            if (!record.subgroup || pair.subgroup === record.subgroup) {
+                covered.push(pair);
+            }
         } else if (pair.group_id !== groupId) {
             if (sameTeacher(record, pair)) warnings.push(`${record.teacher} в это время ведёт пару у ${pair.group_name}: ${what}`);
             if (roomKey(record.room) && roomKey(record.room) === roomKey(pair.room)) {
@@ -176,7 +167,38 @@ function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(
         }
     }
 
-    return { duplicate, warnings: [...new Set(warnings)] };
+    return { duplicate, warnings: [...new Set(warnings)], covered };
 }
 
-module.exports = { createDayIndex, findAttestationConflicts };
+/**
+ * Экзамены, зачёты, консультации of the lesson's group that a pair (just
+ * saved in the constructor) lands on — a week's own pair on its date, a
+ * template pair on any of its dates from template_from_week on. Said back to
+ * the specialist; nothing is refused. Labels, e.g. «экзамен «Физика» 15.01 09:00».
+ */
+function findAttestationsUnderLesson(db, semester, lesson) {
+    if (!lesson || lesson.is_removed || lesson.kind === 'event') {
+        return [];
+    }
+
+    const groupId = scheduleGroupId(db, lesson.group_id);
+    const records = db.prepare(`
+        SELECT a.*, COALESCE(d.name, a.discipline_text) AS subject
+        FROM attestations a LEFT JOIN disciplines d ON d.id = a.discipline_id
+        WHERE a.semester_id = ? AND a.group_id = ?
+    `).all(semester.id, groupId);
+
+    return records.filter((record) => {
+        const { weekNumber, weekTypeNumber } = getSemesterWeekMeta(semester, record.date);
+        const [year, month, day] = record.date.split('-').map(Number);
+        const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7;
+        const onItsDay = lesson.specific_week !== null
+            ? lesson.specific_week === weekNumber
+            : weekNumber >= (lesson.template_from_week ?? 1) && weekNumber <= semester.weeks_count
+                && (lesson.week_type === 0 || lesson.week_type === weekTypeNumber);
+
+        return onItsDay && weekday === lesson.day_of_week && subgroupsMeet(record, lesson) && overlaps(record, lesson);
+    }).map((record) => `${KIND_LABELS[record.kind]} «${record.subject}» ${formatDate(record.date)} ${record.time_start}`);
+}
+
+module.exports = { createDayIndex, findAttestationConflicts, findAttestationsUnderLesson };

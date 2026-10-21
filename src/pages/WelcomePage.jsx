@@ -4,19 +4,11 @@ import AuroraBackground from '../components/AuroraBackground';
 import usePageAssets from '../hooks/usePageAssets';
 import { getSavedSelection, saveSelection } from '../lib/storage';
 
+// What each step asks lives in the field itself — no grey line under the title.
 const STEPS = [
-    {
-        subtitle: 'Выберите ваш университет',
-        placeholder: 'Например КНИТУ-КАИ'
-    },
-    {
-        subtitle: '',
-        placeholder: 'Номер группы'
-    },
-    {
-        subtitle: 'А теперь выберите вашу подгруппу',
-        placeholder: 'Например 1'
-    }
+    { placeholder: 'Вуз, например КНИТУ-КАИ' },
+    { placeholder: 'Номер группы' },
+    { placeholder: 'Подгруппа, например 1' }
 ];
 
 const SUBGROUP_OPTIONS = ['1 подгруппа', '2 подгруппа'];
@@ -29,13 +21,8 @@ export default function WelcomePage() {
     });
 
     const navigate = useNavigate();
-    const subtitleTimersRef = useRef([]);
 
     const [currentStep, setCurrentStep] = useState(0);
-    // Empty until the universities arrive: with only one there is nothing to
-    // choose, and the page opens straight on the group step.
-    const [subtitle, setSubtitle] = useState('');
-    const [subtitleAnimationClass, setSubtitleAnimationClass] = useState('');
     const [universities, setUniversities] = useState([]);
     const [isUniversityLoaded, setIsUniversityLoaded] = useState(false);
     const [isSingleUniversity, setIsSingleUniversity] = useState(false);
@@ -86,16 +73,14 @@ export default function WelcomePage() {
                         university_id: list[0].id,
                         university_name: list[0].short_name
                     }));
+                    // With only one university there is nothing to choose:
+                    // the page opens straight on the group step.
                     setCurrentStep(1);
-                    setSubtitle(STEPS[1].subtitle);
-                } else {
-                    setSubtitle(STEPS[0].subtitle);
                 }
             } catch {
                 if (!ignore) {
                     setUniversities([]);
                     setIsUniversityLoaded(true);
-                    setSubtitle(STEPS[0].subtitle);
                 }
             }
         }
@@ -135,14 +120,6 @@ export default function WelcomePage() {
             ignore = true;
         };
     }, [currentStep, formData.university_id]);
-
-    useEffect(() => {
-        return () => {
-            for (const timer of subtitleTimersRef.current) {
-                window.clearTimeout(timer);
-            }
-        };
-    }, []);
 
     const suggestions = getSuggestions(currentStep, universities, groups, inputValue);
     // The step the page starts on: the group one when the university was picked for you.
@@ -232,28 +209,6 @@ export default function WelcomePage() {
         };
     }, [isInputFocused]);
 
-    function animateSubtitle(nextSubtitle) {
-        for (const timer of subtitleTimersRef.current) {
-            window.clearTimeout(timer);
-        }
-
-        subtitleTimersRef.current = [];
-        setSubtitleAnimationClass('fade-out');
-
-        const changeTimer = window.setTimeout(() => {
-            setSubtitle(nextSubtitle);
-            setSubtitleAnimationClass('fade-in');
-
-            const cleanupTimer = window.setTimeout(() => {
-                setSubtitleAnimationClass('');
-            }, 400);
-
-            subtitleTimersRef.current.push(cleanupTimer);
-        }, 300);
-
-        subtitleTimersRef.current.push(changeTimer);
-    }
-
     function flashValidationError() {
         setIsInvalid(true);
         window.setTimeout(() => setIsInvalid(false), 500);
@@ -261,7 +216,6 @@ export default function WelcomePage() {
 
     function moveToStep(stepIndex) {
         setCurrentStep(stepIndex);
-        animateSubtitle(STEPS[stepIndex].subtitle);
         setShowSuggestions(true);
     }
 
@@ -283,12 +237,12 @@ export default function WelcomePage() {
     function finishSelection(selection) {
         setIsFinishing(true);
         setShowSuggestions(false);
-        animateSubtitle('Отлично! Ищем ваше расписание...');
         saveSelection(selection);
 
+        // A breath to see the choice land in the field, then the schedule fades in.
         window.setTimeout(() => {
             navigate('/schedule', { replace: true });
-        }, 800);
+        }, 250);
     }
 
     function processValue(trimmedValue) {
@@ -386,12 +340,6 @@ export default function WelcomePage() {
             <div className="container">
                 <div className="card">
                     <h1 className="title">Найдите своё расписание</h1>
-
-                    {subtitle && (
-                        <p className={`subtitle ${subtitleAnimationClass}`} id="subtitle">
-                            {subtitle}
-                        </p>
-                    )}
 
                     <form id="scheduleForm" onSubmit={handleSubmit}>
                         <button

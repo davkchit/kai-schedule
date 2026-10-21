@@ -5,9 +5,14 @@ const {
     ADMIN_COOKIE_OPTIONS,
     JWT_SECRET
 } = require('../config');
+const { getDb } = require('../db');
+const { createSession, findLiveSession } = require('../sessions');
 const { parseCookieHeader } = require('../utils/cookies');
 
-const JWT_EXPIRES_IN = '24h';
+// The token only carries which session it is; whether that session is still
+// alive (not logged out, not revoked by a password change, not timed out) is
+// asked of the server on every request — see server/sessions.js.
+const JWT_EXPIRES_IN = '12h';
 
 function requireAuth(req, res, next) {
     const auth = getAuthFromRequest(req);
@@ -16,15 +21,24 @@ function requireAuth(req, res, next) {
         return res.status(401).json({ error: 'Требуется авторизация' });
     }
 
+    let payload;
+
     try {
-        const payload = jwt.verify(auth.token, JWT_SECRET);
-        req.admin = { id: payload.id, username: payload.username };
-        req.authTokenSource = auth.source;
-        next();
+        payload = jwt.verify(auth.token, JWT_SECRET, { algorithms: ['HS256'] });
     } catch {
         clearAdminAuthCookie(res);
         return res.status(401).json({ error: 'Недействительный или просроченный токен' });
     }
+
+    if (!findLiveSession(getDb(), payload.sid, payload.id)) {
+        clearAdminAuthCookie(res);
+        return res.status(401).json({ error: 'Сессия завершена — войдите снова' });
+    }
+
+    req.admin = { id: payload.id, username: payload.username };
+    req.sessionId = payload.sid;
+    req.authTokenSource = auth.source;
+    next();
 }
 
 function getAuthFromRequest(req) {
@@ -46,11 +60,14 @@ function getAuthFromRequest(req) {
     };
 }
 
-function createToken(admin) {
+/** Opens a new server-side session for the admin and returns its signed token. */
+function createToken(admin, meta = {}) {
+    const sid = createSession(getDb(), admin.id, meta);
+
     return jwt.sign(
-        { id: admin.id, username: admin.username },
+        { id: admin.id, username: admin.username, sid },
         JWT_SECRET,
-        { expiresIn: JWT_EXPIRES_IN }
+        { algorithm: 'HS256', expiresIn: JWT_EXPIRES_IN }
     );
 }
 

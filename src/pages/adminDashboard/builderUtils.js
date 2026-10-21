@@ -30,6 +30,8 @@ const DEFAULT_EDIT_FORM = {
     teacher: '',
     teacher_id: null,
     discipline_id: null,
+    // 'event' — линейка, кураторский час: any title, no teacher, never counted.
+    kind: 'lesson',
     subgroup: 0,
     week_type: 0,
     specific_week: '',

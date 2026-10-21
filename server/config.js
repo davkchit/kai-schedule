@@ -31,6 +31,10 @@ if (generatedDevSecret) {
 
 const JWT_SECRET = jwtSecretFromEnv || generatedDevSecret;
 const PORT = Number(process.env.PORT || 3000);
+// Behind Caddy the app needs no outside interface at all: HOST=127.0.0.1
+// keeps port 3000 off the network even if the firewall is ever changed.
+// Unset — every interface, as before.
+const HOST = (process.env.HOST || '').trim() || undefined;
 const ADMIN_COOKIE_NAME = process.env.ADMIN_COOKIE_NAME || 'kai_schedule_admin';
 // The whole campus leaves through one NAT address, so a per-IP limit counts a
 // thousand students as one visitor. The public ceiling is therefore a flood
@@ -130,7 +134,12 @@ function resolveOptionalPath(value) {
         : path.resolve(process.cwd(), value);
 }
 
+// Optional secret for the Alice webhook URL (?token=…), see routes/api.js.
+const ALICE_WEBHOOK_TOKEN = (process.env.ALICE_WEBHOOK_TOKEN || '').trim();
+
 module.exports = {
+    ALICE_WEBHOOK_TOKEN,
+    HOST,
     PORT,
     isProduction,
     JWT_SECRET,
@@ -146,7 +155,8 @@ module.exports = {
     ADMIN_COOKIE_NAME,
     ADMIN_COOKIE_OPTIONS: {
         ...baseCookieOptions,
-        maxAge: 24 * 60 * 60 * 1000
+        // The longest a session can live (server/sessions.js).
+        maxAge: 12 * 60 * 60 * 1000
     },
     ADMIN_COOKIE_CLEAR_OPTIONS: baseCookieOptions,
     getSeedAdminCredentials

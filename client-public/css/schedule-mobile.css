@@ -1,6 +1,7 @@
 /* Mobile Day View (Second View) - Mobile Only */
 @media (max-width: 768px) {
-    .mobile-day-view { display: none; flex-direction: column; padding-bottom: 100px; }
+    /* The whole screen below the header is the swipe area (useDaySwipe) — also the empty space under a short day. */
+    .mobile-day-view { display: none; flex-direction: column; padding-bottom: 100px; min-height: calc(100svh - 80px); touch-action: pan-y; }
     .day-tabs-container { margin-bottom: 24px; overflow: hidden; }
     .day-tabs { display: flex; gap: 8px; overflow-anchor: none; overflow-x: auto; overflow-y: hidden; padding: 4px 0; -webkit-overflow-scrolling: touch; scrollbar-width: none; -ms-overflow-style: none; }
     .day-tabs::-webkit-scrollbar { display: none; }
@@ -11,15 +12,30 @@
     .day-tab.active { background-color: #3B82F6; border-color: #3B82F6; }
     .day-tab.active .day-tab-name, .day-tab.active .day-tab-date { color: #ffffff; font-weight: 600; }
     .day-tab.is-today { border-color: #3B82F6; border-width: 2px; }
-    .day-content { position: relative; }
-    .day-schedule { display: none; flex-direction: column; gap: 12px; }
+    .day-content { position: relative; flex: 1; overflow-x: clip; }
+    .day-schedule { display: none; flex-direction: column; gap: 12px; will-change: transform; }
     .day-schedule.active {
         display: flex;
         animation: dayScheduleIn 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) both;
     }
+    /* Another day: in from its side — a later day from the right, an earlier
+       from the left, a swiped one from where the finger let the old one go. */
+    .day-content[data-entry="side"] .day-schedule.active {
+        animation: daySideIn 0.36s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) both;
+    }
+    /* «Сменить вид»: the view that appears settles in instead of popping. */
+    .view-enter { animation: viewEnter 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) both; }
+    @keyframes viewEnter {
+        from { opacity: 0; transform: translate3d(0, 10px, 0); }
+        to { opacity: 1; transform: none; }
+    }
     @keyframes dayScheduleIn {
         from { opacity: 0; transform: translateY(8px); }
-        to { opacity: 1; transform: translateY(0); }
+        to { opacity: 1; transform: none; }
+    }
+    @keyframes daySideIn {
+        from { opacity: var(--day-from-opacity, 0); transform: translate3d(var(--day-from, 28px), 0, 0); }
+        to { opacity: 1; transform: none; }
     }
     .mobile-class-card { background-color: #ffffff; border-radius: 16px; padding: 16px; transition: background-color 0.3s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)), box-shadow 0.25s var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     .mobile-card-time { color: #2563eb; font-weight: 600; font-size: 15px; margin-bottom: 6px; }

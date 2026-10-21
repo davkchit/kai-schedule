@@ -8,14 +8,18 @@ const { formatLocalDate, getSemesterWeekMeta, getSemesterWeekType } = require('.
 const { resolveTemplateLessons } = require('../../utils/templateResolve');
 const { joinedMemberError, scheduleGroupId } = require('../../utils/groupJoin');
 const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../../utils/slots');
+const { templateWeekForSlot } = require('../../utils/templateWeek');
+const { findAttestationsUnderLesson } = require('../../utils/attestationConflicts');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
 const { validateLessonCreateBody, validateLessonUpdateBody } = require('../../validation');
 const {
     SEMESTER_CLOSED,
     findClosedSemester,
     NO_WORKING_SEMESTER,
+    forKind,
     getClientAddress,
-    resolveTeacherDiscipline
+    resolveTeacherDiscipline,
+    weekBeyondSemesterError
 } = require('./shared');
 
 const router = express.Router();
@@ -98,7 +102,13 @@ router.post('/lessons', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
-    const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
+    const beyond = payload.is_removed ? null : weekBeyondSemesterError(semester, payload.specific_week);
+
+    if (beyond) {
+        return res.status(409).json(beyond);
+    }
+
+    const currentWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
     // teacher_id/discipline_id chosen from the dropdown are resolved to the
     // dictionary's OWN current text — the app never trusts text sent
@@ -116,6 +126,8 @@ router.post('/lessons', (req, res) => {
     } catch (error) {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
+
+    ({ identity, lessonType: payload.lesson_type } = forKind(payload.kind, identity, payload.lesson_type, payload.subject));
 
     // An edit in the template view is a new version of an existing row. It
     // must be allowed into the cell that row occupies. Nothing here needs to
@@ -145,7 +157,25 @@ router.post('/lessons', (req, res) => {
         `).all(
             semester.id, payload.group_id, payload.day_of_week, payload.time_start, payload.time_end,
             payload.subgroup, payload.week_type
-        ), templateFromWeek)[0] || null;
+        ), currentWeek)[0] || null;
+    }
+
+    // From which week a template change applies — see templateWeekForSlot.
+    // A pair moved to another cell keeps ONE occurrence in the current week:
+    // both halves start in the later of the two cells' weeks, so a Monday
+    // pair already taught is not also held on Friday, and a Friday pair moved
+    // to an already-past Monday is not lost this week.
+    let templateFromWeek = currentWeek;
+
+    if (payload.specific_week === null) {
+        const newCellWeek = templateWeekForSlot(semester, payload.day_of_week, payload.time_end);
+        const oldCellWeek = replaced ? templateWeekForSlot(semester, replaced.day_of_week, replaced.time_end) : null;
+
+        if (replaced && payload.is_removed) {
+            templateFromWeek = oldCellWeek;
+        } else {
+            templateFromWeek = Math.max(newCellWeek, oldCellWeek ?? newCellWeek);
+        }
     }
 
     // Without this, an "every week" pair could be created into a cell that
@@ -252,7 +282,7 @@ router.post('/lessons', (req, res) => {
             identity.teacherId,
             identity.disciplineId,
             payload.sort_order,
-            replaced ? replaced.kind : payload.kind,
+            payload.kind,
             semester.id
         ).lastInsertRowid;
     })();
@@ -286,7 +316,11 @@ router.post('/lessons', (req, res) => {
         }
     });
 
-    res.status(201).json({ ...created, own_weeks_ahead: ownWeeksAhead });
+    res.status(201).json({
+        ...created,
+        own_weeks_ahead: ownWeeksAhead,
+        attestation_warnings: findAttestationsUnderLesson(db, semester, created)
+    });
 });
 
 /**
@@ -333,6 +367,12 @@ router.post('/lessons/for-groups', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
+    const beyond = weekBeyondSemesterError(semester, payload.specific_week);
+
+    if (beyond) {
+        return res.status(409).json(beyond);
+    }
+
     let identity;
 
     try {
@@ -344,7 +384,12 @@ router.post('/lessons/for-groups', (req, res) => {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
 
-    const templateFromWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
+    ({ identity, lessonType: payload.lesson_type } = forKind(payload.kind, identity, payload.lesson_type, payload.subject));
+
+    // A new template pair starts next week if its day this week is already over.
+    const templateFromWeek = payload.specific_week === null
+        ? templateWeekForSlot(semester, payload.day_of_week, payload.time_end)
+        : getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
     const problems = [];
 
     for (const groupId of groupIds) {
@@ -479,6 +524,14 @@ router.put('/lessons/:id', (req, res) => {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
 
+    // The week a row belongs to is what makes that week "its own": moving the
+    // row to another week (or to null — the template) would empty one week
+    // back onto the template and hide the template of the other. Edits here
+    // stay inside the row's week; another week means a pair entered there.
+    if (updates.specific_week !== undefined && updates.specific_week !== lesson.specific_week) {
+        return res.status(409).json({ error: 'Неделю пары так менять нельзя — добавьте пару в нужной неделе, а здесь уберите' });
+    }
+
     let identity;
 
     try {
@@ -492,9 +545,15 @@ router.put('/lessons/:id', (req, res) => {
         return res.status(error.statusCode || 400).json({ error: error.message });
     }
 
+    const nextKind = updates.kind ?? lesson.kind;
+    const shaped = forKind(nextKind, identity, updates.lesson_type !== undefined ? updates.lesson_type : lesson.lesson_type, updates.subject !== undefined ? updates.subject : lesson.subject);
+    identity = shaped.identity;
+
     const nextLesson = {
         ...lesson,
         ...updates,
+        kind: nextKind,
+        lesson_type: shaped.lessonType,
         teacher: identity.teacher,
         teacher_id: identity.teacherId,
         subject: identity.discipline,
@@ -539,6 +598,7 @@ router.put('/lessons/:id', (req, res) => {
             teacher_id = ?,
             discipline_id = ?,
             sort_order = ?,
+            kind = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
     `).run(
@@ -555,6 +615,7 @@ router.put('/lessons/:id', (req, res) => {
         nextLesson.teacher_id,
         nextLesson.discipline_id,
         nextLesson.sort_order,
+        nextLesson.kind,
         lessonId
     );
 
@@ -594,7 +655,8 @@ router.put('/lessons/:id', (req, res) => {
             }
         }
     });
-    res.json(updated);
+    const lessonSemester = getSemesterById(db, updated.semester_id);
+    res.json({ ...updated, attestation_warnings: lessonSemester ? findAttestationsUnderLesson(db, lessonSemester, updated) : [] });
 });
 
 router.delete('/lessons/:id', (req, res) => {
@@ -620,7 +682,11 @@ router.delete('/lessons/:id', (req, res) => {
     // February looked brand new (spring week 1) and was hard-deleted — taking
     // every autumn week it had run in, and those hours, with it.
     const semester = getSemesterById(db, lesson.semester_id) || getActiveSemester(db);
-    const currentWeek = semester ? getSemesterWeekMeta(semester, formatLocalDate()).weekNumber : 1;
+    // For a template row: if its pair this week has already been held, it is
+    // retired from next week, so that pair (and its hours) stays.
+    const currentWeek = !semester ? 1 : lesson.specific_week === null
+        ? templateWeekForSlot(semester, lesson.day_of_week, lesson.time_end)
+        : getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
 
     // A template row that has already been live in earlier weeks is retired
     // with a tombstone from this week forward, never erased: hard-deleting it

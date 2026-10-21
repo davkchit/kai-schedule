@@ -8,6 +8,26 @@ html, body, #root {
     --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Moving between pages (group choice → schedule, teacher page, admin) the new
+   page eases in rather than snapping, so the app reads as one piece. Opacity
+   only: a transform here would make this wrapper the containing block of every
+   position: fixed sheet, menu and toast inside it while the fade runs. */
+#root > * {
+    animation: pageIn 0.28s var(--ease-spring) both;
+}
+
+@keyframes pageIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* The theme switch (lib/theme.js) as one cross-fade of the whole page. */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 0.32s;
+    animation-timing-function: var(--ease-spring);
+}
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         animation-duration: 0.001ms !important;

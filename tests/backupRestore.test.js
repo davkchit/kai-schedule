@@ -28,7 +28,11 @@ test('backup → mistake → restore, and refusing files that would break the ap
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     t.after(() => new Promise((resolve) => server.close(() => { closeDb(); resolve(); })));
 
-    const auth = { Authorization: `Bearer ${createToken({ id: admin.id, username: admin.username })}` };
+    // A restore ends every session saved in either database (old ones must not
+    // come back to life); the browser gets a fresh cookie, a script a new token.
+    const auth = {};
+    const login = () => { auth.Authorization = `Bearer ${createToken({ id: admin.id, username: admin.username })}`; };
+    login();
     const post = async (url, body, headers = {}) => {
         const response = await fetch(`${baseUrl}${url}`, { method: 'POST', headers: { ...auth, ...headers }, body });
         return { status: response.status, data: await response.json() };
@@ -54,6 +58,8 @@ test('backup → mistake → restore, and refusing files that would break the ap
     const restored = await post(`/api/admin/backups/${encodeURIComponent(backupName)}/restore`);
     assert.equal(restored.status, 200, JSON.stringify(restored.data));
     assert.deepEqual(counts(), original, 'the deleted group and its lessons are back');
+    assert.equal((await post('/api/admin/backups')).status, 401, 'the session from before the restore is over');
+    login();
 
     // The state being replaced was kept, so a wrong restore is itself undoable.
     const safety = new Database(path.join(process.env.BACKUPS_DIR, restored.data.safety_backup), { readonly: true });

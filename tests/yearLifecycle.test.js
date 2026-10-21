@@ -141,10 +141,12 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         lesson_id: l2.id, mode: 'template', day_of_week: 4, time_start: '09:40', time_end: '11:10'
     });
 
-    // Early November (week 10): L1 is dropped for the rest of the semester.
+    // Early November (week 10, a Wednesday): L1 is dropped for the rest of the
+    // semester. This week's Monday L1 has already been held, so it stays: the
+    // retirement starts with week 11.
     at('2026-11-04T12:00:00');
     const retired = await ok('DELETE', `/api/admin/lessons/${l1.id}`);
-    assert.equal(retired.retired_from_week, 10, 'an already-live pair is retired, not erased');
+    assert.equal(retired.retired_from_week, 11, 'an already-live pair is retired, not erased — and not this week\'s held Monday');
 
     assert.deepEqual(await studentSees(['2026-09-02', '2026-09-09', '2026-10-19', '2026-10-22', '2026-10-26', '2026-11-09']), {
         '2026-09-02': [], // week 1 (чётная): no L2
@@ -155,10 +157,10 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         '2026-11-09': [] // week 11 Monday: L1 retired
     });
 
-    // After the semester: L1 weeks 1–8 (9 cancelled, retired from 10) = 8 pairs;
-    // L2 weeks 2, 4, 6 on Wed + 8…18 even on Thu = 9 pairs. 17 × 2 h.
+    // After the semester: L1 weeks 1–8 and 10 (9 cancelled, retired from 11) = 9 pairs;
+    // L2 weeks 2, 4, 6 on Wed + 8…18 even on Thu = 9 pairs. 18 × 2 h.
     at('2027-01-15T12:00:00');
-    const AUTUMN_TOTAL = 34;
+    const AUTUMN_TOTAL = 36;
     assert.equal(await planHours(autumn.id, autumnPlan.id), AUTUMN_TOTAL);
 
     // Сессия: past week 18 the template no longer shows (week 20 Thursday would be L2).
@@ -171,6 +173,14 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     assert.equal(spring.start_date, '2027-02-08');
     const beforeActivation = await ok('GET', '/api/admin/settings');
     assert.equal(beforeActivation.active_semester.id, autumn.id, 'creating a semester does not switch the working one');
+
+    // A semester starting inside another's teaching weeks would take those
+    // weeks over for students; the gap after the last week stays the earlier one's.
+    assert.equal((await call('POST', '/api/admin/semesters', { label: 'Опечатка', start_date: '2026-10-05', weeks_count: 18 })).status, 409);
+    assert.equal((await call('PUT', `/api/admin/semesters/${spring.id}`, { start_date: '2026-12-28' })).status, 409, 'moved into autumn');
+    assert.equal((await call('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 24 })).status, 409, 'autumn stretched into spring');
+    await ok('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 23 }); // ends the day before spring
+    await ok('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 18 });
 
     await ok('PUT', `/api/admin/semesters/${spring.id}`, { is_active: true });
     assert.equal(await planHours(autumn.id, autumnPlan.id), AUTUMN_TOTAL, 'activating spring leaves autumn hours alone');

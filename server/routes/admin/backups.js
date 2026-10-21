@@ -13,6 +13,7 @@ const {
     saveUploadedBackup
 } = require('../../backups');
 const { getDb } = require('../../db');
+const { clearAdminAuthCookie, createToken, setAdminAuthCookie } = require('../../middleware/auth');
 const { getClientAddress } = require('./shared');
 
 const router = express.Router();
@@ -64,9 +65,13 @@ router.get('/backups/:fileName/download', async (req, res) => {
 });
 
 function respondRestored(req, res, result, source) {
+    const db = getDb();
+    // The restored file has its own admins: the one restoring may not exist there.
+    const admin = db.prepare('SELECT id, username FROM admins WHERE id = ?').get(req.admin.id);
+
     // The audit row goes into the restored database — the one that stays.
-    writeAuditLog(getDb(), {
-        adminId: req.admin.id,
+    writeAuditLog(db, {
+        adminId: admin ? admin.id : null,
         action: 'backup.restore',
         entityType: 'database_backup',
         entityId: source,
@@ -74,7 +79,18 @@ function respondRestored(req, res, result, source) {
         details: { source, ...result }
     });
 
-    res.json({ success: true, ...result });
+    // Sessions saved in an old copy may include ones ended since (a logout, a
+    // password change): none of them survive a restore. The admin doing it
+    // keeps working here if the copy still has their account.
+    db.prepare('DELETE FROM admin_sessions').run();
+
+    if (admin) {
+        setAdminAuthCookie(res, createToken(admin, { ip: getClientAddress(req), userAgent: req.get('user-agent') }));
+    } else {
+        clearAdminAuthCookie(res);
+    }
+
+    res.json({ success: true, ...result, relogin: !admin });
 }
 
 router.post('/backups/:fileName/restore', async (req, res) => {

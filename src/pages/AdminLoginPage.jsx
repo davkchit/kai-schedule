@@ -3,6 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import AuroraBackground from '../components/AuroraBackground';
 import usePageAssets from '../hooks/usePageAssets';
 
+function formatWait(seconds) {
+    return seconds < 60 ? `${seconds} с` : `${Math.ceil(seconds / 60)} мин`;
+}
+
 export default function AdminLoginPage() {
     const isAssetsReady = usePageAssets({
         title: 'Вход для администратора',
@@ -15,6 +19,9 @@ export default function AdminLoginPage() {
     const [password, setPassword] = useState('');
     const [errorMessage, setErrorMessage] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    // Set after a right password when the second factor is on: the code step.
+    const [ticket, setTicket] = useState(null);
+    const [code, setCode] = useState('');
 
     useEffect(() => {
         let ignore = false;
@@ -45,25 +52,45 @@ export default function AdminLoginPage() {
         setErrorMessage('');
 
         try {
-            const response = await fetch('/api/admin/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    username: login,
-                    password
+            const response = ticket
+                ? await fetch('/api/admin/login/second-factor', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticket, code })
                 })
-            });
+                : await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: login,
+                        password
+                    })
+                });
 
             const data = await response.json();
+
+            if (response.ok && data.needs_second_factor) {
+                setTicket(data.ticket);
+                setCode('');
+                return;
+            }
 
             if (response.ok) {
                 navigate('/admin/dashboard', { replace: true });
                 return;
             }
 
-            setErrorMessage(data.error || 'Неправильный логин или пароль');
+            if (data.restart) {
+                // The five minutes for the code ran out: start over from the password.
+                setTicket(null);
+                setPassword('');
+            }
+
+            setErrorMessage(data.retry_after_sec
+                ? `${data.error} Подождите ${formatWait(data.retry_after_sec)}.`
+                : (data.error || 'Неправильный логин или пароль'));
         } catch {
             setErrorMessage('Ошибка сервера');
         } finally {
@@ -85,6 +112,27 @@ export default function AdminLoginPage() {
                 <div className="card">
                     <h1 className="title">Вход для<br />администратора</h1>
                     <form id="adminForm" className="login-form" onSubmit={handleSubmit}>
+                        {ticket ? (
+                            <div className="input-group">
+                                <p className="login-hint">Введите 6 цифр из приложения-аутентификатора. Нет телефона — введите резервный код.</p>
+                                <input
+                                    type="text"
+                                    id="codeInput"
+                                    className="search-input admin-input"
+                                    placeholder="Код"
+                                    autoComplete="one-time-code"
+                                    inputMode="text"
+                                    autoFocus
+                                    required
+                                    value={code}
+                                    onChange={(event) => {
+                                        setCode(event.target.value);
+                                        setErrorMessage('');
+                                    }}
+                                />
+                            </div>
+                        ) : (
+                        <>
                         <div className="input-group">
                             <input
                                 type="text"
@@ -115,6 +163,8 @@ export default function AdminLoginPage() {
                                 }}
                             />
                         </div>
+                        </>
+                        )}
                         <div
                             id="errorMessage"
                             className="error-message"
@@ -123,8 +173,13 @@ export default function AdminLoginPage() {
                             {errorMessage}
                         </div>
                         <button type="submit" className="ui-btn ui-btn--primary ui-btn--lg login-submit" disabled={isSubmitting}>
-                            {isSubmitting ? 'Вход...' : 'Войти'}
+                            {isSubmitting ? 'Вход...' : (ticket ? 'Подтвердить' : 'Войти')}
                         </button>
+                        {ticket && (
+                            <button type="button" className="ui-btn ui-btn--ghost login-back" onClick={() => { setTicket(null); setPassword(''); setErrorMessage(''); }}>
+                                Назад
+                            </button>
+                        )}
                     </form>
                 </div>
             </div>

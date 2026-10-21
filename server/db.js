@@ -228,6 +228,16 @@ function initTables() {
             updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- One row per admin login; the session cookie names it (server/sessions.js).
+        CREATE TABLE IF NOT EXISTS admin_sessions (
+            id           TEXT PRIMARY KEY,
+            admin_id     INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+            created_at   INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            ip_address   TEXT,
+            user_agent   TEXT
+        );
+
         -- Teaching-load tracking (independent of the schedule's own
         -- semester_start_date setting — see the comment on semesters below).
 
@@ -371,6 +381,7 @@ function initTables() {
     migrateSemesterScoping();
     migrateSemesterClosing();
     migrateLessonsTeacherDiscipline();
+    migrateAdminTotp();
     runDataFixOnce('joint_lecture_rooms', clearRoomsHoldingTheWholeCell);
     runDataFixOnce('joint_lectures_second_group', restoreJointLecturesForSecondGroup);
     runDataFixOnce('unlabelled_rooms_23301_23401', fillUnlabelledImportedRooms);
@@ -704,6 +715,35 @@ function fillUnlabelledImportedRooms() {
  * a fresh calculation — the figures went into a signed report, and a later
  * correction to an old pair must not silently rewrite them.
  */
+/**
+ * The second factor (server/utils/totp.js): an encrypted secret per admin, a
+ * pending one while it is being set up, the last step used (a code works
+ * once), and one-time recovery codes stored as hashes.
+ */
+function migrateAdminTotp() {
+    const columns = new Set(db.prepare('PRAGMA table_info(admins)').all().map((column) => column.name));
+
+    for (const [name, type] of [
+        ['totp_secret', 'TEXT DEFAULT NULL'],
+        ['totp_pending_secret', 'TEXT DEFAULT NULL'],
+        ['totp_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+        ['totp_last_step', 'INTEGER DEFAULT NULL']
+    ]) {
+        if (!columns.has(name)) {
+            db.exec(`ALTER TABLE admins ADD COLUMN ${name} ${type}`);
+        }
+    }
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS admin_recovery_codes (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_id  INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+            code_hash TEXT NOT NULL,
+            used_at   INTEGER DEFAULT NULL
+        );
+    `);
+}
+
 function migrateSemesterClosing() {
     try {
         db.exec('ALTER TABLE semesters ADD COLUMN closed_at TEXT DEFAULT NULL');

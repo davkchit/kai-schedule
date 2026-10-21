@@ -52,7 +52,18 @@ export function chooseTheme(theme) {
         // Storage unavailable: the choice still applies until the page closes.
     }
 
-    applyTheme();
+    // The whole page eases from one theme to the other in one composited
+    // cross-fade, instead of some parts flipping at once while others fade —
+    // an abrupt brightness jump is exactly what a theme switch must not do.
+    // Browsers without View Transitions (or with reduced motion asked for)
+    // just switch.
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+    if (document.startViewTransition && !reduceMotion) {
+        document.startViewTransition(applyTheme);
+    } else {
+        applyTheme();
+    }
 }
 
 /** Re-applies the theme when the system switches and nothing was chosen. */

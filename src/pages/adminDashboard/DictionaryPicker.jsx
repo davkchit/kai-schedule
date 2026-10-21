@@ -12,8 +12,12 @@ import { useEffect, useRef, useState } from 'react';
 // match (case-insensitive) is picked automatically, anything else is kept as
 // plain text with no id — same as before, just untracked — rather than
 // silently reverting to whatever was selected before this edit.
+//
+// listOnly: typing only searches. A value is what was picked from the list
+// (or typed exactly as a list entry); anything else is dropped on blur, so a
+// pair can never carry a misspelt subject or teacher that counts for nobody.
 export default function DictionaryPicker({
-    id, label, placeholder, options, valueId, valueText, onChange, onCreate,
+    id, label, placeholder, options, valueId, valueText, onChange, onCreate, listOnly = false,
     untrackedHint = 'Часы по этой паре не посчитаются, пока не выбрано из списка'
 }) {
     const [query, setQuery] = useState(valueText || '');
@@ -72,25 +76,35 @@ export default function DictionaryPicker({
         // A click on an option or "add new" fires its own mousedown (with
         // preventDefault, so this blur never even happens for those); this is
         // only reached by tabbing or clicking elsewhere with no pick made.
-        window.setTimeout(() => {
-            const trimmed = query.trim();
+        // Resolved right away, not after a delay: the blur of a click on the
+        // form's «Добавить» comes just before its submit, and a delayed
+        // resolve lost the typed text — «Предмет не должно быть пустым».
+        const trimmed = query.trim();
 
-            if (!trimmed) {
-                if (valueId !== null || (valueText || '') !== '') onChange(null);
-                return;
-            }
+        if (!trimmed) {
+            if (valueId !== null || (valueText || '') !== '') onChange(null);
+            return;
+        }
 
-            if (exactMatch) {
-                if (exactMatch.id !== valueId) pick(exactMatch);
-                return;
-            }
+        if (exactMatch) {
+            if (exactMatch.id !== valueId) pick(exactMatch);
+            return;
+        }
 
-            // No match: keep it as plain text, same as typing always used to
-            // work — just with no id, so it won't be matched for hours.
-            if (valueId !== null || trimmed !== (valueText || '')) {
-                onChange({ id: null, label: trimmed });
+        if (listOnly) {
+            // Not a list entry: back to what was picked before, or empty.
+            setQuery(valueId !== null && valueId !== undefined ? valueText || '' : '');
+            if (valueId === null || valueId === undefined) {
+                if ((valueText || '') !== '') onChange(null);
             }
-        }, 150);
+            return;
+        }
+
+        // No match: keep it as plain text, same as typing always used to
+        // work — just with no id, so it won't be matched for hours.
+        if (valueId !== null || trimmed !== (valueText || '')) {
+            onChange({ id: null, label: trimmed });
+        }
     }
 
     return (
@@ -112,7 +126,9 @@ export default function DictionaryPicker({
             />
             {!valueId && (
                 <span className="dict-picker-hint">
-                    {query.trim() ? untrackedHint : 'Начните вводить имя'}
+                    {listOnly
+                        ? 'Начните вводить и выберите из списка'
+                        : (query.trim() ? untrackedHint : 'Начните вводить имя')}
                 </span>
             )}
             {isOpen && (

@@ -21,8 +21,9 @@ function mapSemesterRow(row) {
  * and semesters.start_date anchors the dates the hour counter walks. They are
  * the same real-world fact, so letting them drift apart means the schedule and
  * the hours silently count by different week numbering — a teacher's total
- * would stop matching the timetable it was derived from. Every write to either
- * one goes through here so they move together.
+ * would stop matching the timetable it was derived from. The semester is the
+ * only place the date is edited (Settings no longer offers it: there it moved
+ * every week with no preview, closed semesters included); the setting follows.
  */
 function syncSemesterStartDate(db, startDate) {
     db.prepare(`
@@ -55,6 +56,37 @@ function findClosedSemester(db, semesterId) {
     const semester = db.prepare('SELECT id, label, closed_at FROM semesters WHERE id = ?').get(semesterId);
 
     return semester && semester.closed_at ? semester : null;
+}
+
+/**
+ * An event (линейка, кураторский час) is shown but is nobody's teaching: it
+ * keeps only its title, never a teacher, discipline or type, whatever the
+ * client sent — so it can never match a plan row and count.
+ */
+function forKind(kind, identity, lessonType, title) {
+    return kind === 'event'
+        ? { identity: { teacherId: null, teacher: null, disciplineId: null, discipline: title }, lessonType: null }
+        : { identity, lessonType };
+}
+
+/**
+ * Refusal body for a pair placed in a week after the semester's last one, or
+ * null. Students would see such a pair while the hour counter (weeks 1 to
+ * weeks_count) silently skipped it; the constructor answers this by offering
+ * to extend the semester to that week, after which the pair counts.
+ */
+function weekBeyondSemesterError(semester, weekNumber) {
+    if (weekNumber === null || weekNumber === undefined || !Number.isInteger(semester.weeks_count) || weekNumber <= semester.weeks_count) {
+        return null;
+    }
+
+    return {
+        error: `Это ${weekNumber}-я неделя, а семестр «${semester.label}» — до ${semester.weeks_count}-й. Пара после последней недели не засчитывалась бы в часы: сначала продлите семестр.`,
+        needs_extension: true,
+        semester_id: semester.id,
+        weeks_count: semester.weeks_count,
+        weeks_needed: weekNumber
+    };
 }
 
 const NO_WORKING_SEMESTER = 'Сначала создайте семестр в разделе «Нагрузка» — расписание ведётся внутри семестра';
@@ -108,7 +140,9 @@ module.exports = {
     syncSemesterStartDate,
     SEMESTER_CLOSED,
     findClosedSemester,
+    forKind,
     NO_WORKING_SEMESTER,
     getClientAddress,
-    resolveTeacherDiscipline
+    resolveTeacherDiscipline,
+    weekBeyondSemesterError
 };

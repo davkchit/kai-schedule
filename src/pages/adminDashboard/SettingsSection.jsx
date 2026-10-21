@@ -5,6 +5,7 @@ import { getCourseFromGroupName } from './builderUtils';
 // value and handler comes from the page as a prop of the same name.
 export default function SettingsSection({
     activeSection,
+    children,
     directorName,
     directorTitle,
     groupDirectionDrafts,
@@ -18,7 +19,6 @@ export default function SettingsSection({
     newGroupName,
     newGroupUniversityId,
     saveSettings,
-    semesterStartDate,
     setDirectorName,
     setDirectorTitle,
     setGroupDirectionDrafts,
@@ -26,7 +26,6 @@ export default function SettingsSection({
     setNewGroupJoinedTo,
     setNewGroupName,
     setNewGroupUniversityId,
-    setSemesterStartDate,
     setStudyForm,
     settingsStatus,
     studyForm,
@@ -37,15 +36,8 @@ export default function SettingsSection({
             <h2 className="section-title">Настройки</h2>
             <div className="settings-form">
                 <div className="setting-row">
-                    <label htmlFor="semesterStart">Дата начала семестра</label>
-                    <p className="setting-hint">Используется для расчёта чётной/нечётной недели</p>
-                    <input
-                        type="date"
-                        id="semesterStart"
-                        className="setting-input"
-                        value={semesterStartDate}
-                        onChange={(event) => setSemesterStartDate(event.target.value)}
-                    />
+                    <label>Семестр</label>
+                    <p className="setting-hint">Дата начала, число недель и чётность меняются в разделе «Нагрузка» — там видно, как это повлияет на часы.</p>
                 </div>
                 <div className="setting-row">
                     <label htmlFor="studyForm">Форма обучения</label>
@@ -204,6 +196,8 @@ export default function SettingsSection({
                     <p className="empty-message">Групп пока нет</p>
                 )}
             </div>
+
+            {children}
         </section>
     );
 }

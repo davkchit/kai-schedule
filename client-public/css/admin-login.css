@@ -20,6 +20,24 @@
     width: 100%;
 }
 
+/* The second-factor step: what to type, and the way back to the password. */
+.login-hint {
+    margin: 0 0 10px;
+    color: #475569;
+    font-size: 14px;
+    line-height: 1.4;
+    text-align: left;
+}
+
+[data-theme="dark"] .login-hint {
+    color: #cbd5e1;
+}
+
+.login-back {
+    margin-top: 6px;
+    width: 100%;
+}
+
 .error-message {
     display: none;
     margin: -4px 0 0;

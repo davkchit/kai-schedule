@@ -233,7 +233,7 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
             {builderMode === 'week' && builderWeekNumber !== null && selectedGroupId && builderWeekMaterialized && (
                 <div className="builder-export-row">
                     <button type="button" className="btn btn-delete" onClick={handleClearWeek}>
-                        Очистить и вернуть к шаблону
+                        Очистить неделю
                     </button>
                 </div>
             )}
@@ -246,7 +246,7 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
 
             {builderMode === 'template' && (
                 <p className="builder-hint">
-                    Изменения в шаблоне вступают в силу с текущей недели. Уже прошедшие недели останутся такими, какими были показаны.
+                    Изменения в шаблоне вступают в силу с текущей недели, а если пара в этой ячейке на этой неделе уже прошла — со следующей. Прошедшие пары останутся такими, какими были показаны.
                 </p>
             )}
 

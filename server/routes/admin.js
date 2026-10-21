@@ -1,5 +1,8 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../config');
+const { checkSecondFactor } = require('../secondFactor');
 const { writeAuditLog } = require('../audit');
 const { getDb } = require('../db');
 const {
@@ -12,10 +15,16 @@ const { ensureCsrfToken, requireCsrf } = require('../middleware/csrf');
 const { clearFailedLoginAttempts, getRateLimitInfo, registerFailedLogin } = require('../login-rate-limit');
 const { validateLoginBody } = require('../validation');
 const { getClientAddress } = require('./admin/shared');
+const { deleteSession } = require('../sessions');
+
+// bcrypt hash of a random string nobody knows, compared against when the
+// username does not exist (see /login).
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(require('crypto').randomBytes(16).toString('hex'), 10);
 
 const accountRoutes = require('./admin/account');
 const groupsRoutes = require('./admin/groups');
 const scheduleRoutes = require('./admin/schedule');
+const scheduleWeekRoutes = require('./admin/scheduleWeek');
 const lessonsRoutes = require('./admin/lessons');
 const settingsRoutes = require('./admin/settings');
 const backupsRoutes = require('./admin/backups');
@@ -36,7 +45,7 @@ router.post('/login', (req, res) => {
     }
 
     const clientKey = getClientAddress(req);
-    const rateLimitInfo = getRateLimitInfo(clientKey);
+    const rateLimitInfo = getRateLimitInfo(clientKey, credentials.username);
 
     if (rateLimitInfo.isBlocked) {
         return res.status(429).json({
@@ -47,31 +56,108 @@ router.post('/login', (req, res) => {
 
     const db = getDb();
     const admin = db.prepare('SELECT * FROM admins WHERE username = ?').get(credentials.username);
+    // A missing account still costs one bcrypt comparison, so the answer
+    // time does not tell whether the username exists.
+    const passwordOk = bcrypt.compareSync(credentials.password, admin ? admin.password_hash : DUMMY_PASSWORD_HASH);
 
-    if (!admin || !bcrypt.compareSync(credentials.password, admin.password_hash)) {
-        registerFailedLogin(clientKey);
+    if (!admin || !passwordOk) {
+        registerFailedLogin(clientKey, credentials.username);
+        writeAuditLog(db, {
+            adminId: null,
+            action: 'login.failed',
+            entityType: 'admin_session',
+            entityId: null,
+            ipAddress: clientKey,
+            details: { username: credentials.username.slice(0, 100) }
+        });
         return res.status(401).json({ error: 'Неправильный логин или пароль' });
     }
 
-    clearFailedLoginAttempts(clientKey);
+    // With the second factor on, the right password only earns a short-lived
+    // ticket for the code step; no session yet, and the failure counters stay
+    // until the whole login succeeds.
+    if (admin.totp_enabled) {
+        const ticket = jwt.sign({ id: admin.id, purpose: 'second_factor' }, JWT_SECRET, { algorithm: 'HS256', expiresIn: '5m' });
+        res.set('Cache-Control', 'no-store');
+        return res.json({ needs_second_factor: true, ticket });
+    }
 
-    const token = createToken(admin);
+    completeLogin(req, res, db, admin, 'password');
+});
+
+router.post('/login/second-factor', (req, res) => {
+    const clientKey = getClientAddress(req);
+    const db = getDb();
+    let ticket;
+
+    try {
+        ticket = jwt.verify(String(req.body?.ticket || ''), JWT_SECRET, { algorithms: ['HS256'] });
+    } catch {
+        return res.status(401).json({ error: 'Время на ввод кода вышло — войдите снова', restart: true });
+    }
+
+    const admin = ticket.purpose === 'second_factor' ? db.prepare('SELECT * FROM admins WHERE id = ?').get(ticket.id) : null;
+
+    if (!admin || !admin.totp_enabled) {
+        return res.status(401).json({ error: 'Войдите снова', restart: true });
+    }
+
+    const rateLimitInfo = getRateLimitInfo(clientKey, admin.username);
+
+    if (rateLimitInfo.isBlocked) {
+        return res.status(429).json({
+            error: 'Слишком много попыток входа. Попробуйте позже.',
+            retry_after_sec: Math.ceil(rateLimitInfo.retryAfterMs / 1000)
+        });
+    }
+
+    const result = checkSecondFactor(db, admin, req.body?.code);
+
+    if (!result.ok) {
+        registerFailedLogin(clientKey, admin.username);
+        writeAuditLog(db, {
+            adminId: admin.id,
+            action: 'login.failed',
+            entityType: 'admin_session',
+            entityId: admin.id,
+            ipAddress: clientKey,
+            details: { username: admin.username, stage: 'second_factor' }
+        });
+
+        return res.status(401).json({
+            error: result.unreadable
+                ? 'Код из приложения не читается на этом сервере — войдите резервным кодом или сбросьте второй фактор на сервере'
+                : 'Неверный код'
+        });
+    }
+
+    completeLogin(req, res, db, admin, result.method);
+});
+
+function completeLogin(req, res, db, admin, method) {
+    const clientKey = getClientAddress(req);
+    clearFailedLoginAttempts(clientKey, admin.username);
+
+    const token = createToken(admin, { ip: clientKey, userAgent: req.get('user-agent') });
     setAdminAuthCookie(res, token);
     writeAuditLog(db, {
         adminId: admin.id,
-        action: 'login.success',
+        action: method === 'recovery' ? 'login.recovery_code' : 'login.success',
         entityType: 'admin_session',
         entityId: admin.id,
         ipAddress: clientKey,
         details: {
-            username: admin.username
+            username: admin.username,
+            method
         }
     });
     res.set('Cache-Control', 'no-store');
     res.json({ success: true, username: admin.username });
-});
+}
 
 router.post('/logout', requireAuth, requireCsrf, (req, res) => {
+    // The session itself ends, not just this browser's cookie.
+    deleteSession(getDb(), req.sessionId);
     clearAdminAuthCookie(res);
     res.set('Cache-Control', 'no-store');
     res.json({ success: true });
@@ -97,6 +183,7 @@ router.use(requireCsrf);
 router.use(accountRoutes);
 router.use(groupsRoutes);
 router.use(scheduleRoutes);
+router.use(scheduleWeekRoutes);
 router.use(lessonsRoutes);
 router.use(settingsRoutes);
 router.use(backupsRoutes);

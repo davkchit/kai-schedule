@@ -1,4 +1,4 @@
-const { PORT } = require('./config');
+const { HOST, PORT } = require('./config');
 const { createApp } = require('./app');
 const { getDb, getDbPath } = require('./db');
 const { startDailyBackups } = require('./autoBackup');
@@ -21,7 +21,7 @@ if (require.main === module) {
 
     startDailyBackups(getDb, getDbPath);
 
-    app.listen(PORT, () => {
+    app.listen(PORT, HOST, () => {
         console.log(`KAI Schedule server running at http://localhost:${PORT}`);
         console.log(`Schedule:  http://localhost:${PORT}/`);
         console.log(`Admin:     http://localhost:${PORT}/admin`);

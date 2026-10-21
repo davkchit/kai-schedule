@@ -3,7 +3,7 @@ const rateLimit = require('express-rate-limit');
 const fs = require('fs');
 const path = require('path');
 const { ensureAdminAccessAllowed } = require('./access-control');
-const { ADMIN_RATE_LIMIT_MAX, API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS, TRUST_PROXY } = require('./config');
+const { ADMIN_RATE_LIMIT_MAX, API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS, TRUST_PROXY, isProduction } = require('./config');
 const { getDb } = require('./db');
 const { notify } = require('./alerts');
 const { getActiveSemester } = require('./utils/semesters');
@@ -29,6 +29,13 @@ function createApp() {
         res.setHeader('Referrer-Policy', 'no-referrer');
         res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
         res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+
+        // HTTPS only from here on: a browser that once saw the site never
+        // lets itself be talked into plain HTTP (a café Wi-Fi stripping TLS).
+        if (isProduction) {
+            res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        }
         res.setHeader(
             'Content-Security-Policy',
             [
@@ -52,7 +59,10 @@ function createApp() {
         next();
     });
 
-    app.use(express.json({ limit: '5mb' }));
+    // Public endpoints take tiny bodies (only the error report); the admin's
+    // largest JSON is a whole-branch schedule upload.
+    app.use('/api/admin', express.json({ limit: '2mb' }));
+    app.use(express.json({ limit: '16kb' }));
 
     // Deliberately before the rate limiter and before every route: an uptime
     // monitor has to be able to ask "are you alive?" even while the server is
@@ -93,6 +103,16 @@ function createApp() {
     app.use('/api/admin', rateLimit({
         windowMs: API_RATE_LIMIT_WINDOW_MS,
         limit: ADMIN_RATE_LIMIT_MAX,
+        standardHeaders: 'draft-7',
+        legacyHeaders: false,
+        message: { error: 'Слишком много запросов. Попробуйте позже.' }
+    }));
+
+    // Anyone can post an error report, and each one goes to the alert
+    // webhook: a handful a minute per address is plenty for real crashes.
+    app.use('/api/client-error', rateLimit({
+        windowMs: API_RATE_LIMIT_WINDOW_MS,
+        limit: 10,
         standardHeaders: 'draft-7',
         legacyHeaders: false,
         message: { error: 'Слишком много запросов. Попробуйте позже.' }
