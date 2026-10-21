@@ -102,6 +102,27 @@ function joinGroup(db, memberId, leaderId) {
         }
     }
 
+    // Once joined, a plan row naming the member counts the leader's pairs. If
+    // the leader has its own row for the same teaching (teacher, discipline,
+    // type, subgroup, semester), both rows would count every shared pair —
+    // the hours twice. They are one stream: merge them on the load page first.
+    const groupsOf = `(SELECT group_id FROM load_plan WHERE id = p.id UNION SELECT group_id FROM load_plan_extra_groups WHERE plan_id = p.id)`;
+    const twin = db.prepare(`
+        SELECT t.full_name AS teacher, d.name AS discipline, p.lesson_type
+        FROM load_plan p
+        JOIN load_plan q ON q.id != p.id AND q.semester_id = p.semester_id AND q.teacher_id = p.teacher_id
+            AND q.discipline_id = p.discipline_id AND q.lesson_type = p.lesson_type AND q.subgroup = p.subgroup
+        LEFT JOIN teachers t ON t.id = p.teacher_id
+        LEFT JOIN disciplines d ON d.id = p.discipline_id
+        WHERE ? IN ${groupsOf}
+          AND ? IN (SELECT group_id FROM load_plan WHERE id = q.id UNION SELECT group_id FROM load_plan_extra_groups WHERE plan_id = q.id)
+        LIMIT 1
+    `).get(memberId, leaderId);
+
+    if (twin) {
+        throw fail(`В плане нагрузки у ${member.name} и ${leader.name} отдельные строки «${twin.discipline}, ${twin.lesson_type}, ${twin.teacher}» — сначала объедините их в поток (Нагрузка), иначе часы посчитаются дважды`);
+    }
+
     db.transaction(() => {
         db.prepare('DELETE FROM lessons WHERE group_id = ?').run(memberId);
         // Exams and consultations move to the leader too; the ones it already

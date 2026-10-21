@@ -155,6 +155,28 @@ test('guessing is slowed per login and per address, never forever, and an unknow
     resetAttempts();
 });
 
+test('strangers failing on purpose cannot lock the specialist out of a browser she has logged in from', async () => {
+    resetAttempts();
+    const office = browser();
+    assert.equal((await office.login()).status, 200, 'the office browser gets its device mark');
+
+    const attacker = browser();
+    for (let i = 0; i < 10; i += 1) await attacker.login('wrong password');
+    assert.equal((await attacker.login()).status, 429, 'the login is paused for unknown browsers');
+    assert.equal((await browser().login()).status, 429, 'a new browser waits too');
+    assert.equal((await office.login()).status, 200, 'the office browser still gets in');
+
+    // The mark is for one login and cannot be made up.
+    const forged = browser();
+    const otherLogin = await forged.call('POST', '/api/admin/login', { username: 'zhenya', password: PASSWORD }, { Cookie: 'kai_device=not-a-real-mark' });
+    assert.equal(otherLogin.status, 429);
+
+    // A marked browser that keeps failing pauses itself.
+    for (let i = 0; i < 5; i += 1) await office.login('wrong password');
+    assert.equal((await office.login()).status, 429);
+    resetAttempts();
+});
+
 test('second factor: set up with the password and a code, then the login asks for it; codes and recovery codes work once', async () => {
     resetAttempts();
     const owner = browser();

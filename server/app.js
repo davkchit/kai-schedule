@@ -151,6 +151,13 @@ function createApp() {
             return next(error);
         }
 
+        // A request the client got wrong (a body over the limit — 413, an
+        // unreadable one — 400…) is the client's error, not a server crash: no alert.
+        const status = error.status || error.statusCode;
+        if (Number.isInteger(status) && status >= 400 && status < 500) {
+            return res.status(status).json({ error: status === 413 ? 'Слишком большой запрос' : 'Некорректный запрос' });
+        }
+
         console.error('Unhandled server error:', error);
         notify(`Ошибка 500 на ${req.method} ${req.originalUrl}: ${error.message}`, { key: `500:${req.path}` });
         res.status(500).json({ error: 'Внутренняя ошибка сервера' });

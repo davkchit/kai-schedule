@@ -185,6 +185,7 @@ export default function AttestationsSection({
             }
 
             setToastMessage((form.id ? 'Изменения сохранены' : `${KIND_LABEL[form.kind]} добавлен${form.kind === 'consultation' ? 'а' : ''}`)
+                + (data.restored_pairs > 0 ? ` — пара на прежнем месте возвращена (${data.restored_pairs})` : '')
                 + (data.removed_pairs > 0 ? ` — пара в этот день убрана (${data.removed_pairs})` : ''));
             setForm(null);
             // The date may have moved it into another semester: show that one.
@@ -209,6 +210,7 @@ export default function AttestationsSection({
             }
 
             if (form?.id === item.id) setForm(null);
+            if (data.restored_pairs > 0) setToastMessage(`Удалено — пара в этот день возвращена (${data.restored_pairs})`);
             await reload();
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') setToastMessage('Ошибка сети');

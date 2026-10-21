@@ -43,16 +43,23 @@ function computeExceptionWeeks(groupLessons, weeksCount) {
  * @param {Array} linkedLessons - all lessons rows matching this plan's teacher/discipline/type/group/subgroup
  *   (any mix of template versions and specific-week rows for this exact slot)
  * @param {Set<number>} exceptionWeeks - from computeExceptionWeeks, scoped to the group
+ * @param {Array} [templateRows] - ALL the group's template rows in the semester, of
+ *   any teacher. A template cell shows its newest version whoever teaches it: the
+ *   version is chosen among all of them first, and only then is it asked whether
+ *   it is this row's pair. Chosen among the linked rows alone, a teacher replaced
+ *   in the template kept "his" old version as the newest of his own and went on
+ *   earning hours for every week after the change.
  * @param {number} [firstWeekParity] - the semester's week-1 parity (1 нечётная, 2 чётная);
  *   defaults to the calendar rule for semesterStartDate
  * @param {Date} [now] - injectable for tests; defaults to the server clock
  */
 function computeLoadProgress({
-    semesterStartDate, weeksCount, linkedLessons, exceptionWeeks,
+    semesterStartDate, weeksCount, linkedLessons, exceptionWeeks, templateRows = null,
     firstWeekParity = defaultFirstWeekParity(semesterStartDate),
     now = clock.now()
 }) {
     const occurrences = [];
+    const linkedIds = new Set(linkedLessons.map((lesson) => lesson.id));
 
     for (let weekNumber = 1; weekNumber <= weeksCount; weekNumber += 1) {
         const weekMonday = addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7);
@@ -72,10 +79,11 @@ function computeLoadProgress({
                 (lesson) => lesson.specific_week === weekNumber && !lesson.is_removed
             );
         } else {
-            const templateCandidates = linkedLessons.filter(
+            const templateCandidates = (templateRows || linkedLessons).filter(
                 (lesson) => lesson.specific_week == null && (lesson.week_type === 0 || lesson.week_type === weekType)
             );
-            resolvedLessons = resolveTemplateLessons(templateCandidates, weekNumber);
+            resolvedLessons = resolveTemplateLessons(templateCandidates, weekNumber)
+                .filter((lesson) => linkedIds.has(lesson.id));
         }
 
         // One plan row routinely owns SEVERAL slots in the same week — a lecture

@@ -382,6 +382,14 @@ function initTables() {
     migrateSemesterClosing();
     migrateLessonsTeacherDiscipline();
     migrateAdminTotp();
+
+    // Pairs an exam took out of its date (utils/weekRows.js) remember which
+    // record did it, so moving or deleting that record puts them back.
+    try {
+        db.exec('ALTER TABLE lessons ADD COLUMN hidden_by_attestation INTEGER DEFAULT NULL');
+    } catch (err) {
+        // Ignored if column already exists
+    }
     runDataFixOnce('joint_lecture_rooms', clearRoomsHoldingTheWholeCell);
     runDataFixOnce('joint_lectures_second_group', restoreJointLecturesForSecondGroup);
     runDataFixOnce('unlabelled_rooms_23301_23401', fillUnlabelledImportedRooms);

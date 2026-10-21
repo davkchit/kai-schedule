@@ -16,6 +16,7 @@ const { clearFailedLoginAttempts, getRateLimitInfo, registerFailedLogin } = requ
 const { validateLoginBody } = require('../validation');
 const { getClientAddress } = require('./admin/shared');
 const { deleteSession } = require('../sessions');
+const { issueTrustedDevice, readTrustedDevice } = require('../trustedDevice');
 
 // bcrypt hash of a random string nobody knows, compared against when the
 // username does not exist (see /login).
@@ -45,7 +46,9 @@ router.post('/login', (req, res) => {
     }
 
     const clientKey = getClientAddress(req);
-    const rateLimitInfo = getRateLimitInfo(clientKey, credentials.username);
+    // A browser that logged in as this user before is throttled on its own.
+    const device = readTrustedDevice(req, credentials.username);
+    const rateLimitInfo = getRateLimitInfo(clientKey, credentials.username, device);
 
     if (rateLimitInfo.isBlocked) {
         return res.status(429).json({
@@ -61,14 +64,14 @@ router.post('/login', (req, res) => {
     const passwordOk = bcrypt.compareSync(credentials.password, admin ? admin.password_hash : DUMMY_PASSWORD_HASH);
 
     if (!admin || !passwordOk) {
-        registerFailedLogin(clientKey, credentials.username);
+        registerFailedLogin(clientKey, credentials.username, device);
         writeAuditLog(db, {
             adminId: null,
             action: 'login.failed',
             entityType: 'admin_session',
             entityId: null,
             ipAddress: clientKey,
-            details: { username: credentials.username.slice(0, 100) }
+            details: { username: credentials.username.slice(0, 100), ...(device ? { trusted_device: true } : {}) }
         });
         return res.status(401).json({ error: 'Неправильный логин или пароль' });
     }
@@ -77,12 +80,12 @@ router.post('/login', (req, res) => {
     // ticket for the code step; no session yet, and the failure counters stay
     // until the whole login succeeds.
     if (admin.totp_enabled) {
-        const ticket = jwt.sign({ id: admin.id, purpose: 'second_factor' }, JWT_SECRET, { algorithm: 'HS256', expiresIn: '5m' });
+        const ticket = jwt.sign({ id: admin.id, purpose: 'second_factor', device }, JWT_SECRET, { algorithm: 'HS256', expiresIn: '5m' });
         res.set('Cache-Control', 'no-store');
         return res.json({ needs_second_factor: true, ticket });
     }
 
-    completeLogin(req, res, db, admin, 'password');
+    completeLogin(req, res, db, admin, 'password', device);
 });
 
 router.post('/login/second-factor', (req, res) => {
@@ -102,7 +105,8 @@ router.post('/login/second-factor', (req, res) => {
         return res.status(401).json({ error: 'Войдите снова', restart: true });
     }
 
-    const rateLimitInfo = getRateLimitInfo(clientKey, admin.username);
+    const device = typeof ticket.device === 'string' ? ticket.device : null;
+    const rateLimitInfo = getRateLimitInfo(clientKey, admin.username, device);
 
     if (rateLimitInfo.isBlocked) {
         return res.status(429).json({
@@ -114,7 +118,7 @@ router.post('/login/second-factor', (req, res) => {
     const result = checkSecondFactor(db, admin, req.body?.code);
 
     if (!result.ok) {
-        registerFailedLogin(clientKey, admin.username);
+        registerFailedLogin(clientKey, admin.username, device);
         writeAuditLog(db, {
             adminId: admin.id,
             action: 'login.failed',
@@ -131,12 +135,13 @@ router.post('/login/second-factor', (req, res) => {
         });
     }
 
-    completeLogin(req, res, db, admin, result.method);
+    completeLogin(req, res, db, admin, result.method, device);
 });
 
-function completeLogin(req, res, db, admin, method) {
+function completeLogin(req, res, db, admin, method, device = null) {
     const clientKey = getClientAddress(req);
-    clearFailedLoginAttempts(clientKey, admin.username);
+    clearFailedLoginAttempts(clientKey, admin.username, device);
+    issueTrustedDevice(res, admin.username, device);
 
     const token = createToken(admin, { ip: clientKey, userAgent: req.get('user-agent') });
     setAdminAuthCookie(res, token);

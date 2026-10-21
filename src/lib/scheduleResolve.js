@@ -80,7 +80,11 @@ function resolveTeachingForDay(scheduleData, date) {
 
     const semesterLessons = (scheduleData.lessons || []).filter((lesson) => lesson.semester_id === semester.id);
     const weekNumber = getSemesterWeekNumber(semester.start_date, date);
-    const hasOwnRows = semesterLessons.some((lesson) => lesson.specific_week === weekNumber);
+    // own_weeks counts the whole group (a week with only the other subgroup's
+    // own rows is still its own); an older saved answer lacks it.
+    const hasOwnRows = Array.isArray(semester.own_weeks)
+        ? semester.own_weeks.includes(weekNumber)
+        : semesterLessons.some((lesson) => lesson.specific_week === weekNumber);
     const dayLessons = semesterLessons.filter((lesson) => lesson.day_of_week === isoDayOfWeek);
 
     if (hasOwnRows) {

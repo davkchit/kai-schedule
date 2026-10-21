@@ -11,7 +11,10 @@ function isValidIsoDate(value) {
     const [year, month, day] = value.split('-').map(Number);
     const date = new Date(Date.UTC(year, month - 1, day));
 
+    // Real calendar dates only: year 0002 or 9999 is a typo, and far-off years
+    // only make the week arithmetic walk thousands of weeks.
     return (
+        year >= 2000 && year <= 2100 &&
         date.getUTCFullYear() === year &&
         date.getUTCMonth() === month - 1 &&
         date.getUTCDate() === day

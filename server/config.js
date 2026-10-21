@@ -159,5 +159,12 @@ module.exports = {
         maxAge: 12 * 60 * 60 * 1000
     },
     ADMIN_COOKIE_CLEAR_OPTIONS: baseCookieOptions,
+    // The trusted-device mark (server/trustedDevice.js): sent only to the
+    // login endpoints, kept a year.
+    DEVICE_COOKIE_OPTIONS: {
+        ...baseCookieOptions,
+        path: '/api/admin/login',
+        maxAge: 365 * 24 * 60 * 60 * 1000
+    },
     getSeedAdminCredentials
 };

@@ -185,10 +185,13 @@ router.delete('/groups/:id', (req, res) => {
         WHERE group_id = ? OR id IN (SELECT plan_id FROM load_plan_extra_groups WHERE group_id = ?)
     `).get(groupId, groupId).c;
 
-    if (lessonCount > 0 || planCount > 0) {
+    const attestationCount = db.prepare('SELECT COUNT(*) c FROM attestations WHERE group_id = ?').get(groupId).c;
+
+    if (lessonCount > 0 || planCount > 0 || attestationCount > 0) {
         const parts = [];
         if (lessonCount > 0) parts.push(`пар в расписании: ${lessonCount}`);
         if (planCount > 0) parts.push(`строк в плане нагрузки: ${planCount}`);
+        if (attestationCount > 0) parts.push(`записей сессии: ${attestationCount}`);
 
         return res.status(409).json({
             error: `Группу «${group.name}» нельзя удалить — ${parts.join(', ')}. Сначала очистите её, иначе вместе с группой пропадут и эти записи.`

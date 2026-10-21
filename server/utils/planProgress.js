@@ -66,15 +66,20 @@ function computePlanRowProgress(db, planRow, semester, { cache = new Map(), over
 /** One group's pairs for a plan row, resolved the way that group's schedule shows them. */
 function computeGroupOccurrences(db, planRow, groupId, semester, effective, cache) {
     const cacheKey = `${groupId}:${semester.id}:${effective.weeks_count}`;
-    let exceptionWeeks = cache.get(cacheKey);
+    let groupRows = cache.get(cacheKey);
 
-    if (!exceptionWeeks) {
+    if (!groupRows) {
         const overrideRows = db.prepare(`
             SELECT specific_week FROM lessons
             WHERE group_id = ? AND semester_id = ? AND specific_week IS NOT NULL
         `).all(groupId, semester.id);
-        exceptionWeeks = computeExceptionWeeks(overrideRows, effective.weeks_count);
-        cache.set(cacheKey, exceptionWeeks);
+        // Every template row of the group, whoever teaches it: a cell's
+        // version is chosen among all of them (see computeLoadProgress).
+        const templateRows = db.prepare(`
+            SELECT * FROM lessons WHERE group_id = ? AND semester_id = ? AND specific_week IS NULL
+        `).all(groupId, semester.id);
+        groupRows = { exceptionWeeks: computeExceptionWeeks(overrideRows, effective.weeks_count), templateRows };
+        cache.set(cacheKey, groupRows);
     }
 
     // No explicit link: a lesson counts toward this row the moment its own
@@ -92,7 +97,8 @@ function computeGroupOccurrences(db, planRow, groupId, semester, effective, cach
         semesterStartDate: effective.start_date,
         weeksCount: effective.weeks_count,
         linkedLessons,
-        exceptionWeeks,
+        exceptionWeeks: groupRows.exceptionWeeks,
+        templateRows: groupRows.templateRows,
         firstWeekParity: resolveFirstWeekParity(effective)
     }).occurrences;
 }

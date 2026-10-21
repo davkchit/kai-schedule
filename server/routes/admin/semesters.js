@@ -247,6 +247,24 @@ router.put('/semesters/:id', (req, res) => {
         return res.status(409).json({ error: overlappingSemesterError(overlapping) });
     }
 
+    // Shrinking past weeks that were entered on their own would hide them —
+    // from students and from hours alike — while the rows stay. Refuse and
+    // name the weeks; the specialist clears them first if that is intended.
+    if (next.weeks_count < existing.weeks_count) {
+        const cutWeeks = db.prepare(`
+            SELECT DISTINCT specific_week FROM lessons
+            WHERE semester_id = ? AND specific_week > ? AND is_removed = 0
+            ORDER BY specific_week
+        `).all(semesterId, next.weeks_count).map((row) => row.specific_week);
+
+        if (cutWeeks.length > 0) {
+            return res.status(409).json({
+                error: `В неделях ${cutWeeks.join(', ')} уже внесены пары — сначала очистите их или оставьте семестр длиннее`,
+                weeks: cutWeeks
+            });
+        }
+    }
+
     const transaction = db.transaction(() => {
         // Only one semester drives "which one am I entering/viewing load for"
         // by default — activating this one deactivates every other.

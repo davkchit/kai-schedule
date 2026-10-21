@@ -108,7 +108,12 @@ export function mergeScheduleData(current, incoming) {
     const lessons = new Map();
 
     for (const semester of [...current.semesters, ...incoming.semesters]) {
-        semesters.set(semester.id, semester);
+        const earlier = semesters.get(semester.id);
+        // own_weeks lists only the weeks each window covers: keep both lists.
+        const ownWeeks = earlier && Array.isArray(earlier.own_weeks) && Array.isArray(semester.own_weeks)
+            ? [...new Set([...earlier.own_weeks, ...semester.own_weeks])].sort((left, right) => left - right)
+            : semester.own_weeks;
+        semesters.set(semester.id, ownWeeks === undefined ? semester : { ...semester, own_weeks: ownWeeks });
     }
 
     for (const lesson of [...(current.lessons || []), ...(incoming.lessons || [])]) {

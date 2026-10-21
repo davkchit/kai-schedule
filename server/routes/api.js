@@ -148,6 +148,16 @@ router.get('/schedule/:groupId', (req, res) => {
     sql += ' ORDER BY day_of_week, sort_order, time_start';
     const statement = db.prepare(sql);
 
+    // Which weeks are their own, counted over the whole group: a week whose
+    // own rows are all the other subgroup's still ignores the template, so a
+    // page filtered to one subgroup can't tell that from its rows alone.
+    const ownWeeksStatement = db.prepare(`
+        SELECT DISTINCT specific_week FROM lessons
+        WHERE group_id = ? AND semester_id = ? AND specific_week BETWEEN ? AND ?
+        ORDER BY specific_week
+    `);
+    const ownWeeks = new Map();
+
     const lessons = [];
     semesters.forEach((semester, index) => {
         // Only the part of the requested range this semester actually covers:
@@ -168,6 +178,7 @@ router.get('/schedule/:groupId', (req, res) => {
             params.push(subgroup);
         }
         lessons.push(...statement.all(...params));
+        ownWeeks.set(semester.id, ownWeeksStatement.all(...params.slice(0, 4)).map((row) => row.specific_week));
     });
 
     // Exams, credits and consultations fall on real dates, so they are simply
@@ -212,7 +223,8 @@ router.get('/schedule/:groupId', (req, res) => {
             label: semester.label,
             start_date: semester.start_date,
             weeks_count: semester.weeks_count,
-            first_week_parity: resolveFirstWeekParity(semester)
+            first_week_parity: resolveFirstWeekParity(semester),
+            own_weeks: ownWeeks.get(semester.id) || []
         })),
         week_number: primaryMeta ? primaryMeta.weekNumber : null,
         week_type: primaryMeta ? primaryMeta.weekType : null,

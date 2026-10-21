@@ -222,10 +222,28 @@ router.post('/lessons', (req, res) => {
     `);
     const slotKey = (row) => [row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type].join('|');
 
+    // A version that has not shown in any week yet (made this week for a
+    // day still ahead, or for next week): nothing in the past depends on it.
+    const notYetLive = Boolean(replaced) && !replaced.is_removed && replaced.template_from_week >= templateFromWeek;
+
     const createdId = db.transaction(() => {
-        if (replaced && !payload.is_removed && replaced.template_from_week >= templateFromWeek && !replaced.is_removed) {
-            // Not live in any earlier week yet: nothing in the past depends on
-            // it, so the row itself is corrected instead of stacking versions.
+        if (notYetLive && payload.is_removed) {
+            // Removed before it ever showed: the row goes, and the older
+            // version it covered must not come back — the cell is retired.
+            db.prepare('DELETE FROM lessons WHERE id = ?').run(replaced.id);
+            return retireTemplateCell(db, semester.id, replaced, templateFromWeek);
+        }
+
+        if (notYetLive && slotKey(replaced) !== slotKey(payload)) {
+            // Moved to another cell before it ever showed: corrected in place,
+            // the older version under it reappeared in the old cell. The row
+            // goes, the old cell is retired from this week, and the new cell
+            // gets the pair below.
+            db.prepare('DELETE FROM lessons WHERE id = ?').run(replaced.id);
+            retireTemplateCell(db, semester.id, replaced, templateFromWeek);
+        } else if (notYetLive && !payload.is_removed) {
+            // Same cell, not live yet: the row itself is corrected instead of
+            // stacking versions (the older one stays covered by it).
             db.prepare(`
                 UPDATE lessons SET
                     subgroup = ?, day_of_week = ?, week_type = ?, time_start = ?, time_end = ?,
@@ -238,9 +256,7 @@ router.post('/lessons', (req, res) => {
                 payload.kind, replaced.id
             );
             return replaced.id;
-        }
-
-        if (replaced && !payload.is_removed && slotKey(replaced) !== slotKey(payload)) {
+        } else if (replaced && !payload.is_removed && slotKey(replaced) !== slotKey(payload)) {
             // Moving to another cell or parity: the old cell is retired from
             // this week, as move-lesson does, keeping its own identity — it
             // is a tombstone of what WAS there, not of the new version.
@@ -470,6 +486,32 @@ router.post('/lessons/for-groups', (req, res) => {
 
     res.status(201).json({ created: createdIds.length });
 });
+
+/**
+ * Empties one template cell (the cell of `row`: day, times, subgroup, parity)
+ * from `week` on, with a removed marker. It copies whatever version the cell
+ * shows at that week — so that version's identity, and the hours tied to it,
+ * stop there — or `row` itself when nothing shows. Returns the marker's id.
+ */
+function retireTemplateCell(db, semesterId, row, week) {
+    const cellRows = db.prepare(`
+        SELECT * FROM lessons
+        WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL
+          AND day_of_week = ? AND time_start = ? AND time_end = ? AND subgroup = ? AND week_type = ?
+    `).all(semesterId, row.group_id, row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type);
+    const source = resolveTemplateLessons(cellRows, week)[0] || row;
+
+    return db.prepare(`
+        INSERT INTO lessons (
+            group_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind, semester_id
+        ) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        source.group_id, source.subgroup, source.day_of_week, source.week_type, week,
+        source.time_start, source.time_end, source.subject, source.room, source.lesson_type, source.teacher,
+        source.teacher_id, source.discipline_id, source.sort_order, source.kind, semesterId
+    ).lastInsertRowid;
+}
 
 function templateHasPairsThisWeek(db, semester, groupId, weekNumber) {
     const ownRows = db.prepare('SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1')
@@ -718,6 +760,14 @@ router.delete('/lessons/:id', (req, res) => {
         // with no rows left, the template would take the week back and the
         // pair just cancelled would reappear (and be counted again).
         db.prepare('UPDATE lessons SET is_removed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(lessonId);
+    } else if (lesson.specific_week === null && !lesson.is_removed) {
+        // A template version that has not shown yet: erased, and its cell is
+        // retired from this week, or the older version it covered would come
+        // back as if nothing had been deleted.
+        db.transaction(() => {
+            db.prepare('DELETE FROM lessons WHERE id = ?').run(lessonId);
+            retireTemplateCell(db, lesson.semester_id, lesson, currentWeek);
+        })();
     } else {
         // Never been live in a past week (created this week or later), or it is
         // one of several rows of a single week — nothing else depends on it.

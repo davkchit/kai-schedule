@@ -14,13 +14,22 @@ const { getDb } = require('./db');
 // permanent — a lockout an attacker can extend forever would be a way to keep
 // the specialist out. Failures are forgotten an hour after the last one.
 // If the admin is ever stuck, `node server/admin-tool.js unlock` clears it.
+//
+// Still, anyone who knows the login could keep it paused by failing on
+// purpose. A browser that has logged in before carries a signed device mark
+// (server/trustedDevice.js); from it, failures are counted for that device
+// alone, so strangers' failures never pause the specialist's own computer.
 
 const FORGET_AFTER_MS = 60 * 60 * 1000;
 const FIRST_PAUSE_MS = 30 * 1000;
 const MAX_PAUSE_MS = 15 * 60 * 1000;
-const FREE_ATTEMPTS = { user: 5, ip: 20 };
+const FREE_ATTEMPTS = { user: 5, ip: 20, device: 5 };
 
-function loginKeys(clientAddress, username) {
+function loginKeys(clientAddress, username, device = null) {
+    if (device) {
+        return [{ key: `device:${device}`, free: FREE_ATTEMPTS.device }];
+    }
+
     return [
         { key: `ip:${clientAddress}`, free: FREE_ATTEMPTS.ip },
         { key: `user:${String(username || '').trim().toLowerCase()}`, free: FREE_ATTEMPTS.user }
@@ -35,8 +44,8 @@ function pauseFor(failures, free) {
     return Math.min(MAX_PAUSE_MS, FIRST_PAUSE_MS * 2 ** (failures - free));
 }
 
-/** { isBlocked, retryAfterMs } for this address + username. */
-function getRateLimitInfo(clientAddress, username) {
+/** { isBlocked, retryAfterMs } for this address + username, or for a trusted device. */
+function getRateLimitInfo(clientAddress, username, device = null) {
     const db = getDb();
     const now = Date.now();
 
@@ -45,7 +54,7 @@ function getRateLimitInfo(clientAddress, username) {
     let retryAfterMs = 0;
     const read = db.prepare('SELECT failure_count, window_started_at FROM login_attempts WHERE client_key = ?');
 
-    for (const { key, free } of loginKeys(clientAddress, username)) {
+    for (const { key, free } of loginKeys(clientAddress, username, device)) {
         const record = read.get(key);
 
         if (record) {
@@ -58,7 +67,7 @@ function getRateLimitInfo(clientAddress, username) {
     return { isBlocked: retryAfterMs > 0, retryAfterMs: Math.max(0, retryAfterMs) };
 }
 
-function registerFailedLogin(clientAddress, username) {
+function registerFailedLogin(clientAddress, username, device = null) {
     const db = getDb();
     const now = Date.now();
     const upsert = db.prepare(`
@@ -72,15 +81,17 @@ function registerFailedLogin(clientAddress, username) {
 
     pruneExpiredAttempts(db, now);
 
-    for (const { key } of loginKeys(clientAddress, username)) {
+    for (const { key } of loginKeys(clientAddress, username, device)) {
         upsert.run(key, now);
     }
 }
 
-function clearFailedLoginAttempts(clientAddress, username) {
+function clearFailedLoginAttempts(clientAddress, username, device = null) {
     const remove = getDb().prepare('DELETE FROM login_attempts WHERE client_key = ?');
 
-    for (const { key } of loginKeys(clientAddress, username)) {
+    // From a trusted device only its own count is cleared: strangers' failures
+    // keep counting, or each of her logins would hand them fresh attempts.
+    for (const { key } of loginKeys(clientAddress, username, device)) {
         remove.run(key);
     }
 }

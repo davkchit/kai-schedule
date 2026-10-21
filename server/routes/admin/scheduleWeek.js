@@ -87,6 +87,22 @@ router.post('/schedule/move-lesson', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
+    // The page may be stale — another tab may have changed that week since.
+    // The pair must be what the view shows: a template row in the template
+    // view; in a week view, a row of that very week once it has rows of its
+    // own, a template row while it has none. Otherwise a template row dragged
+    // in a stale tab was moved in place, rewriting every past week it ran in.
+    const weekIsOwn = payload.mode === 'week' && Boolean(db.prepare(
+        'SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1'
+    ).get(semester.id, lesson.group_id, payload.week_number));
+    const fitsTheView = !lesson.is_removed && (payload.mode === 'template' || !weekIsOwn
+        ? lesson.specific_week === null
+        : lesson.specific_week === payload.week_number);
+
+    if (!fitsTheView) {
+        return res.status(409).json({ error: 'Расписание этой недели уже изменилось — обновите страницу' });
+    }
+
     // Template mode: one week for both halves, the later of the two cells'
     // (templateWeekForSlot) — the pair keeps exactly one occurrence this week.
     const currentWeek = payload.mode === 'template'

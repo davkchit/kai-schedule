@@ -7,7 +7,7 @@ const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const { formatLocalDate } = require('../../utils/date');
 const { joinedLabels, joinedMemberError, scheduleGroupId } = require('../../utils/groupJoin');
-const { hidePairsOnDate } = require('../../utils/weekRows');
+const { hidePairsOnDate, restorePairsHiddenBy } = require('../../utils/weekRows');
 const { getActiveSemester, getSemesterById, getSemesterForDate } = require('../../utils/semesters');
 const { countByTeacher, insertAttestation, selectAttestations } = require('../../utils/attestations');
 const { buildConsultationWorkbook, buildSessionWorkbook } = require('../../exportAttestations');
@@ -126,13 +126,18 @@ function checkConflicts(db, record, { ignoreId = null, confirmed = false } = {})
  * date (utils/weekRows.js), so the exam replaces them for students and they
  * stop counting toward the teacher's hours. Returns how many were hidden.
  */
-function removeCoveredPairs(db, record, covered, requested) {
+function removeCoveredPairs(db, record, recordId, covered, requested) {
     if (!requested || covered.length === 0) {
         return 0;
     }
 
     const semester = getSemesterById(db, record.semester_id);
-    return hidePairsOnDate(db, semester, scheduleGroupId(db, record.group_id), record.date, covered);
+    return hidePairsOnDate(db, semester, scheduleGroupId(db, record.group_id), record.date, covered, recordId);
+}
+
+/** Whether an edit moves the record off the pairs it took out (another date, time, group or subgroup). */
+function leavesItsPlace(before, after) {
+    return ['date', 'time_start', 'time_end', 'group_id', 'subgroup'].some((field) => (before[field] ?? null) !== (after[field] ?? null));
 }
 
 function sendError(res, error, fallback) {
@@ -150,10 +155,10 @@ router.post('/attestations', (req, res) => {
     try {
         const record = prepareRecord(db, validateAttestationBody(req.body));
         const covered = checkConflicts(db, record, { confirmed: req.body?.confirm === true });
-        const { id, removedPairs } = db.transaction(() => ({
-            id: insertAttestation(db, record),
-            removedPairs: removeCoveredPairs(db, record, covered, req.body?.remove_pairs === true)
-        }))();
+        const { id, removedPairs } = db.transaction(() => {
+            const newId = insertAttestation(db, record);
+            return { id: newId, removedPairs: removeCoveredPairs(db, record, newId, covered, req.body?.remove_pairs === true) };
+        })();
 
         writeAuditLog(db, {
             adminId: req.admin.id,
@@ -185,8 +190,11 @@ router.put('/attestations/:id', (req, res) => {
 
     try {
         const record = prepareRecord(db, validateAttestationBody(req.body));
-        const covered = checkConflicts(db, record, { ignoreId: id, confirmed: req.body?.confirm === true });
-        const removedPairs = db.transaction(() => {
+        // Moved elsewhere: the pairs it took out of its old place come back
+        // first, so the conflict check below sees the day as it will be.
+        const { removedPairs, restoredPairs } = db.transaction(() => {
+            const restored = leavesItsPlace(existing, record) ? restorePairsHiddenBy(db, id) : 0;
+            const covered = checkConflicts(db, record, { ignoreId: id, confirmed: req.body?.confirm === true });
             db.prepare(`
                 UPDATE attestations SET
                     semester_id = ?, group_id = ?, subgroup = ?, kind = ?, date = ?, time_start = ?, time_end = ?, room = ?,
@@ -197,7 +205,7 @@ router.put('/attestations/:id', (req, res) => {
                 record.time_end, record.room, record.discipline_id, record.discipline_text, record.teacher_id,
                 record.teacher_text, id
             );
-            return removeCoveredPairs(db, record, covered, req.body?.remove_pairs === true);
+            return { removedPairs: removeCoveredPairs(db, record, id, covered, req.body?.remove_pairs === true), restoredPairs: restored };
         })();
 
         writeAuditLog(db, {
@@ -206,10 +214,10 @@ router.put('/attestations/:id', (req, res) => {
             entityType: 'attestation',
             entityId: id,
             ipAddress: getClientAddress(req),
-            details: { before: existing, after: record, removed_pairs: removedPairs }
+            details: { before: existing, after: record, removed_pairs: removedPairs, restored_pairs: restoredPairs }
         });
 
-        res.json({ ...selectAttestations(db, 'a.id = ?', [id])[0], removed_pairs: removedPairs });
+        res.json({ ...selectAttestations(db, 'a.id = ?', [id])[0], removed_pairs: removedPairs, restored_pairs: restoredPairs });
     } catch (error) {
         sendError(res, error, 'Не удалось сохранить');
     }
@@ -228,7 +236,10 @@ router.delete('/attestations/:id', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
-    db.prepare('DELETE FROM attestations WHERE id = ?').run(id);
+    const restoredPairs = db.transaction(() => {
+        db.prepare('DELETE FROM attestations WHERE id = ?').run(id);
+        return restorePairsHiddenBy(db, id);
+    })();
 
     writeAuditLog(db, {
         adminId: req.admin.id,
@@ -236,10 +247,10 @@ router.delete('/attestations/:id', (req, res) => {
         entityType: 'attestation',
         entityId: id,
         ipAddress: getClientAddress(req),
-        details: existing
+        details: { ...existing, restored_pairs: restoredPairs }
     });
 
-    res.json({ success: true });
+    res.json({ success: true, restored_pairs: restoredPairs });
 });
 
 // The two documents the branch publishes, built from what is entered here:

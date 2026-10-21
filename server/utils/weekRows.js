@@ -1,5 +1,6 @@
 const { getSemesterWeekMeta } = require('./date');
 const { resolveTemplateLessons } = require('./templateResolve');
+const { findWeekSlotOccupant } = require('./slots');
 
 /**
  * Takes pairs out of ONE date — an exam or a credit held in their place — so
@@ -12,9 +13,10 @@ const { resolveTemplateLessons } = require('./templateResolve');
  * template itself, and every other week, is untouched.
  *
  * `pairs` are lesson rows as the day resolution returns them (template rows
- * or that week's own rows) of the group's schedule owner `groupId`.
+ * or that week's own rows) of the group's schedule owner `groupId`. Hidden
+ * rows carry `attestationId`, so restorePairsHiddenBy can bring them back.
  */
-function hidePairsOnDate(db, semester, groupId, isoDate, pairs) {
+function hidePairsOnDate(db, semester, groupId, isoDate, pairs, attestationId = null) {
     if (pairs.length === 0) {
         return 0;
     }
@@ -25,8 +27,8 @@ function hidePairsOnDate(db, semester, groupId, isoDate, pairs) {
         .get(semester.id, groupId, weekNumber);
 
     if (ownWeek) {
-        const hide = db.prepare('UPDATE lessons SET is_removed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND specific_week = ?');
-        return pairs.reduce((count, pair) => count + hide.run(pair.id, weekNumber).changes, 0);
+        const hide = db.prepare('UPDATE lessons SET is_removed = 1, hidden_by_attestation = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND specific_week = ? AND is_removed = 0');
+        return pairs.reduce((count, pair) => count + hide.run(attestationId, pair.id, weekNumber).changes, 0);
     }
 
     const templateRows = db.prepare(`
@@ -36,8 +38,9 @@ function hidePairsOnDate(db, semester, groupId, isoDate, pairs) {
     const insert = db.prepare(`
         INSERT INTO lessons (
             group_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind, semester_id
-        ) VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind, semester_id,
+            hidden_by_attestation
+        ) VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     let hidden = 0;
 
@@ -47,11 +50,40 @@ function hidePairsOnDate(db, semester, groupId, isoDate, pairs) {
         insert.run(
             groupId, row.subgroup, row.day_of_week, weekNumber, removed,
             row.time_start, row.time_end, row.subject, row.room, row.lesson_type, row.teacher,
-            row.teacher_id, row.discipline_id, index, row.kind || 'lesson', semester.id
+            row.teacher_id, row.discipline_id, index, row.kind || 'lesson', semester.id,
+            removed ? attestationId : null
         );
     });
 
     return hidden;
 }
 
-module.exports = { hidePairsOnDate };
+/**
+ * Undoes hidePairsOnDate for one record that moved or was deleted: its pairs
+ * show again on that date and count again. A pair whose time has since been
+ * taken by another pair stays removed (the constructor's choice wins); the
+ * mark is cleared either way. A week the record made its own stays its own —
+ * its rows are the template's of that week, so students see the same thing.
+ * Returns how many pairs came back.
+ */
+function restorePairsHiddenBy(db, attestationId) {
+    const hidden = db.prepare('SELECT * FROM lessons WHERE hidden_by_attestation = ? AND is_removed = 1').all(attestationId);
+    const show = db.prepare('UPDATE lessons SET is_removed = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+    let restored = 0;
+
+    for (const row of hidden) {
+        const taken = findWeekSlotOccupant(db, {
+            semesterId: row.semester_id, groupId: row.group_id, weekNumber: row.specific_week, dayOfWeek: row.day_of_week,
+            timeStart: row.time_start, timeEnd: row.time_end, subgroup: row.subgroup, ignoreLessonId: row.id
+        });
+
+        if (!taken) {
+            restored += show.run(row.id).changes;
+        }
+    }
+
+    db.prepare('UPDATE lessons SET hidden_by_attestation = NULL WHERE hidden_by_attestation = ?').run(attestationId);
+    return restored;
+}
+
+module.exports = { hidePairsOnDate, restorePairsHiddenBy };
