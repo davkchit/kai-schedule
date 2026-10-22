@@ -24,7 +24,7 @@ Each of these was a real bug or a deliberate decision; the sections below explai
 8. **No hard-coded calendar dates** in app code (`tests/codeGuards.test.js`); every audit action needs a Russian label in `src/pages/adminDashboard/format.js` (same test).
 9. **One-off data fixes run once per database** (`runDataFixOnce`); schema migrations must be idempotent; a boot snapshot is taken before them.
 10. **Never commit databases or real people's data** (`data/*.db`, `seed/*.db`, real teacher names in tests/fixtures — use made-up names).
-11. Run `npm test` after any change; it must stay green (126 tests).
+11. Run `npm test` after any change; it must stay green (125 tests).
 
 ## Commands
 
@@ -112,7 +112,7 @@ Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours a
 
 ### Closing a semester
 
-`POST /api/admin/semesters/:id/close` freezes it: every `load_plan.final_hours` is filled from the current calculation, `semesters.closed_at` is set, and every write touching that semester is refused with 409 (`findClosedSemester` in `routes/admin.js` guards lessons, schedule uploads, plan rows and the semester's own dates). Reads then report the stored total instead of recomputing, so a printed report stays true. `POST .../reopen` clears both and hours go live again. See `tests/semesterClose.test.js`.
+`POST /api/admin/semesters/:id/close` freezes it: every `load_plan.final_hours` is filled from the current calculation, `semesters.closed_at` is set, and every write touching that semester is refused with 409 (`findClosedSemester` in `routes/admin.js` guards lessons, week edits, plan rows and the semester's own dates). Reads then report the stored total instead of recomputing, so a printed report stays true. `POST .../reopen` clears both and hours go live again. See `tests/semesterClose.test.js`.
 
 ### Database migrations and one-off data fixes
 
@@ -153,21 +153,9 @@ Collisions (`server/utils/attestationConflicts.js`): the same record twice is re
 
 `POST /api/alice` (`server/alice.js`) is the Yandex Dialogs webhook: «какие пары завтра», «что в пятницу», «18 сентября» (a typo in the month or a bare «а 18» after it is understood — the month talked about is kept in `session_state`), «на неделе», «первая/последняя пара», «сколько пар», «какая сейчас/следующая пара», «когда физика», «когда экзамены», a little small talk, and a group number to remember («23 303» from speech is joined; a question asked before the number is answered once it is given). Past days are told in the past tense; a phrase it can't place gets a hint, never a timetable nobody asked for. Read-only — it answers from `utils/dayResolve.js` plus attestations, i.e. exactly what the student page shows (a joined group hears its leader's pairs). The group is kept in the skill's own storage: `user_state_update` for a logged-in Yandex user, `application_state` per device; nothing is written to our database. Evening with today's pairs over → tomorrow. Answers ≤ 1024 chars. See `tests/alice.test.js`.
 
-### Bulk Schedule Upload
+### Where schedule edits live
 
-Admin can upload schedules for multiple groups in one request:
-
-```json
-{
-  "target_week": "template",
-  "groups": [
-    { "group": "23113", "university": "КНИТУ-КАИ", "lessons": [...] },
-    { "group": "23114", "university": "КНИТУ-КАИ", "lessons": [...] }
-  ]
-}
-```
-
-Endpoint: `POST /api/admin/schedule/upload-bulk`. Atomic — either all groups succeed or none. **API-only — there is no button for it**; kept for a future «import a week from Excel». Uploaded rows are text without ids (they count toward no hours), and an upload refuses to replace rows already linked to a teacher/discipline. Week-by-week edits (move, materialize, clear week) live in `routes/admin/scheduleWeek.js`, uploads and the export in `routes/admin/schedule.js`.
+Every pair is entered in the constructor (`routes/admin/lessons.js`); week-by-week edits (move, first edit of a week, clear week) live in `routes/admin/scheduleWeek.js`, the Excel export in `routes/admin/schedule.js`. There is no JSON/Excel import into the app (the owner chose «enter in the app, export to Excel»); the official weekly Excel is imported by a one-off script run against the production database (see the private notes).
 
 ### Dark Theme
 

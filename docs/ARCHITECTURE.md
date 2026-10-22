@@ -251,7 +251,7 @@ npm run seed                  # ОПАСНО: пересоздаёт базу с
 
 Группы: `GET|POST /groups`, `PUT|DELETE /groups/:id` (удаление запрещено, пока в группе есть занятия).
 
-Расписание: `POST /schedule/upload`, `POST /schedule/upload-bulk`, `GET /schedule/export`, `POST /schedule/move-lesson`, `POST /schedule/materialize-week`, `DELETE /schedule/week`.
+Расписание: `GET /schedule/export`, `POST /schedule/move-lesson`, `POST /schedule/materialize-week`, `DELETE /schedule/week`.
 
 Занятия: `GET|POST /lessons`, `PUT|DELETE /lessons/:id` (`teacher_id`/`discipline_id` — из справочника, для автоматического совпадения с планом).
 
@@ -288,38 +288,9 @@ npm run seed                  # ОПАСНО: пересоздаёт базу с
 
 ---
 
-## 8. Массовая загрузка расписания
+## 8. Как вносится расписание
 
-`POST /api/admin/schedule/upload-bulk` — всё или ничего:
-
-```json
-{
-  "target_week": "template",
-  "groups": [
-    {
-      "group": "23113",
-      "university": "КНИТУ-КАИ",
-      "lessons": [
-        {
-          "day": 1,
-          "time_start": "08:00",
-          "time_end": "09:30",
-          "subject": "Программирование",
-          "room": "305",
-          "type": "Лекция",
-          "teacher": "Иванов И.И.",
-          "week_type": "all",
-          "subgroup": 0
-        }
-      ]
-    }
-  ]
-}
-```
-
-`target_week`: `"template"` — в шаблон, `"current"` — в текущую неделю, число — в конкретную. `week_type`: `all`, `odd`, `even`.
-
-Загрузка идёт в **рабочий** семестр и отклоняется, если заменяемые записи уже совпадают со строкой плана (есть `teacher_id`+`discipline_id`): иначе преподаватель молча потерял бы уже посчитанные часы.
+Каждая пара вносится в конструкторе админки. Загрузки расписания из JSON или Excel в приложении нет: владелец решил, что расписание вводится в приложении, а наружу выгружается в Excel. Официальный недельный файл филиала вносится разовым скриптом на сервере, с копией базы перед записью и сверкой с файлом после.
 
 ---
 
@@ -345,7 +316,7 @@ npm run seed                  # ОПАСНО: пересоздаёт базу с
 
 ## 11. Тесты
 
-`npm test` — 126 тестов, node --test, без внешних зависимостей. Каждый файл стережёт свой класс ошибок:
+`npm test` — 125 тестов, node --test, без внешних зависимостей. Каждый файл стережёт свой класс ошибок:
 
 | Файл | Что проверяет |
 |---|---|

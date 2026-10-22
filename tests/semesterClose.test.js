@@ -112,10 +112,6 @@ test('a closed semester stops changing — its hours and its schedule are final'
         ['PUT', `/api/admin/semesters/${semester.id}`, { weeks_count: 12 }],
         ['POST', '/api/admin/schedule/materialize-week', {
             group_id: groupId, week_number: 4, action: 'remove', day_of_week: 1, time_start: '08:00', time_end: '09:30'
-        }],
-        ['POST', '/api/admin/schedule/upload-bulk', {
-            target_week: 'template',
-            groups: [{ group: '23303', university: 'КНИТУ-КАИ', lessons: [{ day: 5, time_start: '08:00', time_end: '09:30', subject: 'Химия', week_type: 'all' }] }]
         }]
     ]) {
         const result = await call(method, url, body);

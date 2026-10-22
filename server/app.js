@@ -60,7 +60,7 @@ function createApp() {
     });
 
     // Public endpoints take tiny bodies (only the error report); the admin's
-    // largest JSON is a whole-branch schedule upload.
+    // stay small too, the limit is only a ceiling for a long plan or week edit.
     app.use('/api/admin', express.json({ limit: '2mb' }));
     app.use(express.json({ limit: '16kb' }));
 

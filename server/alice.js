@@ -422,13 +422,20 @@ function handleAlice(db, body, now = clock.now()) {
         return answer(prefix + describeWeek(db, group.id, monday, today), { remember, isLoggedIn });
     }
 
-    const date = requestedDate(request, dateText, today, contextMonth);
-    const nth = dateText.match(/(перв|втор|трет|четв[её]рт|пят|шест|седьм)[а-яё]*\s+пар/);
-    const pick = nth ? ['перв', 'втор', 'трет', 'четв', 'пят', 'шест', 'седьм'].findIndex((stem) => nth[1].replace('ё', 'е').startsWith(stem))
-        : /последн[а-яё]*\s+пар|освобож|во сколько[а-яё ]*(закончи|заканчива|кончаю|конча)/.test(dateText) ? 'last'
-            : /сколько[а-яё ]*пар/.test(dateText) ? 'count'
-                : /во сколько[а-яё ]*(начина|первая|на учеб|к первой|вставать)|к скольки/.test(dateText) ? 0
-                    : null;
+    // Which pair: Alice's command turns «первая» into «1», so both the words
+    // of the original phrase and a digit before «пара» are looked at — and
+    // that digit is taken out before the date is read («1 пара» is not the 1st).
+    const ordinalDigit = /(?:^|\s)([1-8])\s*-?\s*(?:я|ая|ой|ю|ую)?\s+(?=пар|заняти|урок)/;
+    const wordsAsked = `${dateText} ${normalize(raw)}`;
+    const nthWord = wordsAsked.match(/(перв|втор|трет|четверт|пят|шест|седьм)[а-яё]*\s+(?:пар|заняти|урок)/);
+    const nthDigit = dateText.match(ordinalDigit);
+    const pick = nthWord ? ['перв', 'втор', 'трет', 'четв', 'пят', 'шест', 'седьм'].findIndex((stem) => nthWord[1].startsWith(stem))
+        : nthDigit ? Number(nthDigit[1]) - 1
+            : /последн[а-яё]*\s+пар|освобож|во сколько[а-яё ]*(закончи|заканчива|кончаю|конча)/.test(wordsAsked) ? 'last'
+                : /сколько[а-яё ]*пар/.test(wordsAsked) ? 'count'
+                    : /во сколько[а-яё ]*(начина|первая|на учеб|к первой|вставать)|к скольки/.test(wordsAsked) ? 0
+                        : null;
+    const date = requestedDate(request, dateText.replace(ordinalDigit, ' '), today, contextMonth);
 
     if (pick !== null) {
         const day = date || defaultDay(db, group.id, today, nowTime).iso;

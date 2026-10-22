@@ -210,38 +210,6 @@ test('PUT /lessons/:id refuses to edit a live template row in place, only its ow
     await context.close();
 });
 
-test('schedule upload requires university when group name is ambiguous', async () => {
-    const context = await createTestContext();
-
-    const response = await fetch(`${context.baseUrl}/api/admin/schedule/upload`, {
-        method: 'POST',
-        headers: {
-            ...context.authHeaders,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            group: '23113',
-            target_week: 'template',
-            lessons: [
-                {
-                    day: 1,
-                    subgroup: 0,
-                    time_start: '09:40',
-                    time_end: '11:10',
-                    subject: 'Высшая математика',
-                    week_type: 'all'
-                }
-            ]
-        })
-    });
-    const body = await response.json();
-
-    assert.equal(response.status, 409);
-    assert.match(body.error, /укажите поле university/i);
-
-    await context.close();
-});
-
 test('public schedule endpoint only returns specific_week rows for requested window', async () => {
     const context = await createTestContext();
     const db = getDb();

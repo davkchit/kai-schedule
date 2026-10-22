@@ -194,16 +194,10 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     assert.deepEqual(await ok('GET', `/api/admin/lessons?group_id=${groupId}`), []);
 
     const autumnRowsBefore = autumnLessonCount(autumn.id);
-    await ok('POST', '/api/admin/schedule/upload-bulk', {
-        target_week: 'template',
-        groups: [{
-            group: '23303', university: 'КНИТУ-КАИ', lessons: [
-                { day: 1, time_start: '08:00', time_end: '09:30', subject: 'Базы данных', type: 'Лекция', teacher: 'Виноградов Н.В.', week_type: 'all' },
-                { day: 2, time_start: '09:40', time_end: '11:10', subject: 'Сети', type: 'Практика', week_type: 'odd' }
-            ]
-        }]
-    });
-    assert.equal(autumnLessonCount(autumn.id), autumnRowsBefore, 'uploading spring does not touch autumn rows');
+    // Two pairs typed in the spring template, not yet picked from the dictionaries.
+    await ok('POST', '/api/admin/lessons', { group_id: groupId, day_of_week: 1, time_start: '08:00', time_end: '09:30', week_type: 0, subject: 'Базы данных', lesson_type: 'Лекция', teacher: 'Виноградов Н.В.' });
+    await ok('POST', '/api/admin/lessons', { group_id: groupId, day_of_week: 2, time_start: '09:40', time_end: '11:10', week_type: 1, subject: 'Сети', lesson_type: 'Практика' });
+    assert.equal(autumnLessonCount(autumn.id), autumnRowsBefore, 'entering spring does not touch autumn rows');
 
     const springLessons = await ok('GET', `/api/admin/lessons?group_id=${groupId}`);
     const databases = springLessons.find((lesson) => lesson.subject === 'Базы данных');
@@ -213,7 +207,7 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         semester_id: spring.id, teacher_id: teacherId, discipline_id: springDiscipline,
         lesson_type: 'Лекция', group_id: groupId, planned_hours: 36
     });
-    // "Select from the dropdown" for the uploaded pair — hours are matched
+    // "Select from the dropdown" for the typed pair — hours are matched
     // live by identity, no separate linking step. It's a template row, so
     // (like the real constructor) this goes through the versioned POST, not
     // an in-place PUT — PUT on a template row is refused (see server.test.js).
