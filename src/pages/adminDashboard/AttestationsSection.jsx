@@ -159,6 +159,27 @@ export default function AttestationsSection({
             });
             const data = await response.json();
 
+            // With an end time it can't lie over the group's pair: only go in
+            // its place, the pair taken out of that day — or not at all.
+            if (response.status === 409 && data.pair_clash) {
+                if (!data.can_remove) {
+                    setToastMessage(`${data.error} — поставьте на другое время`);
+                    return;
+                }
+
+                const pairs = data.covered_pairs || [];
+                if (!window.confirm(
+                    `${data.error}.\n\nЗапись с временем окончания нельзя поставить поверх пары. `
+                    + `Убрать ${pairs.length > 1 ? 'эти пары' : 'эту пару'} в этот день? Тогда студенты увидят только запись сессии, а пара не засчитается преподавателю.\n\n`
+                    + 'ОК — убрать пару и сохранить, Отмена — не сохранять.'
+                )) {
+                    return;
+                }
+
+                await submitForm(null, confirm, true);
+                return;
+            }
+
             // A pair at that time, the teacher or the room busy…: the server
             // names it, and saving anyway is the specialist's call.
             if (response.status === 409 && data.needs_confirm) {
@@ -175,7 +196,7 @@ export default function AttestationsSection({
                     + 'Убрать её в этот день? Тогда студенты увидят только запись сессии, а пара не засчитается преподавателю.\n\n'
                     + 'ОК — убрать пару, Отмена — оставить её.'
                 );
-                await submitForm(null, true, removePairsToo);
+                await submitForm(null, true, removePairs || removePairsToo);
                 return;
             }
 

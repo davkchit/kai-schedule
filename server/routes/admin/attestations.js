@@ -94,7 +94,7 @@ function prepareRecord(db, payload) {
  * the teacher or the room busy, a consultation after its exam…) is sent back
  * as warnings until the specialist confirms with `confirm: true`.
  */
-function checkConflicts(db, record, { ignoreId = null, confirmed = false } = {}) {
+function checkConflicts(db, record, { ignoreId = null, confirmed = false, removePairs = false } = {}) {
     const subject = record.discipline_id
         ? db.prepare('SELECT name FROM disciplines WHERE id = ?').get(record.discipline_id).name
         : record.discipline_text;
@@ -103,10 +103,35 @@ function checkConflicts(db, record, { ignoreId = null, confirmed = false } = {})
         : record.teacher_text;
     const others = selectAttestations(db, 'a.semester_id = ? AND (a.date = ? OR a.group_id = ?)', [record.semester_id, record.date, record.group_id])
         .filter((other) => other.id !== ignoreId);
-    const { duplicate, warnings, covered } = findAttestationConflicts(db, { ...record, id: ignoreId, subject, teacher }, others);
+    const conflicts = findAttestationConflicts(db, { ...record, id: ignoreId, subject, teacher }, others);
+    const { duplicate, covered, clashing } = conflicts;
+    let { warnings } = conflicts;
 
     if (duplicate) {
         throw Object.assign(new Error(duplicate), { statusCode: 409 });
+    }
+
+    // With an end time the record is a fixed block of the group's day: it may
+    // not lie over the group's pair. It goes in only in the pair's place —
+    // the pair taken out of that day — and only if it takes the pair over
+    // entirely (a credit of п/г 1 can't take a whole-group pair from п/г 2).
+    if (record.time_end && clashing.length > 0) {
+        const canRemove = clashing.every((pair) => covered.includes(pair));
+
+        if (!(canRemove && removePairs)) {
+            const names = clashing.map((pair) => `${pair.subject || 'пара'} ${pair.time_start}–${pair.time_end}`).join(', ');
+            throw Object.assign(new Error(`В это время у группы ${clashing.length > 1 ? 'пары' : 'пара'}: ${names}`), {
+                statusCode: 409,
+                body: {
+                    pair_clash: true,
+                    can_remove: canRemove,
+                    covered_pairs: clashing.map(({ subject: name, time_start, time_end }) => ({ subject: name, time_start, time_end }))
+                }
+            });
+        }
+
+        // Those pairs go: no longer anything to confirm about them.
+        warnings = warnings.filter((warning) => !warning.startsWith('У группы в это время пара'));
     }
 
     if (warnings.length > 0 && !confirmed) {
@@ -114,7 +139,7 @@ function checkConflicts(db, record, { ignoreId = null, confirmed = false } = {})
             statusCode: 409,
             // covered_pairs: the group's own pairs at that time, which the
             // specialist can take out of that day (remove_pairs: true).
-            body: { needs_confirm: true, warnings, covered_pairs: covered.map(({ subject: name, time_start, time_end }) => ({ subject: name, time_start, time_end })) }
+            body: { needs_confirm: true, warnings, covered_pairs: (record.time_end ? [] : covered).map(({ subject: name, time_start, time_end }) => ({ subject: name, time_start, time_end })) }
         });
     }
 
@@ -154,7 +179,7 @@ router.post('/attestations', (req, res) => {
 
     try {
         const record = prepareRecord(db, validateAttestationBody(req.body));
-        const covered = checkConflicts(db, record, { confirmed: req.body?.confirm === true });
+        const covered = checkConflicts(db, record, { confirmed: req.body?.confirm === true, removePairs: req.body?.remove_pairs === true });
         const { id, removedPairs } = db.transaction(() => {
             const newId = insertAttestation(db, record);
             return { id: newId, removedPairs: removeCoveredPairs(db, record, newId, covered, req.body?.remove_pairs === true) };
@@ -194,7 +219,7 @@ router.put('/attestations/:id', (req, res) => {
         // first, so the conflict check below sees the day as it will be.
         const { removedPairs, restoredPairs } = db.transaction(() => {
             const restored = leavesItsPlace(existing, record) ? restorePairsHiddenBy(db, id) : 0;
-            const covered = checkConflicts(db, record, { ignoreId: id, confirmed: req.body?.confirm === true });
+            const covered = checkConflicts(db, record, { ignoreId: id, confirmed: req.body?.confirm === true, removePairs: req.body?.remove_pairs === true });
             db.prepare(`
                 UPDATE attestations SET
                     semester_id = ?, group_id = ?, subgroup = ?, kind = ?, date = ?, time_start = ?, time_end = ?, room = ?,

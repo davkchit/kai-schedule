@@ -1,0 +1,35 @@
+# Uptime check: every 5 minutes GitHub asks the live site whether it and its
+# database answer. A failed run is e-mailed by GitHub to the account that
+# last changed this schedule — that e-mail is the alert. Run it by hand from
+# the Actions tab («Run workflow») to check it works.
+#
+# GitHub runs schedules on a best-effort basis (a run can be late by several
+# minutes) and pauses them in a repository with no commits for 60 days.
+name: Uptime
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Site and database answer
+        env:
+          URL: https://194-226-123-13.sslip.io/api/health
+        run: |
+          for attempt in 1 2 3; do
+            body="$(curl -fsS --max-time 20 "$URL")" \
+              && echo "$body" | grep -q '"status":"ok"' \
+              && echo "$body" | grep -q '"database":"ok"' \
+              && { echo "OK: $body"; exit 0; }
+            echo "attempt $attempt failed: ${body:-no answer}"
+            sleep 20
+          done
+          echo "::error::The site does not answer: $URL"
+          exit 1

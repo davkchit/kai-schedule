@@ -9,7 +9,7 @@ const { resolveTemplateLessons } = require('../../utils/templateResolve');
 const { joinedMemberError, scheduleGroupId } = require('../../utils/groupJoin');
 const { findTemplateSlotOccupant, findWeekSlotOccupant } = require('../../utils/slots');
 const { templateWeekForSlot } = require('../../utils/templateWeek');
-const { findAttestationsUnderLesson } = require('../../utils/attestationConflicts');
+const { findAttestationsUnderLesson, timedAttestationError } = require('../../utils/attestationConflicts');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
 const { validateLessonCreateBody, validateLessonUpdateBody } = require('../../validation');
 const {
@@ -209,6 +209,15 @@ router.post('/lessons', (req, res) => {
         return res.status(409).json({
             error: `В этой ячейке уже есть занятие: ${occupant.subject}. Откройте его, чтобы изменить, или сначала уберите.`
         });
+    }
+
+    // An exam, credit or consultation with an end time blocks that part of the day.
+    const underAttestation = !payload.is_removed && timedAttestationError(db, semester, {
+        ...payload, specific_week: payload.specific_week, template_from_week: templateFromWeek
+    });
+
+    if (underAttestation) {
+        return res.status(409).json({ error: underAttestation });
     }
 
     const insertLesson = db.prepare(`
@@ -438,6 +447,13 @@ router.post('/lessons/for-groups', (req, res) => {
             continue;
         }
 
+        const underAttestation = timedAttestationError(db, semester, { ...payload, group_id: groupId, template_from_week: templateFromWeek });
+
+        if (underAttestation) {
+            problems.push(`у ${group.name}: ${underAttestation.replace(/^В это время у группы /, '').replace(/ — пару сюда поставить нельзя$/, '')}`);
+            continue;
+        }
+
         if (payload.specific_week !== null && templateHasPairsThisWeek(db, semester, groupId, payload.specific_week)) {
             problems.push(`у ${group.name} эта неделя ещё идёт по шаблону — добавьте пару в ней отдельно`);
         }
@@ -623,6 +639,13 @@ router.put('/lessons/:id', (req, res) => {
         if (occupant && !lesson.is_removed) {
             return res.status(409).json({ error: `В этой ячейке уже есть занятие: ${occupant.subject}` });
         }
+    }
+
+    const ownSemester = getSemesterById(db, lesson.semester_id);
+    const underAttestation = ownSemester && !lesson.is_removed && timedAttestationError(db, ownSemester, nextLesson);
+
+    if (underAttestation) {
+        return res.status(409).json({ error: underAttestation });
     }
 
     db.prepare(`

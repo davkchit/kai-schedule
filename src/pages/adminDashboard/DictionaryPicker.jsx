@@ -45,6 +45,11 @@ export default function DictionaryPicker({
         ? options.filter((option) => option.label.toLowerCase().includes(normalizedQuery))
         : options;
     const exactMatch = options.find((option) => option.label.toLowerCase() === normalizedQuery);
+    // Nothing left to choose once the text is exactly an entry (just picked,
+    // or a filled field focused again): an open list then only lies over the
+    // form below it — «Сохранить» right under it took the first click as a
+    // pick. Typing anything else opens it again.
+    const showList = isOpen && !(normalizedQuery && exactMatch);
 
     function pick(option) {
         onChange(option);
@@ -119,6 +124,9 @@ export default function DictionaryPicker({
                 value={query}
                 onFocus={() => setIsOpen(true)}
                 onBlur={handleBlur}
+                onKeyDown={(event) => {
+                    if (event.key === 'Escape') setIsOpen(false);
+                }}
                 onChange={(event) => {
                     setQuery(event.target.value);
                     setIsOpen(true);
@@ -131,7 +139,7 @@ export default function DictionaryPicker({
                         : (query.trim() ? untrackedHint : 'Начните вводить имя')}
                 </span>
             )}
-            {isOpen && (
+            {showList && (
                 <div className="dict-picker-list">
                     {matches.slice(0, 30).map((option) => (
                         <button

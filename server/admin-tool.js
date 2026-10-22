@@ -51,8 +51,15 @@ let pipedLines = null;
 
 function askHidden(question) {
     if (!process.stdin.isTTY) {
-        pipedLines ??= fs.readFileSync(0, 'utf8').split(/\r?\n/);
-        return Promise.resolve(pipedLines.shift() ?? '');
+        // Piped in (printf … | ssh … admin-tool). Read as a stream: a
+        // synchronous read of a pipe through ssh + sudo fails with EAGAIN.
+        pipedLines ??= new Promise((resolve) => {
+            let text = '';
+            process.stdin.setEncoding('utf8');
+            process.stdin.on('data', (chunk) => { text += chunk; });
+            process.stdin.on('end', () => resolve(text.split(/\r?\n/)));
+        });
+        return pipedLines.then((lines) => lines.shift() ?? '');
     }
 
     if (!reader) {

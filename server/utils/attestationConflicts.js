@@ -97,8 +97,10 @@ function createDayIndex(db) {
 function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(db)) {
     const groupId = scheduleGroupId(db, record.group_id);
     const warnings = [];
-    // The group's own pairs this record lands on — the specialist may take
-    // them out of that day, so they stop counting toward anyone's hours.
+    // The group's own pairs this record lands on (clashing); those it takes
+    // over entirely (covered) the specialist may take out of that day, so
+    // they stop counting toward anyone's hours.
+    const clashing = [];
     const covered = [];
     let duplicate = null;
 
@@ -113,6 +115,7 @@ function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(
 
         if (pair.group_id === groupId && subgroupsMeet(record, pair)) {
             warnings.push(`У группы в это время пара: ${what}`);
+            clashing.push(pair);
             // Only a pair the record takes over entirely can be taken out: a
             // credit of п/г 1 over a whole-group pair leaves п/г 2 that pair.
             if (!record.subgroup || pair.subgroup === record.subgroup) {
@@ -167,16 +170,16 @@ function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(
         }
     }
 
-    return { duplicate, warnings: [...new Set(warnings)], covered };
+    return { duplicate, warnings: [...new Set(warnings)], covered, clashing };
 }
 
 /**
- * Экзамены, зачёты, консультации of the lesson's group that a pair (just
- * saved in the constructor) lands on — a week's own pair on its date, a
- * template pair on any of its dates from template_from_week on. Said back to
- * the specialist; nothing is refused. Labels, e.g. «экзамен «Физика» 15.01 09:00».
+ * Экзамены, зачёты, консультации of the lesson's group that a pair lands on —
+ * a week's own pair on its date, a template pair on each of its dates from
+ * template_from_week on, except in weeks that have rows of their own (the
+ * template does not run there).
  */
-function findAttestationsUnderLesson(db, semester, lesson) {
+function attestationsUnderLesson(db, semester, lesson) {
     if (!lesson || lesson.is_removed || lesson.kind === 'event') {
         return [];
     }
@@ -187,18 +190,41 @@ function findAttestationsUnderLesson(db, semester, lesson) {
         FROM attestations a LEFT JOIN disciplines d ON d.id = a.discipline_id
         WHERE a.semester_id = ? AND a.group_id = ?
     `).all(semester.id, groupId);
+    const ownWeeks = new Set(db.prepare('SELECT DISTINCT specific_week FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week IS NOT NULL')
+        .all(semester.id, groupId).map((row) => row.specific_week));
 
     return records.filter((record) => {
         const { weekNumber, weekTypeNumber } = getSemesterWeekMeta(semester, record.date);
         const [year, month, day] = record.date.split('-').map(Number);
         const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay() || 7;
-        const onItsDay = lesson.specific_week !== null
+        const onItsDay = lesson.specific_week !== null && lesson.specific_week !== undefined
             ? lesson.specific_week === weekNumber
-            : weekNumber >= (lesson.template_from_week ?? 1) && weekNumber <= semester.weeks_count
+            : weekNumber >= (lesson.template_from_week ?? 1) && weekNumber <= semester.weeks_count && !ownWeeks.has(weekNumber)
                 && (lesson.week_type === 0 || lesson.week_type === weekTypeNumber);
 
         return onItsDay && weekday === lesson.day_of_week && subgroupsMeet(record, lesson) && overlaps(record, lesson);
-    }).map((record) => `${KIND_LABELS[record.kind]} «${record.subject}» ${formatDate(record.date)} ${record.time_start}`);
+    });
 }
 
-module.exports = { createDayIndex, findAttestationConflicts, findAttestationsUnderLesson };
+const recordLabel = (record) => `${KIND_LABELS[record.kind]} «${record.subject}» ${formatDate(record.date)} ${timeText(record)}`;
+
+/**
+ * Records a pair (just saved in the constructor) lands on, said back to the
+ * specialist, e.g. «экзамен «Физика» 15.01 09:00». Only records without an end
+ * time — one with an end refuses the pair beforehand (timedAttestationError).
+ */
+function findAttestationsUnderLesson(db, semester, lesson) {
+    return attestationsUnderLesson(db, semester, lesson).filter((record) => !record.time_end).map(recordLabel);
+}
+
+/**
+ * A record with a known end time is a fixed block of the group's day: no pair
+ * may be placed over it. The error to answer with, or null. (A record without
+ * an end is only assumed to last an hour or a pair, so that one stays a warning.)
+ */
+function timedAttestationError(db, semester, lesson) {
+    const record = attestationsUnderLesson(db, semester, lesson).find((item) => item.time_end);
+    return record ? `В это время у группы ${recordLabel(record)} — пару сюда поставить нельзя` : null;
+}
+
+module.exports = { createDayIndex, findAttestationConflicts, findAttestationsUnderLesson, timedAttestationError };

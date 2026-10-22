@@ -162,7 +162,9 @@ router.get('/semesters/:id/impact', (req, res) => {
         teachers_changed: changedTeachers.size,
         teacher_names: [...changedTeachers].sort((a, b) => a.localeCompare(b, 'ru')).slice(0, 10),
         hours_before: hoursBefore,
-        hours_after: hoursAfter
+        hours_after: hoursAfter,
+        // Said before «Применить?», not after it: saving would be refused.
+        blocked: weeksCutError(db, semester, nextWeeksCount)
     });
 });
 
@@ -214,6 +216,27 @@ router.post('/semesters', (req, res) => {
     res.status(201).json(mapSemesterRow(created));
 });
 
+/**
+ * Shrinking past weeks that were entered on their own would hide them — from
+ * students and from hours alike — while the rows stay. The refusal (with the
+ * weeks named) or null; the specialist clears them first if that is intended.
+ */
+function weeksCutError(db, semester, nextWeeksCount) {
+    if (nextWeeksCount >= semester.weeks_count) {
+        return null;
+    }
+
+    const weeks = db.prepare(`
+        SELECT DISTINCT specific_week FROM lessons
+        WHERE semester_id = ? AND specific_week > ? AND is_removed = 0
+        ORDER BY specific_week
+    `).all(semester.id, nextWeeksCount).map((row) => row.specific_week);
+
+    return weeks.length > 0
+        ? { error: `В неделях ${weeks.join(', ')} уже внесены пары — сначала очистите их или оставьте семестр длиннее`, weeks }
+        : null;
+}
+
 router.put('/semesters/:id', (req, res) => {
     const semesterId = Number.parseInt(req.params.id, 10);
 
@@ -247,22 +270,10 @@ router.put('/semesters/:id', (req, res) => {
         return res.status(409).json({ error: overlappingSemesterError(overlapping) });
     }
 
-    // Shrinking past weeks that were entered on their own would hide them —
-    // from students and from hours alike — while the rows stay. Refuse and
-    // name the weeks; the specialist clears them first if that is intended.
-    if (next.weeks_count < existing.weeks_count) {
-        const cutWeeks = db.prepare(`
-            SELECT DISTINCT specific_week FROM lessons
-            WHERE semester_id = ? AND specific_week > ? AND is_removed = 0
-            ORDER BY specific_week
-        `).all(semesterId, next.weeks_count).map((row) => row.specific_week);
+    const cut = weeksCutError(db, existing, next.weeks_count);
 
-        if (cutWeeks.length > 0) {
-            return res.status(409).json({
-                error: `В неделях ${cutWeeks.join(', ')} уже внесены пары — сначала очистите их или оставьте семестр длиннее`,
-                weeks: cutWeeks
-            });
-        }
+    if (cut) {
+        return res.status(409).json(cut);
     }
 
     const transaction = db.transaction(() => {

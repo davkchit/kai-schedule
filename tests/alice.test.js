@@ -79,22 +79,65 @@ test('first time: asks for the group, remembers it, then answers days', async ()
     assert.match(remembered.text, /номер/, 'words alone are not a number yet');
 
     const set = await say('23 303');
-    assert.match(set.text, /^Запомнила: группа 23303\. Сегодня, в среду, 21 октября, 2 пары\. 8:00 — Математика, лекция, аудитория 305\. 9:40 — Физика, практика, онлайн\./);
+    assert.match(set.text, /^Запомнила: группа 23303\. Сегодня, в среду, 21 октября, 2 пары\. Первая — в 8:00, Математика, лекция, аудитория 305\. Вторая — в 9:40, Физика, практика, онлайн\./);
     assert.deepEqual(set.body.application_state, { group_id: leaderId, group_name: '23303' });
     assert.equal(set.body.user_state_update, undefined, 'no Yandex account — device storage only');
 
     const state = { application: set.body.application_state };
     const tomorrow = await say('какие пары завтра', { state });
-    assert.equal(tomorrow.text, 'Завтра, в четверг, 22 октября, 1 пара. 11:30 — Информатика, лабораторная, аудитория 210.');
+    assert.equal(tomorrow.text, 'Завтра, в четверг, 22 октября, 1 пара. Первая — в 11:30, Информатика, лабораторная, аудитория 210.');
 
     const friday = await say('что в пятницу', { state });
-    assert.equal(friday.text, 'Послезавтра, в пятницу, 23 октября, пар нет. 8:00 — Кураторский час. 13:10 — экзамен по предмету Химия, аудитория 101.');
+    assert.equal(friday.text, 'Послезавтра, в пятницу, 23 октября, пар нет. В 8:00 — Кураторский час. В 13:10 — экзамен по предмету Химия, аудитория 101.');
 
     const entity = await say('расписание на субботу', { state, entities: [{ type: 'YANDEX.DATETIME', value: { day: 3, day_is_relative: true } }] });
     assert.match(entity.text, /пар нет/);
 
     const week = await say('что на неделе', { state });
     assert.match(week.text, /^Неделя с 19 октября: среда — 2 занятия, с 8:00; четверг — 1 занятие, с 11:30; пятница — 2 занятия, с 8:00\./);
+
+    // «понедельник» holds «недел» inside: still a day, not the week.
+    assert.match((await say('расписание на понедельник', { state })).text, /^В понедельник, 26 октября/);
+    assert.match((await say('что на следующую неделю', { state })).text, /^На неделе с 26 октября пар нет/);
+    // A date said in words, with no entity from Alice.
+    assert.match((await say('что 22 октября', { state })).text, /22 октября, 1 пара\. Первая — в 11:30, Информатика/);
+
+    // A typo in the month; then a bare day means that same month.
+    const typo = await say('какие пары были 21 октябряя', { state });
+    assert.match(typo.text, /21 октября, 2 пары/);
+    assert.match((await say('а 22', { state: { ...state, session: typo.body.session_state } })).text, /22 октября, 1 пара/);
+    // Something date-like that can't be read is not answered as «tomorrow».
+    assert.match((await say('а 45', { state })).text, /^Не поняла, какой день/);
+
+    // Asked before the group is known: answered once the number is given.
+    const before = await say('какие пары 22 октября', { isNew: true });
+    assert.match(before.text, /номер вашей группы/);
+    const after = await say('23303', { state: { session: before.body.session_state } });
+    assert.match(after.text, /^Запомнила: группа 23303\. .*22 октября, 1 пара/);
+});
+
+test('asked the way people ask: first, last, how many, now, next, a subject, the session, small talk', async () => {
+    const state = { application: { group_id: leaderId, group_name: '23303' } };
+    const ask = async (phrase, extra = {}) => (await say(phrase, { state, ...extra })).text;
+
+    at('2026-10-21T09:00:00'); // Wednesday, during the first pair
+    assert.equal(await ask('первая пара'), 'Сегодня, в среду, 21 октября, первая пара — в 8:00: Математика, лекция, аудитория 305.');
+    assert.equal(await ask('вторая пара в среду'), 'Сегодня, в среду, 21 октября, вторая пара — в 9:40: Физика, практика, онлайн.');
+    assert.match(await ask('третья пара сегодня'), /всего 2 пары — третьей пары нет/);
+    assert.equal(await ask('во сколько я сегодня освобожусь'), 'Сегодня, в среду, 21 октября, последняя пара — вторая, в 9:40: Физика, практика, онлайн, закончится в 11:10.');
+    assert.equal(await ask('сколько пар завтра'), 'Завтра, в четверг, 22 октября, 1 пара: с 11:30 до 13:00.');
+    assert.equal(await ask('какая сейчас пара'), 'Сейчас идёт Математика, лекция, аудитория 305, до 9:30. Следующая — в 9:40, Физика, практика, онлайн.');
+    assert.equal(await ask('какая следующая пара'), 'Сейчас идёт Математика, лекция, аудитория 305, до 9:30. Следующая — в 9:40, Физика, практика, онлайн.');
+    assert.equal(await ask('когда информатика'), 'Ближайшее: завтра, в четверг, 22 октября, в 11:30 — Информатика, лабораторная, аудитория 210.');
+    assert.equal(await ask('когда экзамены'), 'Впереди: 23 октября в 13:10 — экзамен по предмету Химия, аудитория 101.');
+    assert.match(await ask('как дела'), /^Всё хорошо/);
+    assert.match(await ask('какая погода в москве'), /^Не совсем поняла/);
+    // Past days are told in the past tense.
+    at('2026-10-24T12:00:00');
+    assert.equal(await ask('пары 21 октября'), 'В среду, 21 октября, было 2 пары. Первая — в 8:00, Математика, лекция, аудитория 305. Вторая — в 9:40, Физика, практика, онлайн.');
+    assert.match(await ask('следующая пара'), /^Сегодня пар нет\. |^В ближайшие две недели пар нет/);
+    const thanks = await say('спасибо', { state });
+    assert.equal(thanks.end, true);
 });
 
 test('a logged-in user keeps the group on the account; a joined group hears its leader\'s pairs', async () => {

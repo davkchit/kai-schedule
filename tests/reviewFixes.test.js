@@ -232,3 +232,48 @@ test('minor: joining with twin plan rows, deleting a group with exams, absurd da
     const huge = await fetch(`${baseUrl}/api/client-error`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'x'.repeat(40000) }) });
     assert.equal(huge.status, 413);
 });
+
+test('a session record with an end time and a pair of the group never overlap — either way', async () => {
+    const { ok, call } = ctx;
+    const w = await freshWorld();
+    at('2026-10-21T12:00:00');
+    // Week 10: Tuesday 03.11. One pair of the week's own at 08:00–09:30.
+    await ok('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10 });
+    const exam = { semester_id: w.semester.id, group_id: w.groupId, kind: 'exam', date: '2026-11-03', time_start: '08:00', time_end: '10:00', discipline_id: w.discipline, teacher_id: w.teacherA };
+
+    // Over the pair: refused, and «save anyway» does not get past it.
+    const clash = await call('POST', '/api/admin/attestations', exam);
+    assert.equal(clash.status, 409);
+    assert.equal(clash.data.pair_clash, true);
+    assert.equal(clash.data.can_remove, true);
+    assert.equal((await call('POST', '/api/admin/attestations', { ...exam, confirm: true })).status, 409);
+    // Only in the pair's place.
+    const placed = await ok('POST', '/api/admin/attestations', { ...exam, remove_pairs: true });
+    assert.equal(placed.removed_pairs, 1);
+
+    // A credit of п/г 1 can't take a whole-group pair from п/г 2.
+    await ok('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10, day_of_week: 3 });
+    const partial = await call('POST', '/api/admin/attestations', { ...exam, kind: 'credit', subgroup: 1, date: '2026-11-04', remove_pairs: true, confirm: true });
+    assert.equal(partial.status, 409);
+    assert.equal(partial.data.can_remove, false);
+
+    // Without an end time it stays a warning the specialist may confirm.
+    const open = await call('POST', '/api/admin/attestations', { ...exam, kind: 'credit', date: '2026-11-04', time_end: null });
+    assert.equal(open.data.needs_confirm, true);
+
+    // The other way: no pair over the timed exam (03.11 08:00–10:00).
+    const onto = await call('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10, time_start: '09:40', time_end: '11:10' });
+    assert.equal(onto.status, 409);
+    assert.match(onto.data.error, /экзамен «Физика» 03\.11 08:00–10:00 — пару сюда поставить нельзя/);
+    // Right after it is fine.
+    const after = await ok('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10, time_start: '10:10', time_end: '11:40' });
+    // …but not moved, edited or dragged onto it.
+    assert.equal((await call('PUT', `/api/admin/lessons/${after.id}`, { time_start: '09:00', time_end: '10:30' })).status, 409);
+    assert.equal((await call('POST', '/api/admin/schedule/move-lesson', { lesson_id: after.id, mode: 'week', week_number: 10, day_of_week: 2, time_start: '08:00', time_end: '09:30' })).status, 409);
+    // A template pair that would run on that date is refused as well.
+    ctx.db.exec('DELETE FROM lessons WHERE specific_week = 10');
+    assert.equal((await call('POST', '/api/admin/lessons', { ...w.pair, time_start: '09:00', time_end: '10:30' })).status, 409);
+    // In a week that is its own the template does not run: no clash there.
+    await ok('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10, day_of_week: 5 });
+    assert.ok((await ok('POST', '/api/admin/lessons', { ...w.pair, time_start: '09:00', time_end: '10:30' })).id);
+});

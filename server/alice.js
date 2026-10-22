@@ -7,7 +7,7 @@
 // device (application_state). Nothing is written to our database.
 
 const clock = require('./utils/clock');
-const { addDaysToIsoDate, formatLocalDate } = require('./utils/date');
+const { addDaysToIsoDate, formatLocalDate, isValidIsoDate } = require('./utils/date');
 const { resolveGroupLessons, sortByTime, weekdayOf } = require('./utils/dayResolve');
 const { scheduleGroupId } = require('./utils/groupJoin');
 const { selectAttestations } = require('./utils/attestations');
@@ -19,8 +19,13 @@ const WEEKDAY_WORDS = [
     [5, /пятниц[ауы]/], [6, /суббот[ауы]/], [7, /воскресень[ея]/]
 ];
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+// Month words by their stem, so a typo or a stray letter («сентябряя») still counts.
+const MONTH_STEMS = [/^январ/, /^феврал/, /^март/, /^апрел/, /^ма[йяю]/, /^июн/, /^июл/, /^август/, /^сентябр/, /^октябр/, /^ноябр/, /^декабр/];
+const monthOfWord = (word) => MONTH_STEMS.findIndex((stem) => stem.test(word)) + 1;
 const KIND_WORDS = { exam: 'экзамен', credit: 'зачёт', consultation: 'консультация' };
-const BUTTONS = ['Сегодня', 'Завтра', 'На неделе', 'Сменить группу'];
+const BUTTONS = ['Сегодня', 'Завтра', 'Следующая пара', 'На неделе', 'Сменить группу'];
+const ORDINALS = ['Первая', 'Вторая', 'Третья', 'Четвёртая', 'Пятая', 'Шестая', 'Седьмая', 'Восьмая'];
+const ORDINALS_OF = ['первой', 'второй', 'третьей', 'четвёртой', 'пятой', 'шестой', 'седьмой', 'восьмой'];
 
 const normalize = (text) => String(text || '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}\s-]/gu, ' ').replace(/\s+/g, ' ').trim();
 
@@ -52,7 +57,8 @@ function dayItems(db, groupId, iso) {
     return sortByTime([...lessons, ...attestations]);
 }
 
-function describeItem(item) {
+/** What and where, without the time: «Математика, лекция, аудитория 305». */
+function itemBody(item) {
     // «с/з» is how the sheets write the gym; spoken, it has to be a word.
     const room = !item.room ? ''
         : /^\s*(онлайн|online|дистанционно)\s*$/i.test(item.room) ? ', онлайн'
@@ -60,25 +66,143 @@ function describeItem(item) {
                 : `, аудитория ${item.room}`;
 
     if (item.attestation) {
-        return `${spokenTime(item.time_start)} — ${KIND_WORDS[item.kind] || 'экзамен'} по предмету ${item.subject}${room}`;
+        return `${KIND_WORDS[item.kind] || 'экзамен'} по предмету ${item.subject}${room}`;
     }
 
     const type = item.kind === 'event' || !item.lesson_type ? '' : `, ${item.lesson_type.toLowerCase().replace('лаб', 'лабораторная')}`;
-    return `${spokenTime(item.time_start)} — ${item.subject}${type}${room}`;
+    return `${item.subject}${type}${room}`;
 }
 
+const isPair = (item) => !item.attestation && item.kind !== 'event';
+const pairWord = (count) => plural(count, 'пара', 'пары', 'пар');
+const lowerFirst = (text) => `${text[0].toLowerCase()}${text.slice(1)}`;
+
+/**
+ * One day, said the way a person would: past days in the past tense, pairs
+ * by their order («Первая — в 8:00, …»), an event or an exam by its time.
+ */
 function describeDay(db, groupId, iso, today) {
     const items = dayItems(db, groupId, iso);
     const label = dayLabel(iso, today);
+    const past = iso < today;
 
     if (items.length === 0) {
-        return `${label}: пар нет.`;
+        return past ? `${label}, пар не было.` : `${label}, пар нет.`;
     }
 
-    const pairs = items.filter((item) => !item.attestation && item.kind !== 'event').length;
-    // Only an event or an exam that day: «пар нет», then what there is.
-    const head = pairs > 0 ? `${pairs} ${plural(pairs, 'пара', 'пары', 'пар')}` : 'пар нет';
-    return `${label}, ${head}. ${items.map(describeItem).join('. ')}.`;
+    const pairs = items.filter(isPair).length;
+    const head = pairs === 0 ? (past ? 'пар не было' : 'пар нет')
+        : past ? `${plural(pairs, 'была', 'было', 'было')} ${pairs} ${pairWord(pairs)}` : `${pairs} ${pairWord(pairs)}`;
+    let order = 0;
+    const parts = items.map((item) => (isPair(item)
+        ? `${ORDINALS[order++] || 'Ещё одна'} — в ${spokenTime(item.time_start)}, ${itemBody(item)}.`
+        : `В ${spokenTime(item.time_start)} — ${itemBody(item)}.`));
+
+    return `${label}, ${head}. ${parts.join(' ')}`;
+}
+
+/** «первая пара», «последняя пара», «сколько пар» about one day. */
+function describePick(db, groupId, iso, today, pick) {
+    const pairs = dayItems(db, groupId, iso).filter(isPair);
+    const label = dayLabel(iso, today);
+    const past = iso < today;
+
+    if (pairs.length === 0) {
+        return past ? `${label}, пар не было.` : `${label}, пар нет.`;
+    }
+
+    if (pick === 'count') {
+        const last = pairs[pairs.length - 1];
+        return `${label}, ${past ? `${plural(pairs.length, 'была', 'было', 'было')} ` : ''}${pairs.length} ${pairWord(pairs.length)}: с ${spokenTime(pairs[0].time_start)} до ${spokenTime(last.time_end || last.time_start)}.`;
+    }
+
+    if (pick === 'last') {
+        const last = pairs[pairs.length - 1];
+        const ends = last.time_end ? `, ${past ? 'закончилась' : 'закончится'} в ${spokenTime(last.time_end)}` : '';
+        return `${label}, последняя пара — ${pairs.length > 1 ? `${lowerFirst(ORDINALS[pairs.length - 1] || 'ещё одна')}, ` : ''}в ${spokenTime(last.time_start)}: ${itemBody(last)}${ends}.`;
+    }
+
+    const pair = pairs[pick];
+
+    if (!pair) {
+        return `${label}, ${past ? 'было' : 'всего'} ${pairs.length} ${pairWord(pairs.length)} — ${ORDINALS_OF[pick] || 'такой'} пары ${past ? 'не было' : 'нет'}.`;
+    }
+
+    return `${label}, ${lowerFirst(ORDINALS[pick])} пара — в ${spokenTime(pair.time_start)}: ${itemBody(pair)}.`;
+}
+
+/** «какая сейчас пара», «следующая пара»: from this minute on, today and then the coming days. */
+function describeNow(db, groupId, today, nowTime) {
+    const pairs = dayItems(db, groupId, today).filter(isPair);
+    const current = pairs.find((pair) => pair.time_start <= nowTime && nowTime < (pair.time_end || pair.time_start));
+    const next = pairs.find((pair) => pair.time_start > nowTime);
+
+    if (current) {
+        const tail = next ? ` Следующая — в ${spokenTime(next.time_start)}, ${itemBody(next)}.` : ' Это последняя пара на сегодня.';
+        return `Сейчас идёт ${itemBody(current)}${current.time_end ? `, до ${spokenTime(current.time_end)}` : ''}.${tail}`;
+    }
+
+    if (next) {
+        return `Следующая пара — в ${spokenTime(next.time_start)}: ${itemBody(next)}.`;
+    }
+
+    for (let offset = 1; offset <= 14; offset += 1) {
+        const iso = addDaysToIsoDate(today, offset);
+        const first = dayItems(db, groupId, iso).filter(isPair)[0];
+        if (first) {
+            return `${pairs.length > 0 ? 'На сегодня пары закончились' : 'Сегодня пар нет'}. Ближайшая — ${lowerFirst(dayLabel(iso, today))}, в ${spokenTime(first.time_start)}: ${itemBody(first)}.`;
+        }
+    }
+
+    return 'В ближайшие две недели пар нет.';
+}
+
+// Words that are about the question, not the subject asked for.
+const QUESTION_WORDS = /^(когда|будет|будут|следующ|ближайш|сколько|аудитор|какой|какая|какие|котор|занят|пара|пары|пару|урок|лекци|практик|лаборат|меня|предмет|начина)/;
+
+/** «когда физика», «где базы данных»: the subject's nearest pair (or exam) from now on. */
+function describeSubject(db, groupId, text, today, nowTime) {
+    const stems = text.split(' ').filter((word) => word.length >= 4 && !QUESTION_WORDS.test(word)).map((word) => word.slice(0, 5));
+
+    if (stems.length === 0) {
+        return null;
+    }
+
+    for (let offset = 0; offset <= 21; offset += 1) {
+        const iso = addDaysToIsoDate(today, offset);
+        const found = dayItems(db, groupId, iso).find((item) => {
+            if (offset === 0 && (item.time_end || item.time_start) <= nowTime) return false;
+            const subject = normalize(item.subject);
+            return item.kind !== 'event' && stems.every((stem) => subject.includes(stem));
+        });
+
+        if (found && offset === 0 && found.time_start <= nowTime) {
+            return `Идёт прямо сейчас${found.time_end ? `, до ${spokenTime(found.time_end)}` : ''}: ${itemBody(found)}.`;
+        }
+
+        if (found) {
+            return `Ближайшее: ${lowerFirst(dayLabel(iso, today))}, в ${spokenTime(found.time_start)} — ${itemBody(found)}.`;
+        }
+    }
+
+    return null;
+}
+
+/** «когда экзамены», «что на сессии»: the group's records from today on. */
+function describeSession(db, groupId, today) {
+    const records = selectAttestations(db, 'a.group_id = ? AND a.date >= ?', [scheduleGroupId(db, groupId), today])
+        .sort((left, right) => (left.date + left.time_start).localeCompare(right.date + right.time_start));
+
+    if (records.length === 0) {
+        return 'Экзаменов, зачётов и консультаций пока не назначено.';
+    }
+
+    const shown = records.slice(0, 6).map((record) => {
+        const [, month, day] = record.date.split('-').map(Number);
+        return `${day} ${MONTHS[month - 1]} в ${spokenTime(record.time_start)} — ${itemBody({ ...record, attestation: true })}`;
+    });
+    const more = records.length > shown.length ? ` И ещё ${records.length - shown.length}.` : '';
+    return `Впереди: ${shown.join('; ')}.${more}`;
 }
 
 function describeWeek(db, groupId, mondayIso, today) {
@@ -98,20 +222,52 @@ function describeWeek(db, groupId, mondayIso, today) {
         : `Неделя с ${day} ${MONTHS[month - 1]}: ${parts.join('; ')}. Спросите про конкретный день, чтобы услышать пары.`;
 }
 
-/** The date a phrase asks about, or null: Alice's own date entity first, then words. */
-function requestedDate(request, text, today) {
+/**
+ * A day and month as the nearest such date — this year, or the neighbouring
+ * one for «5 января» asked in December. Null if there is no such day.
+ */
+function nearestDate(day, month, today) {
+    const year = Number(today.slice(0, 4));
+    const pad = (value) => String(value).padStart(2, '0');
+    const distance = (iso) => Math.abs(new Date(`${iso}T00:00:00Z`) - new Date(`${today}T00:00:00Z`));
+    const candidates = [year - 1, year, year + 1].map((y) => `${y}-${pad(month)}-${pad(day)}`).filter(isValidIsoDate);
+    return candidates.sort((left, right) => distance(left) - distance(right))[0] || null;
+}
+
+/**
+ * The date a phrase asks about, or null: Alice's own date entity first, then
+ * words. `contextMonth` is the month of the date asked just before (kept in
+ * session_state), so «а 18?» right after «19 сентября» means 18 September.
+ */
+function requestedDate(request, text, today, contextMonth = null) {
     const entity = (request.nlu?.entities || []).find((item) => item.type === 'YANDEX.DATETIME')?.value;
+    const fallbackMonth = contextMonth || Number(today.slice(5, 7));
 
     if (entity) {
         if (entity.day_is_relative && Number.isInteger(entity.day)) {
             return addDaysToIsoDate(today, entity.day);
         }
 
-        if (Number.isInteger(entity.day) && Number.isInteger(entity.month)) {
-            const year = Number.isInteger(entity.year) ? entity.year : Number(today.slice(0, 4));
-            const iso = `${year}-${String(entity.month).padStart(2, '0')}-${String(entity.day).padStart(2, '0')}`;
-            if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+        if (Number.isInteger(entity.day)) {
+            const month = Number.isInteger(entity.month) ? entity.month : fallbackMonth;
+            const date = Number.isInteger(entity.year)
+                ? `${entity.year}-${String(month).padStart(2, '0')}-${String(entity.day).padStart(2, '0')}`
+                : nearestDate(entity.day, month, today);
+            if (date && isValidIsoDate(date)) return date;
         }
+    }
+
+    // «16 октября», «19 сентябряя» — a number and a month word.
+    for (const match of text.matchAll(/(?:^|\D)(\d{1,2})\s+([а-яё]+)/g)) {
+        const month = monthOfWord(match[2]);
+        if (month) return nearestDate(Number(match[1]), month, today);
+    }
+
+    // A bare day: «а 18», «18-го», «18 число» — in the month just talked about.
+    const bare = text.match(/(?:^|\s)(\d{1,2})(?:\s*-?\s*(?:го|е|число|числа))?(?:\s|$)/);
+    if (bare && Number(bare[1]) >= 1 && Number(bare[1]) <= 31) {
+        const date = nearestDate(Number(bare[1]), fallbackMonth, today);
+        if (date) return date;
     }
 
     if (/послезавтра/.test(text)) return addDaysToIsoDate(today, 2);
@@ -136,9 +292,12 @@ function findGroupByNumber(db, text) {
     return { asked: match[1], group: db.prepare('SELECT id, name FROM groups_ WHERE name = ?').get(match[1]) || null };
 }
 
-function answer(text, { end = false, remember, forget = false, isLoggedIn } = {}) {
+function answer(text, { end = false, remember, forget = false, isLoggedIn, session = null } = {}) {
     const response = {
         version: '1.0',
+        // Only for this conversation: the month last asked about, or a
+        // question asked before the group was known.
+        ...(session ? { session_state: session } : {}),
         response: {
             text: text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT - 1)}…` : text,
             end_session: end,
@@ -158,7 +317,9 @@ function answer(text, { end = false, remember, forget = false, isLoggedIn } = {}
 }
 
 const HELP = 'Я рассказываю расписание групп НЧФ КАИ. Скажите номер группы, например «двадцать три сто один» или «23101», — я его запомню. '
-    + 'Потом спрашивайте: «какие пары завтра», «что в пятницу», «расписание на неделю». Сменить группу — «другая группа».';
+    + 'Потом спрашивайте как удобно: «что завтра», «первая пара в пятницу», «какая следующая пара», «во сколько я сегодня освобожусь», '
+    + '«когда физика», «когда экзамены», «расписание на неделю». Сменить группу — «другая группа».';
+const NOT_UNDERSTOOD = 'Не совсем поняла. Можно спросить, например: «что завтра», «первая пара в пятницу», «какая следующая пара», «когда экзамены».';
 
 function handleAlice(db, body, now = clock.now()) {
     const request = body?.request || {};
@@ -173,12 +334,21 @@ function handleAlice(db, body, now = clock.now()) {
         return answer('pong', { isLoggedIn });
     }
 
-    if (/^(хватит|стоп|выход|выйти|закончить|все спасибо|спасибо все)$/.test(text)) {
+    if (/^(хватит|стоп|выход|выйти|закончить|все спасибо|спасибо все|пока|до свидания)$/.test(text)) {
         return answer('Хорошо, до встречи! Хорошего дня.', { end: true, isLoggedIn });
     }
 
-    if (/помощь|что ты умеешь|что умеешь|как пользоваться/.test(text)) {
+    if (/^(спасибо|благодарю|спс)( большое| огромное)?$/.test(text)) {
+        return answer('Пожалуйста! Обращайтесь, если что.', { end: true, isLoggedIn });
+    }
+
+    if (/помощь|что ты умеешь|что умеешь|как пользоваться|кто ты|ты кто/.test(text)) {
         return answer(HELP, { isLoggedIn });
+    }
+
+    // A word of small talk gets a word back, not a timetable.
+    if (/как (у тебя )?(дела|ты|жизнь|настроение|поживаешь)/.test(text)) {
+        return answer('Всё хорошо, спасибо, что спросили! Могу подсказать, что у вас сегодня или завтра.', { isLoggedIn });
     }
 
     if (/(другая|сменить|смени|поменять|поменяй|забудь|забыть)\s+групп/.test(text)) {
@@ -196,42 +366,113 @@ function handleAlice(db, body, now = clock.now()) {
     const group = named.group
         || (stored ? db.prepare('SELECT id, name FROM groups_ WHERE id = ?').get(stored.group_id) : null);
 
+    const contextMonth = Number.isInteger(state.session?.month) ? state.session.month : null;
+
     if (!group) {
+        // A question asked before the group is known is answered once it is.
+        const pendingWeek = /(?:^|[^а-яё])недел/.test(text) ? (/следующ[а-яё]*\s+недел/.test(text) ? 'next' : 'this') : null;
+        const pendingDate = pendingWeek ? null : requestedDate(request, text, today, contextMonth);
+        const keep = pendingWeek || pendingDate ? { pending_week: pendingWeek, pending_date: pendingDate } : (state.session || null);
         const greeting = session.new ? 'Привет! Я подскажу расписание. ' : '';
-        return answer(`${greeting}Назовите номер вашей группы, например 23101.`, { isLoggedIn });
+        return answer(`${greeting}Назовите номер вашей группы, например 23101.`, { isLoggedIn, session: keep });
     }
 
     const remember = named.group ? group : null;
     const prefix = named.group ? `Запомнила: группа ${group.name}. ` : '';
+    // The group number itself is not a date («23 303» is not «23-го»).
+    const dateText = named.asked ? text.replace(/(\d)\s+(?=\d)/g, '$1').replace(named.asked, ' ').replace(/\s+/g, ' ').trim() : text;
+    // Just the number given («23303», «я из группы 23303»): answer what was asked before it.
+    const onlyGroup = named.group && dateText.split(' ').every((word) => !word || /^(я|из|моя|группа|группы|номер)$/.test(word));
+    const pending = onlyGroup ? state.session : null;
 
-    if (/следующ\w* недел/.test(text)) {
+    if (pending?.pending_date && isValidIsoDate(pending.pending_date)) {
+        return answer(prefix + describeDay(db, group.id, pending.pending_date, today), { remember, isLoggedIn, session: { month: Number(pending.pending_date.slice(5, 7)) } });
+    }
+
+    if (pending?.pending_week) {
+        const monday = addDaysToIsoDate(today, (pending.pending_week === 'next' ? 8 : 1) - weekdayOf(today));
+        return answer(prefix + describeWeek(db, group.id, monday, today), { remember, isLoggedIn });
+    }
+
+    const greetingOnly = /^(привет|здравствуй|здравствуйте|добрый день|доброе утро|добрый вечер|хай|алиса)$/.test(dateText);
+
+    if (greetingOnly && !named.group) {
+        return answer('Привет! Спросите, например: «что сегодня», «какая следующая пара» или «когда экзамены».', { isLoggedIn });
+    }
+
+    const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    if (/экзамен|зачет|сесси|консультац/.test(dateText) && !requestedDate(request, dateText, today, contextMonth)) {
+        return answer(prefix + describeSession(db, group.id, today), { remember, isLoggedIn });
+    }
+
+    if (/(следующ|ближайш)[а-яё]*\s+пар|(какая|что)\s+(сейчас|щас|теперь)|сейчас\s+пара|^(а )?сейчас$|^(а |ну )?(что |какая )?(дальше|потом|после)( пара)?$/.test(dateText)) {
+        return answer(prefix + describeNow(db, group.id, today, nowTime), { remember, isLoggedIn });
+    }
+
+    // «недел» as the start of a word: «понедельник» contains it too. (JavaScript's
+    // word classes know no Cyrillic, hence the explicit letter class.)
+    if (/следующ[а-яё]*\s+недел/.test(text)) {
         const monday = addDaysToIsoDate(today, 8 - weekdayOf(today));
         return answer(prefix + describeWeek(db, group.id, monday, today), { remember, isLoggedIn });
     }
 
-    if (/недел/.test(text)) {
+    if (/(?:^|[^а-яё])недел/.test(text)) {
         const monday = addDaysToIsoDate(today, 1 - weekdayOf(today));
         return answer(prefix + describeWeek(db, group.id, monday, today), { remember, isLoggedIn });
     }
 
-    const date = requestedDate(request, text, today);
+    const date = requestedDate(request, dateText, today, contextMonth);
+    const nth = dateText.match(/(перв|втор|трет|четв[её]рт|пят|шест|седьм)[а-яё]*\s+пар/);
+    const pick = nth ? ['перв', 'втор', 'трет', 'четв', 'пят', 'шест', 'седьм'].findIndex((stem) => nth[1].replace('ё', 'е').startsWith(stem))
+        : /последн[а-яё]*\s+пар|освобож|во сколько[а-яё ]*(закончи|заканчива|кончаю|конча)/.test(dateText) ? 'last'
+            : /сколько[а-яё ]*пар/.test(dateText) ? 'count'
+                : /во сколько[а-яё ]*(начина|первая|на учеб|к первой|вставать)|к скольки/.test(dateText) ? 0
+                    : null;
 
-    if (date) {
-        return answer(prefix + describeDay(db, group.id, date, today), { remember, isLoggedIn });
+    if (pick !== null) {
+        const day = date || defaultDay(db, group.id, today, nowTime).iso;
+        return answer(prefix + describePick(db, group.id, day, today, pick), { remember, isLoggedIn, session: { month: Number(day.slice(5, 7)) } });
     }
 
-    // Nothing asked for in particular: today — or, once today's pairs are
-    // over (evening), tomorrow, which is what someone asking then wants.
-    const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const todayItems = dayItems(db, group.id, today);
+    if (date) {
+        return answer(prefix + describeDay(db, group.id, date, today), { remember, isLoggedIn, session: { month: Number(date.slice(5, 7)) } });
+    }
+
+    if (/когда|где|во сколько|в какой/.test(dateText)) {
+        const subject = describeSubject(db, group.id, dateText, today, nowTime);
+        if (subject) return answer(prefix + subject, { remember, isLoggedIn });
+    }
+
+    // It sounded like a date, but none came out: say so, rather than quietly
+    // answering about tomorrow as if that had been asked.
+    if (/\d/.test(dateText) || dateText.split(' ').some((word) => monthOfWord(word))) {
+        return answer(`${prefix}Не поняла, какой день. Скажите, например: «18 сентября», «в пятницу» или «завтра».`, { remember, isLoggedIn, session: state.session || null });
+    }
+
+    // A phrase about something else entirely: say what can be asked, rather
+    // than reading out a timetable nobody asked for.
+    if (dateText && !named.group && !greetingOnly && !/пар|расписан|заняти|учеб|урок|лекци|практик|^(а |ну )?(что|чего|дальше|ещ[её])( у (меня|нас))?$/.test(dateText)) {
+        return answer(NOT_UNDERSTOOD, { isLoggedIn });
+    }
+
+    const { iso, lead } = defaultDay(db, group.id, today, nowTime);
+    return answer(prefix + lead + describeDay(db, group.id, iso, today), { remember, isLoggedIn });
+}
+
+/**
+ * Nothing asked for in particular: today — or, once today's pairs are over
+ * (evening), tomorrow, which is what someone asking then wants.
+ */
+function defaultDay(db, groupId, today, nowTime) {
+    const todayItems = dayItems(db, groupId, today);
     const last = todayItems.reduce((latest, item) => ((item.time_end || item.time_start) > latest ? (item.time_end || item.time_start) : latest), '');
 
     if (todayItems.length > 0 && last > nowTime) {
-        return answer(prefix + describeDay(db, group.id, today, today), { remember, isLoggedIn });
+        return { iso: today, lead: '' };
     }
 
-    const lead = todayItems.length > 0 ? 'Сегодня пары уже закончились. ' : '';
-    return answer(prefix + lead + describeDay(db, group.id, addDaysToIsoDate(today, 1), today), { remember, isLoggedIn });
+    return { iso: addDaysToIsoDate(today, 1), lead: todayItems.length > 0 ? 'Сегодня пары уже закончились. ' : '' };
 }
 
 module.exports = { handleAlice };

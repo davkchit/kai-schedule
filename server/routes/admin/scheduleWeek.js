@@ -15,7 +15,7 @@ const { attachPlanGroups } = require('../../utils/planGroups');
 const { computePlanRowProgress } = require('../../utils/planProgress');
 const { findTemplateSlotOccupant, findWeekSlotOccupant, lessonsClash } = require('../../utils/slots');
 const { templateWeekForSlot } = require('../../utils/templateWeek');
-const { findAttestationsUnderLesson } = require('../../utils/attestationConflicts');
+const { findAttestationsUnderLesson, timedAttestationError } = require('../../utils/attestationConflicts');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
 const {
     validateMaterializeWeekBody,
@@ -121,6 +121,20 @@ router.post('/schedule/move-lesson', (req, res) => {
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+
+    // An exam, credit or consultation with an end time blocks that part of the day.
+    const underAttestation = timedAttestationError(db, semester, {
+        ...lesson,
+        specific_week: payload.mode === 'template' ? null : payload.week_number,
+        template_from_week: currentWeek,
+        day_of_week: payload.day_of_week,
+        time_start: payload.time_start,
+        time_end: payload.time_end
+    });
+
+    if (underAttestation) {
+        return res.status(409).json({ error: underAttestation });
+    }
 
     try {
         if (payload.mode === 'template') {
@@ -453,6 +467,15 @@ router.post('/schedule/materialize-week', (req, res) => {
 
     if (clash) {
         return res.status(409).json({ error: `В это время уже есть занятие: ${clash.subject}${clash.subgroup ? ` (${clash.subgroup} п/г)` : ''}` });
+    }
+
+    // An exam, credit or consultation with an end time blocks that part of the day.
+    const underAttestation = touched && timedAttestationError(db, semester, {
+        ...touched, group_id: payload.group_id, specific_week: payload.week_number
+    });
+
+    if (underAttestation) {
+        return res.status(409).json({ error: underAttestation });
     }
 
     const transaction = db.transaction(() => {

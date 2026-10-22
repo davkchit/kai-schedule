@@ -316,6 +316,11 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             );
             const impact = await impactRes.json();
 
+            if (impactRes.ok && impact.blocked) {
+                setToastMessage(impact.blocked.error);
+                return;
+            }
+
             if (!impactRes.ok) {
                 setToastMessage(impact.error || 'Не удалось посчитать последствия');
                 return;
