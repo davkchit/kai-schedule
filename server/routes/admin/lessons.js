@@ -178,6 +178,20 @@ router.post('/lessons', (req, res) => {
         }
     }
 
+    // A week's own row in a week still run by a non-empty template would make
+    // the week "its own" and hide every template pair of it — the constructor
+    // first copies such a week (materialize-week). Reached only from a stale
+    // tab (the week was cleared in another one).
+    if (payload.specific_week !== null && !payload.is_removed && templateHasPairsThisWeek(db, semester, payload.group_id, payload.specific_week)) {
+        return res.status(409).json({ error: 'Эта неделя сейчас идёт по шаблону — обновите страницу и добавьте пару ещё раз' });
+    }
+
+    // A version of the very cell being edited that has not shown yet (an edit
+    // made «from next week») is not another pair — this edit replaces it.
+    const slotKey = (row) => [row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type].join('|');
+    const pendingOfSameCell = (row) => Boolean(replaced) && replaced.specific_week === null && row.specific_week === null
+        && slotKey(row) === slotKey(replaced) && row.template_from_week >= templateFromWeek;
+
     // Without this, an "every week" pair could be created into a cell that
     // already holds a чётная/нечётная one (the constructor's template view
     // filters by exact parity, so such a cell looks empty). The result was two
@@ -193,7 +207,8 @@ router.post('/lessons', (req, res) => {
             subgroup: payload.subgroup,
             weekType: payload.week_type,
             targetWeek: templateFromWeek,
-            ignoreLessonId: replaced ? replaced.id : null
+            ignoreLessonId: replaced ? replaced.id : null,
+            ignore: pendingOfSameCell
         })
         : findWeekSlotOccupant(db, {
             semesterId: semester.id,
@@ -229,13 +244,25 @@ router.post('/lessons', (req, res) => {
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const slotKey = (row) => [row.day_of_week, row.time_start, row.time_end, row.subgroup, row.week_type].join('|');
-
     // A version that has not shown in any week yet (made this week for a
     // day still ahead, or for next week): nothing in the past depends on it.
     const notYetLive = Boolean(replaced) && !replaced.is_removed && replaced.template_from_week >= templateFromWeek;
 
     const createdId = db.transaction(() => {
+        // Versions of the edited cell still waiting for their week are
+        // superseded by this edit; left in place, two versions would start the
+        // same week, or the earlier pending edit would still win. They have
+        // never shown, so nothing in the past changes.
+        if (replaced && replaced.specific_week === null) {
+            db.prepare(`
+                DELETE FROM lessons
+                WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND id != ?
+                  AND day_of_week = ? AND time_start = ? AND time_end = ? AND subgroup = ? AND week_type = ?
+                  AND template_from_week >= ?
+            `).run(semester.id, replaced.group_id, replaced.id, replaced.day_of_week, replaced.time_start,
+                replaced.time_end, replaced.subgroup, replaced.week_type, templateFromWeek);
+        }
+
         if (notYetLive && payload.is_removed) {
             // Removed before it ever showed: the row goes, and the older
             // version it covered must not come back — the cell is retired.
@@ -740,6 +767,15 @@ router.delete('/lessons/:id', (req, res) => {
 
     if (findClosedSemester(db, lesson.semester_id)) {
         return res.status(409).json({ error: SEMESTER_CLOSED });
+    }
+
+    // A removal marker is what keeps a removal in place: a template tombstone
+    // retires a pair from its week on, a week's marker keeps that week its
+    // own. Deleting one would bring the pair back into weeks already past
+    // (and their hours). Nothing in the panel offers it; to bring a pair
+    // back, it is added again.
+    if (lesson.is_removed) {
+        return res.status(409).json({ error: 'Это отметка об удалении пары — её не удаляют. Чтобы вернуть пару, добавьте её заново.' });
     }
 
     // "Has this row already been live?" is asked in the row's OWN semester.

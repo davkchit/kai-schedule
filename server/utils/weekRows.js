@@ -1,6 +1,8 @@
 const { getSemesterWeekMeta } = require('./date');
 const { resolveTemplateLessons } = require('./templateResolve');
 const { findWeekSlotOccupant } = require('./slots');
+const { timedAttestationError } = require('./attestationConflicts');
+const { getSemesterById } = require('./semesters');
 
 /**
  * Takes pairs out of ONE date — an exam or a credit held in their place — so
@@ -61,8 +63,8 @@ function hidePairsOnDate(db, semester, groupId, isoDate, pairs, attestationId = 
 /**
  * Undoes hidePairsOnDate for one record that moved or was deleted: its pairs
  * show again on that date and count again. A pair whose time has since been
- * taken by another pair stays removed (the constructor's choice wins); the
- * mark is cleared either way. A week the record made its own stays its own —
+ * taken — by another pair, or by another session record with an end time —
+ * stays removed; the mark is cleared either way. A week the record made its own stays its own —
  * its rows are the template's of that week, so students see the same thing.
  * Returns how many pairs came back.
  */
@@ -77,7 +79,10 @@ function restorePairsHiddenBy(db, attestationId) {
             timeStart: row.time_start, timeEnd: row.time_end, subgroup: row.subgroup, ignoreLessonId: row.id
         });
 
-        if (!taken) {
+        const semester = taken ? null : getSemesterById(db, row.semester_id);
+        const underRecord = semester && timedAttestationError(db, semester, { ...row, is_removed: 0 }, attestationId);
+
+        if (!taken && !underRecord) {
             restored += show.run(row.id).changes;
         }
     }

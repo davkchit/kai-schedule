@@ -57,7 +57,18 @@ function computePlanRowProgress(db, planRow, semester, { cache = new Map(), over
     // closed semester can change, so it matches), but the number that goes
     // into reports comes from the stored snapshot.
     if (semester.closed_at && Number.isInteger(planRow.final_hours)) {
-        return { ...progress, occurred_hours: planRow.final_hours, frozen: true };
+        // Closed mid-term, the clock still moves on: the breakdown must not go
+        // on marking pairs as held after the total stopped. Nothing in a closed
+        // semester changes, so the pairs held at closing are exactly the first
+        // final_hours / 2 in time order.
+        const heldAtClosing = Math.floor(planRow.final_hours / HOURS_PER_LESSON);
+        return {
+            ...progress,
+            occurrences: occurrences.map((occurrence, index) => ({ ...occurrence, has_occurred: index < heldAtClosing })),
+            occurred_count: Math.min(heldAtClosing, occurrences.length),
+            occurred_hours: planRow.final_hours,
+            frozen: true
+        };
     }
 
     return progress;

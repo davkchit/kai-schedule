@@ -8,6 +8,19 @@ import GroupPicker from './GroupPicker';
 // Moved verbatim from AdminDashboardPage.jsx, every value and handler is a prop
 // of the same name.
 export default function BuilderSection({ activeSection, workingSemester, groups, selectedGroupId, setSelectedGroupId, lessons, builderMode, setBuilderMode, builderWeekStart, setBuilderWeekStart, builderWeekEnd, builderTemplateWeekType, setBuilderTemplateWeekType, builderWeekNumber, builderWeekMaterialized, isBuilderWeekBeforeSemester, todayWeekNumber, isExporting, handleClearWeek, handleExport, draggedLesson, setDraggedLesson, dragOverCellKey, setDragOverCellKey, handleDropOnCell, openEditModal, openCreateModal, justSavedCell }) {
+    // The usual slots, plus a row for every other time a pair of this view
+    // has (entered with «Своё время»): a cell only shows pairs of its exact
+    // time, so without its own row such a pair could not be seen, opened or
+    // removed — the Excel export lays those out the same way.
+    const inThisView = (lesson) => !lesson.is_removed && (builderMode === 'week' && builderWeekMaterialized
+        ? lesson.specific_week === builderWeekNumber
+        : lesson.specific_week == null);
+    const extraSlots = [...new Map(lessons.filter(inThisView)
+        .filter((lesson) => !BUILDER_TIME_SLOTS.some(([start, end]) => start === lesson.time_start && end === lesson.time_end))
+        .map((lesson) => [`${lesson.time_start}-${lesson.time_end}`, [lesson.time_start, lesson.time_end]])).values()];
+    const gridSlots = [...BUILDER_TIME_SLOTS.map((slot) => [...slot, false]), ...extraSlots.map((slot) => [...slot, true])]
+        .sort((left, right) => left[0].localeCompare(right[0]) || left[1].localeCompare(right[1]));
+
     function getBuilderCellLessons(day, timeStart, timeEnd) {
         if (builderWeekNumber === null) {
             return [];
@@ -244,6 +257,12 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
                 </p>
             )}
 
+            {workingSemester?.closed && (
+                <p className="load-unconfirmed-note">
+                    Семестр «{workingSemester.label}» закрыт — его расписание не меняется. Чтобы что-то поправить, откройте его заново в разделе «Нагрузка».
+                </p>
+            )}
+
             {builderMode === 'template' && (
                 <p className="builder-hint">
                     Изменения в шаблоне вступают в силу с текущей недели, а если пара в этой ячейке на этой неделе уже прошла — со следующей. Прошедшие пары останутся такими, какими были показаны.
@@ -271,9 +290,9 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
                                 ))}
                             </div>
                         </div>
-                        {BUILDER_TIME_SLOTS.map(([start, end]) => (
-                            <div className="builder-row" key={`${start}-${end}`}>
-                                <div className="builder-slot-label">{start}–{end}</div>
+                        {gridSlots.map(([start, end, isExtra]) => (
+                            <div className={`builder-row ${isExtra ? 'is-extra-slot' : ''}`} key={`${start}-${end}`}>
+                                <div className="builder-slot-label" title={isExtra ? 'Нестандартное время — строка есть, пока в ней стоит пара' : undefined}>{start}–{end}</div>
                                 <div className="builder-row-cells">
                                     {BUILDER_DAYS.map((day) => (
                                         <div

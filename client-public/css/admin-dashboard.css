@@ -212,6 +212,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helv
     position: sticky; left: 0; z-index: 2; background: var(--card);
 }
 .builder-header-row .builder-slot-label { background: #f9fafb; }
+/* A row for a pair entered with «Своё время»: there only while such a pair is. */
+.builder-row.is-extra-slot .builder-slot-label { color: #ea6c0a; font-style: italic; }
 /* Every column takes an equal share and never grows to fit its content
    (basis 0, min-width 0): with a content-sized basis one long subject widened
    only its own cell, so on narrow screens a row stopped lining up with the
@@ -321,6 +323,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helv
 .room-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .form-row .online-toggle { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: #ea6c0a; cursor: pointer; user-select: none; }
 .online-toggle input { width: 16px; height: 16px; margin: 0; accent-color: #f97316; cursor: pointer; }
+.edit-form > .custom-time-toggle { display: inline-flex; align-items: center; gap: 6px; margin: -4px 0 12px; font-size: 13px; color: var(--text-sec); cursor: pointer; user-select: none; }
 .form-row-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 /* Day + start + end in one row at the bottom of the pair dialog. */
 .form-row-when { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }

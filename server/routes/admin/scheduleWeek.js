@@ -5,6 +5,7 @@ const express = require('express');
 const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const {
+    addDaysToIsoDate,
     formatLocalDate,
     getSemesterWeekMeta,
     getSemesterWeekType
@@ -15,7 +16,8 @@ const { attachPlanGroups } = require('../../utils/planGroups');
 const { computePlanRowProgress } = require('../../utils/planProgress');
 const { findTemplateSlotOccupant, findWeekSlotOccupant, lessonsClash } = require('../../utils/slots');
 const { templateWeekForSlot } = require('../../utils/templateWeek');
-const { findAttestationsUnderLesson, timedAttestationError } = require('../../utils/attestationConflicts');
+const { createDayIndex, findAttestationConflicts, findAttestationsUnderLesson, timedAttestationError } = require('../../utils/attestationConflicts');
+const { selectAttestations } = require('../../utils/attestations');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
 const {
     validateMaterializeWeekBody,
@@ -568,18 +570,35 @@ function summarizeWeekClear(db, semester, groupId, weekNumber) {
     const countedHours = () => planRows.reduce((sum, row) => sum + computePlanRowProgress(db, row, semester).occurred_hours, 0);
 
     const before = countedHours();
+    const monday = addDaysToIsoDate(semester.start_date, (weekNumber - 1) * 7);
+    const records = selectAttestations(db, 'a.group_id = ? AND a.date BETWEEN ? AND ? AND a.time_end IS NOT NULL', [groupId, monday, addDaysToIsoDate(monday, 6)]);
     db.exec('SAVEPOINT week_clear_preview');
     let after;
+    let blockedBy = null;
 
     try {
         db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?').run(semester.id, groupId, weekNumber);
         after = countedHours();
+        // The template coming back must not lie under an exam with an end
+        // time — the pair that exam took out of its day would be back under it.
+        const dayIndex = createDayIndex(db);
+        blockedBy = records.find((record) => findAttestationConflicts(db, record, [], dayIndex).clashing.length > 0) || null;
     } finally {
         db.exec('ROLLBACK TO week_clear_preview');
         db.exec('RELEASE week_clear_preview');
     }
 
-    return { week_number: weekNumber, pairs, template_pairs: templatePairs, hours_lost: Math.max(0, before - after) };
+    return {
+        week_number: weekNumber,
+        pairs,
+        template_pairs: templatePairs,
+        hours_lost: Math.max(0, before - after),
+        // A template that comes back can also ADD hours to days already past.
+        hours_gained: Math.max(0, after - before),
+        blocked: blockedBy
+            ? `В этой неделе ${blockedBy.date.split('-').reverse().slice(0, 2).join('.')} ${blockedBy.time_start}–${blockedBy.time_end} стоит запись сессии «${blockedBy.subject}» — после очистки под ней встанет пара шаблона. Сначала перенесите или удалите запись.`
+            : null
+    };
 }
 
 function readWeekQuery(req, res) {
@@ -635,13 +654,19 @@ router.delete('/schedule/week', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
-    // Pairs already counted to teachers are not wiped by one stray click:
-    // the client asks again, naming the hours, and sends confirm=1.
+    // Hours already counted are not changed by one stray click: the client
+    // asks again, naming the hours lost or gained, and sends confirm=1.
     const summary = summarizeWeekClear(db, semester, groupId, weekNumber);
 
-    if (summary.hours_lost > 0 && req.query.confirm !== '1') {
+    if (summary.blocked) {
+        return res.status(409).json({ error: summary.blocked, ...summary });
+    }
+
+    if ((summary.hours_lost > 0 || summary.hours_gained > 0) && req.query.confirm !== '1') {
         return res.status(409).json({
-            error: `Пары этой недели уже засчитаны преподавателям — пропадёт ${summary.hours_lost} ч.`,
+            error: summary.hours_lost > 0
+                ? `Пары этой недели уже засчитаны преподавателям — пропадёт ${summary.hours_lost} ч.`
+                : `Шаблон добавит прошедшим дням ${summary.hours_gained} ч.`,
             needs_confirm: true,
             ...summary
         });
@@ -658,7 +683,7 @@ router.delete('/schedule/week', (req, res) => {
         entityType: 'group_schedule',
         entityId: groupId,
         ipAddress: getClientAddress(req),
-        details: { group_id: groupId, week_number: weekNumber, deleted: result.changes, hours_lost: summary.hours_lost }
+        details: { group_id: groupId, week_number: weekNumber, deleted: result.changes, hours_lost: summary.hours_lost, hours_gained: summary.hours_gained }
     });
 
     res.json({ success: true, deleted: result.changes, hours_lost: summary.hours_lost });

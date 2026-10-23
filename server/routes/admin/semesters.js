@@ -10,10 +10,12 @@ const {
     formatLocalDate,
     getSemesterWeekMeta,
     isValidIsoDate,
+    mondayOfWeek,
     resolveFirstWeekParity
 } = require('../../utils/date');
 const { computePlanRowProgress } = require('../../utils/planProgress');
-const { resyncAttestationSemesters } = require('../../utils/attestations');
+const { resyncAttestationSemesters, selectAttestations } = require('../../utils/attestations');
+const { createDayIndex, findAttestationConflicts } = require('../../utils/attestationConflicts');
 const { findOverlappingSemester, getActiveSemester, overlappingSemesterError } = require('../../utils/semesters');
 const { validateSemesterCreateBody, validateSemesterUpdateBody } = require('../../validation');
 const {
@@ -100,7 +102,7 @@ router.get('/semesters/:id/impact', (req, res) => {
         return res.status(404).json({ error: 'Семестр не найден' });
     }
 
-    const nextStartDate = typeof req.query.start_date === 'string' && req.query.start_date
+    let nextStartDate = typeof req.query.start_date === 'string' && req.query.start_date
         ? req.query.start_date
         : semester.start_date;
     const nextWeeksCount = req.query.weeks_count ? Number.parseInt(req.query.weeks_count, 10) : semester.weeks_count;
@@ -113,6 +115,9 @@ router.get('/semesters/:id/impact', (req, res) => {
     if (!isValidIsoDate(nextStartDate)) {
         return res.status(400).json({ error: 'Некорректная дата начала' });
     }
+
+    // Saving stores the Monday of that week (validation.js); so must the preview.
+    nextStartDate = mondayOfWeek(nextStartDate);
 
     if (!Number.isInteger(nextWeeksCount) || nextWeeksCount < 1 || nextWeeksCount > 52) {
         return res.status(400).json({ error: 'Некорректное число недель' });
@@ -164,7 +169,7 @@ router.get('/semesters/:id/impact', (req, res) => {
         hours_before: hoursBefore,
         hours_after: hoursAfter,
         // Said before «Применить?», not after it: saving would be refused.
-        blocked: weeksCutError(db, semester, nextWeeksCount)
+        blocked: weeksCutError(db, semester, nextWeeksCount) || recordsCoveredBy(db, semester, { start_date: nextStartDate, weeks_count: nextWeeksCount, first_week_parity: nextParity })
     });
 });
 
@@ -217,12 +222,34 @@ router.post('/semesters', (req, res) => {
 });
 
 /**
- * Shrinking past weeks that were entered on their own would hide them — from
- * students and from hours alike — while the rows stay. The refusal (with the
- * weeks named) or null; the specialist clears them first if that is intended.
+ * A change of the number of weeks that would rewrite what was shown: weeks
+ * already begun (with a template running), or weeks entered on their own cut
+ * off — hidden from students and hours alike while the rows stay. The refusal
+ * (with the weeks named) or null.
  */
 function weeksCutError(db, semester, nextWeeksCount) {
-    if (nextWeeksCount >= semester.weeks_count) {
+    if (nextWeeksCount === semester.weeks_count) {
+        return null;
+    }
+
+    // Weeks that have already begun, cut off or added: with a template, that
+    // takes its pairs away from days gone by, or gives them pairs (and hours)
+    // they never had. The past never changes.
+    const startedWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
+    const [from, to] = nextWeeksCount < semester.weeks_count
+        ? [nextWeeksCount + 1, semester.weeks_count]
+        : [semester.weeks_count + 1, nextWeeksCount];
+    const hasTemplate = db.prepare('SELECT 1 FROM lessons WHERE semester_id = ? AND specific_week IS NULL AND is_removed = 0 LIMIT 1').get(semester.id);
+
+    if (hasTemplate && from <= startedWeek) {
+        const last = Math.min(to, startedWeek);
+        const range = from === last ? `Неделя ${from} уже началась` : `Недели ${from}–${last} уже начались`;
+        return nextWeeksCount < semester.weeks_count
+            ? { error: `${range} — сократить семестр задним числом нельзя: пропадут прошедшие пары шаблона и их часы` }
+            : { error: `${range} — продлить семестр на них задним числом нельзя: прошедшим дням добавятся пары шаблона и часы` };
+    }
+
+    if (nextWeeksCount > semester.weeks_count) {
         return null;
     }
 
@@ -235,6 +262,38 @@ function weeksCutError(db, semester, nextWeeksCount) {
     return weeks.length > 0
         ? { error: `В неделях ${weeks.join(', ')} уже внесены пары — сначала очистите их или оставьте семестр длиннее`, weeks }
         : null;
+}
+
+/**
+ * Session records with an end time that lie over a pair of their group —
+ * as ids, with a label for the refusal. Taken before and after a change to
+ * the semester's dates: new dates must not move template pairs under an exam
+ * («the past never changes» aside, a record with an end time is a fixed block).
+ */
+function timedRecordsOverPairs(db) {
+    const dayIndex = createDayIndex(db);
+    return new Map(selectAttestations(db, 'a.time_end IS NOT NULL', [])
+        .filter((record) => findAttestationConflicts(db, record, [], dayIndex).clashing.length > 0)
+        .map((record) => [record.id, `${record.date.split('-').reverse().join('.')} ${record.time_start}–${record.time_end} «${record.subject}» (${record.group_name})`]));
+}
+
+/** The same check as PUT runs, tried on a savepoint and rolled back: the refusal, or null. */
+function recordsCoveredBy(db, semester, proposed) {
+    const before = timedRecordsOverPairs(db);
+    db.exec('SAVEPOINT semester_dates_preview');
+
+    try {
+        db.prepare('UPDATE semesters SET start_date = ?, weeks_count = ?, first_week_parity = ? WHERE id = ?')
+            .run(proposed.start_date, proposed.weeks_count, proposed.first_week_parity, semester.id);
+        resyncAttestationSemesters(db);
+        const added = [...timedRecordsOverPairs(db)].filter(([id]) => !before.has(id)).map(([, label]) => label);
+        return added.length > 0
+            ? { error: `С новыми датами пары встанут под записи сессии: ${added.slice(0, 5).join('; ')}. Сначала перенесите записи или уберите пары.` }
+            : null;
+    } finally {
+        db.exec('ROLLBACK TO semester_dates_preview');
+        db.exec('RELEASE semester_dates_preview');
+    }
 }
 
 router.put('/semesters/:id', (req, res) => {
@@ -276,6 +335,10 @@ router.put('/semesters/:id', (req, res) => {
         return res.status(409).json(cut);
     }
 
+    const datesChange = next.start_date !== existing.start_date || next.weeks_count !== existing.weeks_count
+        || resolveFirstWeekParity(next) !== resolveFirstWeekParity(existing);
+    const coveredBefore = datesChange ? timedRecordsOverPairs(db) : new Map();
+
     const transaction = db.transaction(() => {
         // Only one semester drives "which one am I entering/viewing load for"
         // by default — activating this one deactivates every other.
@@ -300,9 +363,21 @@ router.put('/semesters/:id', (req, res) => {
         }
 
         resyncAttestationSemesters(db);
+
+        if (datesChange) {
+            const newlyCovered = [...timedRecordsOverPairs(db)].filter(([id]) => !coveredBefore.has(id)).map(([, label]) => label);
+            if (newlyCovered.length > 0) {
+                throw Object.assign(new Error(`С новыми датами пары встанут под записи сессии: ${newlyCovered.slice(0, 5).join('; ')}. Сначала перенесите записи или уберите пары.`), { statusCode: 409 });
+            }
+        }
     });
 
-    transaction();
+    try {
+        transaction();
+    } catch (error) {
+        if (error.statusCode) return res.status(error.statusCode).json({ error: error.message });
+        throw error;
+    }
 
     const updated = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
 

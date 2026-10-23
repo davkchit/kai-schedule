@@ -1,9 +1,14 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { parseCookieHeader } = require('./utils/cookies');
+const { DEVICE_COOKIE_NAME } = require('./trustedDevice');
 const fs = require('fs');
 const path = require('path');
 const { ensureAdminAccessAllowed } = require('./access-control');
-const { ADMIN_RATE_LIMIT_MAX, API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS, TRUST_PROXY, isProduction } = require('./config');
+const { ADMIN_COOKIE_NAME, ADMIN_RATE_LIMIT_MAX, JWT_SECRET, API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS, TRUST_PROXY, isProduction } = require('./config');
 const { getDb } = require('./db');
 const { notify } = require('./alerts');
 const { getActiveSemester } = require('./utils/semesters');
@@ -60,8 +65,10 @@ function createApp() {
     });
 
     // Public endpoints take tiny bodies (only the error report); the admin's
-    // stay small too, the limit is only a ceiling for a long plan or week edit.
-    app.use('/api/admin', express.json({ limit: '2mb' }));
+    // are a pair, a plan row or a list of ids. (A backup restore is a raw body
+    // with its own limit.) A small ceiling keeps a login from making the
+    // server parse megabytes of JSON per request.
+    app.use('/api/admin', express.json({ limit: '256kb' }));
     app.use(express.json({ limit: '16kb' }));
 
     // Deliberately before the rate limiter and before every route: an uptime
@@ -90,19 +97,41 @@ function createApp() {
 
     // Coarse volumetric guard over public reads. The whole campus shares one
     // address, so this is a flood ceiling rather than a per-person quota.
+    // The admin area is left to its own limit below: otherwise one student's
+    // script on the campus address used this budget up and the specialist,
+    // behind the same address, got 429 for the rest of the minute.
     app.use('/api', rateLimit({
         windowMs: API_RATE_LIMIT_WINDOW_MS,
         limit: API_RATE_LIMIT_MAX,
+        skip: (req) => req.path === '/admin' || req.path.startsWith('/admin/'),
         standardHeaders: 'draft-7',
         legacyHeaders: false,
         message: { error: 'Слишком много запросов. Попробуйте позже.' }
     }));
 
     // Writing requires a login, and one specialist never makes hundreds of
-    // requests a minute — so the admin area keeps the tight limit.
+    // requests a minute — so the admin area keeps the tight limit. Counted per
+    // browser where it can be told apart (its session, or the device mark of a
+    // browser that has logged in before), per address only otherwise, so
+    // requests from strangers on the shared campus address can't use up hers.
+    // Only a mark signed by this server counts — made-up cookies would
+    // otherwise buy an attacker a fresh budget per request.
+    const signedMark = (token) => {
+        try {
+            return token && jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) ? token : null;
+        } catch {
+            return null;
+        }
+    };
+    const adminLimitKey = (req) => {
+        const cookies = parseCookieHeader(req.headers.cookie);
+        const mark = signedMark(cookies[ADMIN_COOKIE_NAME]) || signedMark(cookies[DEVICE_COOKIE_NAME]);
+        return mark ? `b:${crypto.createHash('sha256').update(mark).digest('hex').slice(0, 32)}` : `ip:${ipKeyGenerator(req.ip)}`;
+    };
     app.use('/api/admin', rateLimit({
         windowMs: API_RATE_LIMIT_WINDOW_MS,
         limit: ADMIN_RATE_LIMIT_MAX,
+        keyGenerator: adminLimitKey,
         standardHeaders: 'draft-7',
         legacyHeaders: false,
         message: { error: 'Слишком много запросов. Попробуйте позже.' }

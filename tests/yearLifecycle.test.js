@@ -178,9 +178,14 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     // weeks over for students; the gap after the last week stays the earlier one's.
     assert.equal((await call('POST', '/api/admin/semesters', { label: 'Опечатка', start_date: '2026-10-05', weeks_count: 18 })).status, 409);
     assert.equal((await call('PUT', `/api/admin/semesters/${spring.id}`, { start_date: '2026-12-28' })).status, 409, 'moved into autumn');
+    // Stretching autumn is tried back in November, while its extra weeks are
+    // still ahead (in January they would add template pairs to days gone by).
+    at('2026-11-04T12:00:00');
     assert.equal((await call('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 24 })).status, 409, 'autumn stretched into spring');
     await ok('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 23 }); // ends the day before spring
     await ok('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 18 });
+    at('2027-01-15T12:00:00');
+    assert.match((await call('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 20 })).data.error, /задним числом/, 'in January those weeks have begun');
 
     await ok('PUT', `/api/admin/semesters/${spring.id}`, { is_active: true });
     assert.equal(await planHours(autumn.id, autumnPlan.id), AUTUMN_TOTAL, 'activating spring leaves autumn hours alone');

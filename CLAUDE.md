@@ -24,7 +24,7 @@ Each of these was a real bug or a deliberate decision; the sections below explai
 8. **No hard-coded calendar dates** in app code (`tests/codeGuards.test.js`); every audit action needs a Russian label in `src/pages/adminDashboard/format.js` (same test).
 9. **One-off data fixes run once per database** (`runDataFixOnce`); schema migrations must be idempotent; a boot snapshot is taken before them.
 10. **Never commit databases or real people's data** (`data/*.db`, `seed/*.db`, real teacher names in tests/fixtures — use made-up names).
-11. Run `npm test` after any change; it must stay green (125 tests).
+11. Run `npm test` after any change; it must stay green (134 tests).
 
 ## Commands
 
@@ -102,13 +102,13 @@ The admin pages keep state and handlers in the page and render through presentat
 
 - `universities`, `groups_` — hierarchy
 - `lessons` — schedule entries; the core of the domain
-- `semesters` — `start_date` (always a Monday), `weeks_count`, `first_week_parity` (1 нечётная / 2 чётная), `is_active` (at most one: the *working* semester the constructor and uploads write into)
+- `semesters` — `start_date` (always a Monday), `weeks_count`, `first_week_parity` (1 нечётная / 2 чётная), `is_active` (at most one: the *working* semester the constructor writes into)
 - `settings` — key/value store; `semester_start_date` mirrors the working semester
 - `admins`, `audit_logs`, `login_attempts` — auth/security
 
 ### Critical Domain: Semesters
 
-Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours are computed inside the lesson's own semester. Three different "which semester" questions — never mix them: the **working** semester (admin writes; `getActiveSemester`), the semester **in effect on a date** (students per day, teachers by default; `getSemesterForDate`), and a semester **being viewed** in the load page (no server state). Parity of week N = strict alternation from `first_week_parity`; ISO-week parity is only the default for a new semester. Past `weeks_count` the template stops (schedule and hours alike), and a pair cannot be placed there: the server answers `needs_extension` and the constructor offers to extend the semester first, so schedule and hours never disagree. The reverse holds too: shortening a semester below a week that has its own pairs is refused (409 naming the weeks). The schedule answer also carries `own_weeks` per semester, counted over the whole group, so a page filtered to one subgroup still knows a week whose own rows are all the other subgroup's ignores the template. Semesters may not overlap (each starts after the other's last teaching week, `findOverlappingSemester`). The start date is edited only on the semester (Нагрузка, with the impact preview) — Settings refuses it. `tests/yearLifecycle.test.js` drives a whole year with `KAI_FAKE_NOW` (ignored in production).
+Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours are computed inside the lesson's own semester. Three different "which semester" questions — never mix them: the **working** semester (admin writes; `getActiveSemester`), the semester **in effect on a date** (students per day, teachers by default; `getSemesterForDate`), and a semester **being viewed** in the load page (no server state). Parity of week N = strict alternation from `first_week_parity`; ISO-week parity is only the default for a new semester. Past `weeks_count` the template stops (schedule and hours alike), and a pair cannot be placed there: the server answers `needs_extension` and the constructor offers to extend the semester first, so schedule and hours never disagree. The reverse holds too: shortening a semester below a week that has its own pairs is refused (409 naming the weeks), and with a template running, weeks already begun are neither cut off nor added (that would rewrite days gone by); a change of dates that would put pairs under a session record with an end time is refused as well — both already in the impact preview (`blocked`). The schedule answer also carries `own_weeks` per semester, counted over the whole group, so a page filtered to one subgroup still knows a week whose own rows are all the other subgroup's ignores the template. Semesters may not overlap (each starts after the other's last teaching week, `findOverlappingSemester`). The start date is edited only on the semester (Нагрузка, with the impact preview) — Settings refuses it. `tests/yearLifecycle.test.js` drives a whole year with `KAI_FAKE_NOW` (ignored in production).
 
 ### Closing a semester
 
@@ -116,7 +116,7 @@ Every lesson has `semester_id`; week numbers, parity, slot occupancy and hours a
 
 ### Database migrations and one-off data fixes
 
-`initTables()` in `server/db.js` runs on every `getDb()` open. Schema changes there are idempotent and run every boot. Corrections of imported data (joint lectures missing from the second group, rooms lost to merged cells or unlabelled "Ауд." columns) run **once per database** through `runDataFixOnce`, which records `data_fix.<name>` in `settings`. They must not re-run: a restart would otherwise "correct" the specialist's later edits (e.g. re-add a lecture she removed by re-uploading a template). A test that inserts pre-fix data must delete those settings keys before reopening.
+`initTables()` in `server/db.js` runs on every `getDb()` open. Schema changes there are idempotent and run every boot. Corrections of imported data (joint lectures missing from the second group, rooms lost to merged cells or unlabelled "Ауд." columns) run **once per database** through `runDataFixOnce`, which records `data_fix.<name>` in `settings`. They must not re-run: a restart would otherwise "correct" the specialist's later edits (e.g. re-add a lecture she removed from the template). A test that inserts pre-fix data must delete those settings keys before reopening.
 
 ### Critical Domain: Schedule Override Model
 
@@ -125,7 +125,7 @@ Lessons have a `specific_week` column:
 - `NULL` — template entry, applies every semester week matching `week_type`
 - `N` (integer) — full week override for that group; **when an override exists for week N, all template entries for that group/week are ignored** (no merging)
 
-`week_type`: `0` = every week, `1` = odd weeks, `2` = even weeks. Removing a week's pair leaves an `is_removed` marker row so the week stays "its own". Template rows are versioned by `template_from_week`; edits/removals insert a new version or tombstone from the current week carrying the same `teacher_id`/`discipline_id` (hours match rows by identity — see below).
+`week_type`: `0` = every week, `1` = odd weeks, `2` = even weeks. Removing a week's pair leaves an `is_removed` marker row so the week stays "its own"; markers and tombstones are never deleted (DELETE answers 409). A pair POSTed into a week still run by a non-empty template is refused (the constructor copies such a week first; only a stale tab gets here). Re-editing a template cell supersedes its versions still waiting for their week; a template cell's occupancy is checked at every week a version of that day starts, not only the first (`findTemplateSlotOccupant`). «Очистить неделю» asks again for hours lost or gained, and is refused when the returning template would lie under a session record with an end time. Template rows are versioned by `template_from_week`; edits/removals insert a new version or tombstone from the current week carrying the same `teacher_id`/`discipline_id` (hours match rows by identity — see below).
 
 ### Critical Domain: Teaching Load Matching
 
@@ -155,7 +155,7 @@ Collisions (`server/utils/attestationConflicts.js`): the same record twice is re
 
 ### Where schedule edits live
 
-Every pair is entered in the constructor (`routes/admin/lessons.js`); week-by-week edits (move, first edit of a week, clear week) live in `routes/admin/scheduleWeek.js`, the Excel export in `routes/admin/schedule.js`. There is no JSON/Excel import into the app (the owner chose «enter in the app, export to Excel»); the official weekly Excel is imported by a one-off script run against the production database (see the private notes).
+Every pair is entered in the constructor (`routes/admin/lessons.js`); a pair takes one of the branch's usual slots (`BUILDER_TIME_SLOTS`; it counts 2 h whatever its length), only an event may have a time of its own (behind «Своё время»), and the grid adds a row for every other time a pair of the view has, so such a pair can always be opened and removed; week-by-week edits (move, first edit of a week, clear week) live in `routes/admin/scheduleWeek.js`, the Excel export in `routes/admin/schedule.js`. There is no JSON/Excel import into the app (the owner chose «enter in the app, export to Excel»); the official weekly Excel is imported by a one-off script run against the production database (see the private notes) — it writes past the API, so it must itself refuse a closed semester, a joined member group and a week past `weeks_count`, and link every pair to the dictionaries.
 
 ### Dark Theme
 
@@ -181,11 +181,11 @@ Motion across the app is one family: the `--ease-spring` curve (critically dampe
 - Optional second factor (TOTP, `server/utils/totp.js`, `server/secondFactor.js`): turned on in Settings with the password + a code, secret stored AES-GCM-encrypted with a key derived from `JWT_SECRET`, 8 one-time recovery codes (hashed), each app code accepted once. With it on, `/login` returns a 5-minute ticket and `/login/second-factor` opens the session
 - Lockout recovery on the server: `node server/admin-tool.js unlock | reset-2fa <login> | set-password <login> | logout-all | list` (run with the service's env; refuses a missing DB_PATH instead of creating one)
 - State-changing admin endpoints require CSRF token
-- Login is throttled via `login_attempts` per username (5 free) and per address (20 free — the campus shares one), the pause doubling from 30 s to at most 15 min, never permanent; an unknown username answers and is counted the same way; failures go to the journal; a browser that has logged in before carries a signed year-long device mark (`server/trustedDevice.js`, cookie `kai_device`, path `/api/admin/login`) and is throttled only by its own failures, so strangers failing on purpose cannot lock the specialist out of her computer; public reads get a high flood ceiling and `/api/admin` a tight one (`express-rate-limit`; per-IP budgets can't be per-person when a campus shares one address)
+- Login is throttled via `login_attempts` per username (5 free) and per address (20 free — the campus shares one), the pause doubling from 30 s to at most 15 min, never permanent; an unknown username answers and is counted the same way; failures go to the journal; a browser that has logged in before carries a signed year-long device mark (`server/trustedDevice.js`, cookie `kai_device`, path `/api/admin/login`) and is throttled only by its own failures, so strangers failing on purpose cannot lock the specialist out of her computer; public reads get a high flood ceiling that skips `/api/admin`, and `/api/admin` a tight one counted per browser (a signed session or device mark) or per address without one (`express-rate-limit`; per-IP budgets can't be per-person when a campus shares one address, so strangers on it must not use up the specialist's)
 - `GET /api/health` (before the limiter, no auth) reports process + database state for an uptime monitor; `.github/workflows/uptime.yml` asks it every 5 minutes, and GitHub e-mails a failed run to the account that last changed the schedule
 - Optional IP allowlist via `ADMIN_ALLOWED_IPS`
 - CSP and security headers set in `app.js`
-- Settings → «Вход и безопасность» (`SecuritySection.jsx`): change the password (`PUT /api/admin/account`, current password required, 12+ chars, not containing the login), turn the second factor on/off, new recovery codes, «Выйти на всех устройствах». Headers: CSP, HSTS (production), CORP, nosniff, frame-deny; JSON bodies 16 KB public / 2 MB admin; `/api/client-error` 10/min per address
+- Settings → «Вход и безопасность» (`SecuritySection.jsx`): change the password (`PUT /api/admin/account`, current password required, 12+ chars, not containing the login), turn the second factor on/off, new recovery codes, «Выйти на всех устройствах». Headers: CSP, HSTS (production), CORP, nosniff, frame-deny; JSON bodies 16 KB public / 256 KB admin; `/api/client-error` 10/min per address
 - Lesson creation derives `template_from_week` from the server clock, never from client input — an edit can only ever take effect from "now" forward, so a client can't retroactively rewrite what a past week showed
 
 ### Deployment Note (VPS)

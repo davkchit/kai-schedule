@@ -179,7 +179,7 @@ function findAttestationConflicts(db, record, others, dayIndex = createDayIndex(
  * template_from_week on, except in weeks that have rows of their own (the
  * template does not run there).
  */
-function attestationsUnderLesson(db, semester, lesson) {
+function attestationsUnderLesson(db, semester, lesson, ignoreId = null) {
     if (!lesson || lesson.is_removed || lesson.kind === 'event') {
         return [];
     }
@@ -202,7 +202,7 @@ function attestationsUnderLesson(db, semester, lesson) {
             : weekNumber >= (lesson.template_from_week ?? 1) && weekNumber <= semester.weeks_count && !ownWeeks.has(weekNumber)
                 && (lesson.week_type === 0 || lesson.week_type === weekTypeNumber);
 
-        return onItsDay && weekday === lesson.day_of_week && subgroupsMeet(record, lesson) && overlaps(record, lesson);
+        return record.id !== ignoreId && onItsDay && weekday === lesson.day_of_week && subgroupsMeet(record, lesson) && overlaps(record, lesson);
     });
 }
 
@@ -222,8 +222,8 @@ function findAttestationsUnderLesson(db, semester, lesson) {
  * may be placed over it. The error to answer with, or null. (A record without
  * an end is only assumed to last an hour or a pair, so that one stays a warning.)
  */
-function timedAttestationError(db, semester, lesson) {
-    const record = attestationsUnderLesson(db, semester, lesson).find((item) => item.time_end);
+function timedAttestationError(db, semester, lesson, ignoreId = null) {
+    const record = attestationsUnderLesson(db, semester, lesson, ignoreId).find((item) => item.time_end);
     return record ? `В это время у группы ${recordLabel(record)} — пару сюда поставить нельзя` : null;
 }
 

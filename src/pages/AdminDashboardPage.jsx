@@ -911,6 +911,11 @@ export default function AdminDashboardPage() {
                 return;
             }
 
+            if (summary.blocked) {
+                setToastMessage(summary.blocked);
+                return;
+            }
+
             const shouldClear = window.confirm(summary.template_pairs > 0
                 ? `Удалить ${summary.pairs} пар(ы) этой недели и вернуть шаблон (${summary.template_pairs} пар(ы))? Действие необратимо.`
                 : `Удалить все ${summary.pairs} пар(ы) этой недели? Шаблона нет — неделя станет пустой. Действие необратимо.`);
@@ -919,14 +924,16 @@ export default function AdminDashboardPage() {
                 return;
             }
 
-            if (summary.hours_lost > 0 && !window.confirm(
-                `Эти пары уже засчитаны преподавателям: они потеряют ${summary.hours_lost} ч. Всё равно удалить?`
-            )) {
+            const hoursChange = summary.hours_lost > 0
+                ? `Эти пары уже засчитаны преподавателям: они потеряют ${summary.hours_lost} ч.`
+                : summary.hours_gained > 0 ? `Шаблон добавит прошедшим дням этой недели ${summary.hours_gained} ч.` : '';
+
+            if (hoursChange && !window.confirm(`${hoursChange} Всё равно продолжить?`)) {
                 return;
             }
 
             const response = await api(
-                `/api/admin/schedule/week?${weekQuery}${summary.hours_lost > 0 ? '&confirm=1' : ''}`,
+                `/api/admin/schedule/week?${weekQuery}${hoursChange ? '&confirm=1' : ''}`,
                 { method: 'DELETE' }
             );
 

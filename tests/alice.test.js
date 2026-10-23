@@ -128,6 +128,16 @@ test('asked the way people ask: first, last, how many, now, next, a subject, the
     assert.equal(await ask('а какая 1 пара была 21 октября', { utterance: 'А какая первая пара была 21 октября?' }),
         'Сегодня, в среду, 21 октября, первая пара — в 8:00: Математика, лекция, аудитория 305.');
     assert.equal(await ask('2 пара завтра'), 'Завтра, в четверг, 22 октября, всего 1 пара — второй пары нет.');
+    // A count is not an ordinal: «2 пары» (no ending) asks about the day.
+    assert.match(await ask('у меня завтра 2 пары'), /^Завтра, в четверг, 22 октября, 1 пара\. Первая — в 11:30/);
+    assert.equal(await ask('во сколько к 2-ой паре', { utterance: 'во сколько ко второй паре' }), 'Сегодня, в среду, 21 октября, вторая пара — в 9:40: Физика, практика, онлайн.');
+    assert.equal(await ask('во сколько к 2-ей паре'), 'Сегодня, в среду, 21 октября, вторая пара — в 9:40: Физика, практика, онлайн.');
+    // The group number and a digit ordinal side by side are not glued together.
+    const both = await say('23303 1 пара завтра');
+    assert.match(both.text, /^Запомнила: группа 23303\. Завтра, в четверг, 22 октября, первая пара — в 11:30/);
+    // Asked before the group is known: «1 пара» is not «the 1st».
+    const early = await say('какая 1 пара завтра', { isNew: true, utterance: 'какая первая пара завтра' });
+    assert.equal(early.body.session_state.pending_date, '2026-10-22');
     assert.equal(await ask('во сколько я сегодня освобожусь'), 'Сегодня, в среду, 21 октября, последняя пара — вторая, в 9:40: Физика, практика, онлайн, закончится в 11:10.');
     assert.equal(await ask('сколько пар завтра'), 'Завтра, в четверг, 22 октября, 1 пара: с 11:30 до 13:00.');
     assert.equal(await ask('какая сейчас пара'), 'Сейчас идёт Математика, лекция, аудитория 305, до 9:30. Следующая — в 9:40, Физика, практика, онлайн.');

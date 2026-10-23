@@ -101,7 +101,7 @@ test('clearing a past week says what it removes and does not wipe counted hours 
     assert.equal(await hours(), 4);
 
     const summary = await ok('GET', `/api/admin/schedule/week-summary?group_id=${groupId}&week_number=2`);
-    assert.deepEqual(summary, { week_number: 2, pairs: 2, template_pairs: 0, hours_lost: 4 });
+    assert.deepEqual(summary, { week_number: 2, pairs: 2, template_pairs: 0, hours_lost: 4, hours_gained: 0, blocked: null });
     assert.equal(await hours(), 4, 'the preview changes nothing');
 
     const refused = await call('DELETE', `/api/admin/schedule/week?group_id=${groupId}&week_number=2`);

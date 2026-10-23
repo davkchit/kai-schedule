@@ -79,6 +79,17 @@ function joinGroup(db, memberId, leaderId) {
         throw fail(`У ${member.name} есть пары в закрытом семестре (${closed.map((row) => row.label).join(', ')}) — его не меняем`);
     }
 
+    // Its session records move to the leader on joining — a closed semester's
+    // records are frozen like its pairs.
+    const closedRecords = db.prepare(`
+        SELECT DISTINCT s.label FROM attestations a JOIN semesters s ON s.id = a.semester_id
+        WHERE a.group_id = ? AND s.closed_at IS NOT NULL
+    `).all(memberId);
+
+    if (closedRecords.length > 0) {
+        throw fail(`У ${member.name} есть записи сессии в закрытом семестре (${closedRecords.map((row) => row.label).join(', ')}) — его не меняем`);
+    }
+
     const leaderSignatures = new Map();
 
     for (const lesson of db.prepare('SELECT * FROM lessons WHERE group_id = ?').all(leaderId)) {
@@ -163,28 +174,38 @@ function unjoinGroup(db, memberId) {
     const insert = db.prepare(`
         INSERT INTO lessons (
             group_id, semester_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind,
+            hidden_by_attestation
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const copyRecord = db.prepare(`
+        INSERT INTO attestations (
+            semester_id, group_id, subgroup, kind, date, time_start, time_end, room,
+            discipline_id, discipline_text, teacher_id, teacher_text
+        )
+        SELECT semester_id, ?, subgroup, kind, date, time_start, time_end, room,
+               discipline_id, discipline_text, teacher_id, teacher_text
+        FROM attestations WHERE id = ?
     `);
 
     db.transaction(() => {
+        // Records first, so a pair one of them took out of its day keeps that
+        // link in the copy — moving or deleting the member's copy of the exam
+        // still brings the member's copy of the pair back.
+        const copies = new Map();
+        for (const { id } of db.prepare('SELECT id FROM attestations WHERE group_id = ?').all(member.joined_to)) {
+            copies.set(id, Number(copyRecord.run(memberId, id).lastInsertRowid));
+        }
+
         for (const row of rows) {
             insert.run(
                 memberId, row.semester_id, row.subgroup, row.day_of_week, row.week_type, row.specific_week,
                 row.template_from_week, row.is_removed, row.time_start, row.time_end, row.subject, row.room,
-                row.lesson_type, row.teacher, row.teacher_id, row.discipline_id, row.sort_order, row.kind
+                row.lesson_type, row.teacher, row.teacher_id, row.discipline_id, row.sort_order, row.kind,
+                row.hidden_by_attestation ? copies.get(row.hidden_by_attestation) ?? null : null
             );
         }
 
-        db.prepare(`
-            INSERT INTO attestations (
-                semester_id, group_id, subgroup, kind, date, time_start, time_end, room,
-                discipline_id, discipline_text, teacher_id, teacher_text
-            )
-            SELECT semester_id, ?, subgroup, kind, date, time_start, time_end, room,
-                   discipline_id, discipline_text, teacher_id, teacher_text
-            FROM attestations WHERE group_id = ?
-        `).run(memberId, member.joined_to);
         db.prepare('UPDATE groups_ SET joined_to = NULL WHERE id = ?').run(memberId);
     })();
 

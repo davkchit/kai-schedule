@@ -33,14 +33,21 @@ const SUBGROUPS_MEET_SQL = '(subgroup = 0 OR ? = 0 OR subgroup = ?)';
 const TIMES_OVERLAP_SQL = 'time_start < ? AND time_end > ?';
 
 /**
- * The live lesson occupying a template cell as of targetWeek, or null.
+ * The lesson occupying a template cell from targetWeek on, or null.
  *
  * Resolves through the version/tombstone chain instead of just looking for any
  * row with is_removed = 0 — otherwise a cell that was emptied (an old row plus
  * a newer tombstone) would still read as taken and block ever refilling it.
+ *
+ * Not only at targetWeek: a version waiting for a later week (an edit made
+ * «from next week») takes its cell from then on, so the template is resolved
+ * again at every week a version of that day starts. Checked at targetWeek
+ * alone, a pair put in this week next to one moved there from next week lay
+ * on top of it from next week on. `ignore` leaves out rows the caller is
+ * replacing anyway.
  */
 function findTemplateSlotOccupant(db, {
-    semesterId, groupId, dayOfWeek, timeStart, timeEnd, subgroup, weekType, targetWeek, ignoreLessonId = null
+    semesterId, groupId, dayOfWeek, timeStart, timeEnd, subgroup, weekType, targetWeek, ignoreLessonId = null, ignore = null
 }) {
     // Scoped to one semester: autumn's template occupying Tuesday 09:40 says
     // nothing about whether spring's Tuesday 09:40 is free.
@@ -52,11 +59,20 @@ function findTemplateSlotOccupant(db, {
         WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND day_of_week = ?
     `).all(semesterId, groupId, dayOfWeek);
 
-    const live = resolveTemplateLessons(dayRows, targetWeek);
+    const weeks = [...new Set([targetWeek, ...dayRows.map((row) => row.template_from_week).filter((week) => week > targetWeek)])];
 
-    return live.find((lesson) => lesson.id !== ignoreLessonId
-        && weekTypesOverlap(lesson.week_type, weekType)
-        && lessonsClash(lesson, { time_start: timeStart, time_end: timeEnd, subgroup })) || null;
+    for (const week of weeks) {
+        const occupant = resolveTemplateLessons(dayRows, week).find((lesson) => lesson.id !== ignoreLessonId
+            && !(ignore && ignore(lesson))
+            && weekTypesOverlap(lesson.week_type, weekType)
+            && lessonsClash(lesson, { time_start: timeStart, time_end: timeEnd, subgroup }));
+
+        if (occupant) {
+            return occupant;
+        }
+    }
+
+    return null;
 }
 
 /** Same question for one concrete week's own rows, where versioning doesn't apply. */

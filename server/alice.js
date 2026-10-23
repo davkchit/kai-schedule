@@ -22,6 +22,12 @@ const MONTHS = ['января', 'февраля', 'марта', 'апреля', 
 // Month words by their stem, so a typo or a stray letter («сентябряя») still counts.
 const MONTH_STEMS = [/^январ/, /^феврал/, /^март/, /^апрел/, /^ма[йяю]/, /^июн/, /^июл/, /^август/, /^сентябр/, /^октябр/, /^ноябр/, /^декабр/];
 const monthOfWord = (word) => MONTH_STEMS.findIndex((stem) => stem.test(word)) + 1;
+// «1 пара», «3-ей паре», «2-я пара»: Alice's command turns «первая» into a
+// digit. A digit right before the singular «пара/пару/паре/парой», or with an
+// ordinal ending, is which pair — not a date. «2 пары», «5 пар» (no ending)
+// is a count and stays as it is.
+const ORDINAL_DIGIT = /(?:^|\s)([1-8])(?:\s*-?\s*(?:я|ая|ой|ей|й|ю|ую|го|ом)\s+(?=пар|заняти|урок)|\s+(?=пара|пару|паре|парой))/;
+const withoutOrdinal = (text) => text.replace(ORDINAL_DIGIT, ' ').replace(/\s+/g, ' ').trim();
 const KIND_WORDS = { exam: 'экзамен', credit: 'зачёт', consultation: 'консультация' };
 const BUTTONS = ['Сегодня', 'Завтра', 'Следующая пара', 'На неделе', 'Сменить группу'];
 const ORDINALS = ['Первая', 'Вторая', 'Третья', 'Четвёртая', 'Пятая', 'Шестая', 'Седьмая', 'Восьмая'];
@@ -263,12 +269,6 @@ function requestedDate(request, text, today, contextMonth = null) {
         if (month) return nearestDate(Number(match[1]), month, today);
     }
 
-    // A bare day: «а 18», «18-го», «18 число» — in the month just talked about.
-    const bare = text.match(/(?:^|\s)(\d{1,2})(?:\s*-?\s*(?:го|е|число|числа))?(?:\s|$)/);
-    if (bare && Number(bare[1]) >= 1 && Number(bare[1]) <= 31) {
-        const date = nearestDate(Number(bare[1]), fallbackMonth, today);
-        if (date) return date;
-    }
 
     if (/послезавтра/.test(text)) return addDaysToIsoDate(today, 2);
     if (/завтра/.test(text)) return addDaysToIsoDate(today, 1);
@@ -282,12 +282,23 @@ function requestedDate(request, text, today, contextMonth = null) {
         }
     }
 
+    // A bare day, last: «а 18», «18-го», «18 число» — in the month just talked
+    // about. Not a number of pairs («2 пары»), and only when nothing above
+    // («завтра», «в пятницу») already named the day.
+    const bare = text.match(/(?:^|\s)(\d{1,2})(?:\s*-?\s*(?:го|е|число|числа))?(?:\s|$)(?!\s*(?:пар|заняти|урок))/);
+    if (bare && Number(bare[1]) >= 1 && Number(bare[1]) <= 31) {
+        const date = nearestDate(Number(bare[1]), fallbackMonth, today);
+        if (date) return date;
+    }
+
     return null;
 }
 
 function findGroupByNumber(db, text) {
     // Speech often comes back split: «двадцать три сто один» → «23 101».
-    const match = text.replace(/(\d)\s+(?=\d)/g, '$1').match(/(?:^|\D)(\d{5})(?!\d)/);
+    // A whole five-digit number is taken as it is first: joining every digit
+    // run would glue «23303 1 пара» into «233031».
+    const match = text.match(/(?:^|\D)(\d{5})(?!\d)/) || text.replace(/(\d)\s+(?=\d)/g, '$1').match(/(?:^|\D)(\d{5})(?!\d)/);
     if (!match) return { asked: null, group: null };
     return { asked: match[1], group: db.prepare('SELECT id, name FROM groups_ WHERE name = ?').get(match[1]) || null };
 }
@@ -371,7 +382,7 @@ function handleAlice(db, body, now = clock.now()) {
     if (!group) {
         // A question asked before the group is known is answered once it is.
         const pendingWeek = /(?:^|[^а-яё])недел/.test(text) ? (/следующ[а-яё]*\s+недел/.test(text) ? 'next' : 'this') : null;
-        const pendingDate = pendingWeek ? null : requestedDate(request, text, today, contextMonth);
+        const pendingDate = pendingWeek ? null : requestedDate(request, withoutOrdinal(text), today, contextMonth);
         const keep = pendingWeek || pendingDate ? { pending_week: pendingWeek, pending_date: pendingDate } : (state.session || null);
         const greeting = session.new ? 'Привет! Я подскажу расписание. ' : '';
         return answer(`${greeting}Назовите номер вашей группы, например 23101.`, { isLoggedIn, session: keep });
@@ -422,20 +433,18 @@ function handleAlice(db, body, now = clock.now()) {
         return answer(prefix + describeWeek(db, group.id, monday, today), { remember, isLoggedIn });
     }
 
-    // Which pair: Alice's command turns «первая» into «1», so both the words
-    // of the original phrase and a digit before «пара» are looked at — and
-    // that digit is taken out before the date is read («1 пара» is not the 1st).
-    const ordinalDigit = /(?:^|\s)([1-8])\s*-?\s*(?:я|ая|ой|ю|ую)?\s+(?=пар|заняти|урок)/;
-    const wordsAsked = `${dateText} ${normalize(raw)}`;
-    const nthWord = wordsAsked.match(/(перв|втор|трет|четверт|пят|шест|седьм)[а-яё]*\s+(?:пар|заняти|урок)/);
-    const nthDigit = dateText.match(ordinalDigit);
-    const pick = nthWord ? ['перв', 'втор', 'трет', 'четв', 'пят', 'шест', 'седьм'].findIndex((stem) => nthWord[1].startsWith(stem))
-        : nthDigit ? Number(nthDigit[1]) - 1
-            : /последн[а-яё]*\s+пар|освобож|во сколько[а-яё ]*(закончи|заканчива|кончаю|конча)/.test(wordsAsked) ? 'last'
-                : /сколько[а-яё ]*пар/.test(wordsAsked) ? 'count'
-                    : /во сколько[а-яё ]*(начина|первая|на учеб|к первой|вставать)|к скольки/.test(wordsAsked) ? 0
+    // Which pair. The command carries «первая» as «1»; the original phrase
+    // still has the word, so only the ordinal WORD is also looked for there —
+    // every other intent is read from the command alone, like the date.
+    const nthWord = `${dateText} ${normalize(raw)}`.match(/(перв|втор|трет|четверт|пят|шест|седьм)[а-яё]*\s+(?:пар|заняти|урок)/);
+    const nthDigit = dateText.match(ORDINAL_DIGIT);
+    const pick = /сколько[а-яё ]*пар/.test(dateText) ? 'count'
+        : nthWord ? ['перв', 'втор', 'трет', 'четв', 'пят', 'шест', 'седьм'].findIndex((stem) => nthWord[1].startsWith(stem))
+            : nthDigit ? Number(nthDigit[1]) - 1
+                : /последн[а-яё]*\s+пар|освобож|во сколько[а-яё ]*(закончи|заканчива|кончаю|конча)/.test(dateText) ? 'last'
+                    : /во сколько[а-яё ]*(начина|первая|на учеб|к первой|вставать)|к скольки/.test(dateText) ? 0
                         : null;
-    const date = requestedDate(request, dateText.replace(ordinalDigit, ' '), today, contextMonth);
+    const date = requestedDate(request, withoutOrdinal(dateText), today, contextMonth);
 
     if (pick !== null) {
         const day = date || defaultDay(db, group.id, today, nowTime).iso;

@@ -2329,12 +2329,9 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     // and never flaky.
     // The plan must live in the same semester as the lesson it counts — the
     // seeded working semester, shortened to 4 weeks for an exact total.
+    // (Set in the database: through the API, cutting weeks already gone by is refused.)
     const semester = { id: context.semesterId };
-    await fetch(`${context.baseUrl}/api/admin/semesters/${semester.id}`, {
-        method: 'PUT',
-        headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weeks_count: 4 })
-    });
+    db.prepare('UPDATE semesters SET weeks_count = 4 WHERE id = ?').run(semester.id);
 
     const planResponse = await fetch(`${context.baseUrl}/api/admin/load-plan`, {
         method: 'POST',

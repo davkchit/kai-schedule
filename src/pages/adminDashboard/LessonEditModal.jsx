@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { LESSON_TYPES } from './builderUtils';
+import { useEffect, useRef, useState } from 'react';
+import { BUILDER_TIME_SLOTS, LESSON_TYPES } from './builderUtils';
 import DictionaryPicker from './DictionaryPicker';
 import GroupsField from '../adminLoad/GroupsField';
 
@@ -30,6 +30,20 @@ export default function LessonEditModal({
     const isEvent = editForm.kind === 'event';
     const cardRef = useRef(null);
     const lastPressRef = useRef(null);
+    // A pair takes one of the branch's usual slots — the timetable runs by
+    // the bell, and a pair counts 2 hours whatever its length. Only an event
+    // (линейка, кураторский час) may have a time of its own, behind a tick.
+    const slotIndex = BUILDER_TIME_SLOTS.findIndex(([start, end]) => start === editForm.time_start && end === editForm.time_end);
+    const [customTime, setCustomTime] = useState(false);
+    const showCustomTime = isEvent && customTime;
+
+    useEffect(() => {
+        if (isEditModalOpen) {
+            setCustomTime(Boolean(editForm.time_start) && slotIndex === -1);
+        }
+        // Decided once per opening, from the pair as it came in.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isEditModalOpen]);
 
     useEffect(() => {
         function remember(event) {
@@ -82,15 +96,22 @@ export default function LessonEditModal({
                             type="checkbox"
                             id="editIsEvent"
                             checked={isEvent}
-                            onChange={(event) => setEditForm((previous) => ({
-                                ...previous,
-                                kind: event.target.checked ? 'event' : 'lesson',
-                                subject: '',
-                                discipline_id: null,
-                                teacher: '',
-                                teacher_id: null,
-                                lesson_type: event.target.checked ? '' : 'Лекция'
-                            }))}
+                            onChange={(event) => {
+                                const toEvent = event.target.checked;
+                                // Back to a pair: a time outside the slots becomes the first pair.
+                                const [firstStart, firstEnd] = BUILDER_TIME_SLOTS[0];
+                                if (!toEvent) setCustomTime(false);
+                                setEditForm((previous) => ({
+                                    ...previous,
+                                    kind: toEvent ? 'event' : 'lesson',
+                                    subject: '',
+                                    discipline_id: null,
+                                    teacher: '',
+                                    teacher_id: null,
+                                    lesson_type: toEvent ? '' : 'Лекция',
+                                    ...(!toEvent && slotIndex === -1 ? { time_start: firstStart, time_end: firstEnd } : {})
+                                }));
+                            }}
                         />
                         Мероприятие, а не занятие (не идёт в часы)
                     </label>
@@ -220,27 +241,65 @@ export default function LessonEditModal({
                                 <option value="7">{'\u0412\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u044c\u0435'}</option>
                             </select>
                         </div>
-                        <div className="form-row">
-                            <label>Начало</label>
-                            <input
-                                type="time"
-                                id="editTimeStart"
-                                className="form-input"
-                                value={editForm.time_start}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, time_start: event.target.value }))}
-                            />
-                        </div>
-                        <div className="form-row">
-                            <label>Конец</label>
-                            <input
-                                type="time"
-                                id="editTimeEnd"
-                                className="form-input"
-                                value={editForm.time_end}
-                                onChange={(event) => setEditForm((previous) => ({ ...previous, time_end: event.target.value }))}
-                            />
-                        </div>
+                        {showCustomTime ? (
+                            <>
+                                <div className="form-row">
+                                    <label>Начало</label>
+                                    <input
+                                        type="time"
+                                        id="editTimeStart"
+                                        className="form-input"
+                                        value={editForm.time_start}
+                                        onChange={(event) => setEditForm((previous) => ({ ...previous, time_start: event.target.value }))}
+                                    />
+                                </div>
+                                <div className="form-row">
+                                    <label>Конец</label>
+                                    <input
+                                        type="time"
+                                        id="editTimeEnd"
+                                        className="form-input"
+                                        value={editForm.time_end}
+                                        onChange={(event) => setEditForm((previous) => ({ ...previous, time_end: event.target.value }))}
+                                    />
+                                </div>
+                            </>
+                        ) : (
+                            <div className="form-row">
+                                <label>Время</label>
+                                <select
+                                    id="editTimeSlot"
+                                    className="form-input"
+                                    value={slotIndex === -1 ? '' : String(slotIndex)}
+                                    onChange={(event) => {
+                                        const [start, end] = BUILDER_TIME_SLOTS[Number(event.target.value)];
+                                        setEditForm((previous) => ({ ...previous, time_start: start, time_end: end }));
+                                    }}
+                                >
+                                    {slotIndex === -1 && <option value="" disabled>Выберите пару</option>}
+                                    {BUILDER_TIME_SLOTS.map(([start, end], index) => (
+                                        <option key={start} value={String(index)}>{`${index + 1}-я пара · ${start}–${end}`}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
                     </div>
+                    {isEvent && <label className="online-toggle custom-time-toggle">
+                        <input
+                            type="checkbox"
+                            id="editCustomTime"
+                            checked={customTime}
+                            onChange={(event) => {
+                                setCustomTime(event.target.checked);
+                                // Back to the usual slots: a time outside them becomes the first pair.
+                                if (!event.target.checked && slotIndex === -1) {
+                                    const [start, end] = BUILDER_TIME_SLOTS[0];
+                                    setEditForm((previous) => ({ ...previous, time_start: start, time_end: end }));
+                                }
+                            }}
+                        />
+                        Своё время (не по звонкам)
+                    </label>}
                     {editMode === 'create' && (
                         <div className="form-row modal-extra-groups">
                             <label>Ещё группы</label>
