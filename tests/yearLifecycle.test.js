@@ -98,6 +98,14 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         return rows.find((row) => row.id === planId).progress.occurred_hours;
     }
 
+    // Weeks entered from the draft as it stood for each of them (the
+    // specialist does it every Thursday); an empty or own week is skipped.
+    async function enterWeeks(from, to) {
+        for (let week = from; week <= to; week += 1) {
+            await call('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: week, action: 'copy' });
+        }
+    }
+
     const autumnLessonCount = (semesterId) => db.prepare('SELECT COUNT(*) AS c FROM lessons WHERE semester_id = ?').get(semesterId).c;
 
     // ── Autumn 2026 ─────────────────────────────────────────────────────────
@@ -148,6 +156,9 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     const retired = await ok('DELETE', `/api/admin/lessons/${l1.id}`);
     assert.equal(retired.retired_from_week, 11, 'an already-live pair is retired, not erased — and not this week\'s held Monday');
 
+    // Every week entered from the draft; looked at once the semester is over.
+    await enterWeeks(1, 18);
+    at('2027-01-15T12:00:00');
     assert.deepEqual(await studentSees(['2026-09-02', '2026-09-09', '2026-10-19', '2026-10-22', '2026-10-26', '2026-11-09']), {
         '2026-09-02': [], // week 1 (чётная): no L2
         '2026-09-09': ['Программирование'], // week 2 Wednesday: L2 before the move
@@ -178,14 +189,10 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
     // weeks over for students; the gap after the last week stays the earlier one's.
     assert.equal((await call('POST', '/api/admin/semesters', { label: 'Опечатка', start_date: '2026-10-05', weeks_count: 18 })).status, 409);
     assert.equal((await call('PUT', `/api/admin/semesters/${spring.id}`, { start_date: '2026-12-28' })).status, 409, 'moved into autumn');
-    // Stretching autumn is tried back in November, while its extra weeks are
-    // still ahead (in January they would add template pairs to days gone by).
-    at('2026-11-04T12:00:00');
     assert.equal((await call('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 24 })).status, 409, 'autumn stretched into spring');
     await ok('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 23 }); // ends the day before spring
     await ok('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 18 });
-    at('2027-01-15T12:00:00');
-    assert.match((await call('PUT', `/api/admin/semesters/${autumn.id}`, { weeks_count: 20 })).data.error, /задним числом/, 'in January those weeks have begun');
+    assert.equal(await planHours(autumn.id, autumnPlan.id), AUTUMN_TOTAL, 'weeks added and taken away again showed nothing new');
 
     await ok('PUT', `/api/admin/semesters/${spring.id}`, { is_active: true });
     assert.equal(await planHours(autumn.id, autumnPlan.id), AUTUMN_TOTAL, 'activating spring leaves autumn hours alone');
@@ -235,6 +242,10 @@ test('a year of the schedule: autumn, rollover to spring, next autumn', async (t
         VALUES (?, 0, 5, 0, '13:10', '14:40', 'Базы данных', 'Лекция', ?, ?, ?)
     `).run(groupId, teacherId, springDiscipline, autumn.id);
     assert.equal(await planHours(spring.id, springPlan.id), beforePlant, 'an autumn pair, even of identical identity, cannot feed a spring plan row');
+
+    // Spring's weeks entered from its draft; looked at on its first morning.
+    at('2027-02-08T07:00:00');
+    await enterWeeks(1, 18);
 
     // A four-week view across the rollover: autumn is over, spring starts on
     // its own week 1 with its own stored parity (week 1 нечётная, although the

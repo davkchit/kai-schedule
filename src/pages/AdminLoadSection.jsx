@@ -455,7 +455,7 @@ export default function AdminLoadSection({ api, groups, setToastMessage, onWorki
             `Закрыть семестр «${viewedSemester.label}»?\n\n` +
             `Итог будет зафиксирован: строк плана ${loadPlan.length}, проведено ${hours} часов.\n\n` +
             (unconfirmedWeeks.length > 0
-                ? `Внимание: расписание не вносили на недели ${unconfirmedWeeks.join(', ')} — часы по ним посчитаны по шаблону.\n\n`
+                ? `Внимание: расписание не вносили на недели ${unconfirmedWeeks.join(', ')} — часы за них не посчитаны.\n\n`
                 : '') +
             'После этого расписание и нагрузку этого семестра нельзя будет менять, ' +
             'а часы перестанут пересчитываться. Семестр можно открыть заново.'

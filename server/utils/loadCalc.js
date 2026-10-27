@@ -1,18 +1,14 @@
-const { addDaysToIsoDate, defaultFirstWeekParity, getWeekTypeForSemesterWeek } = require('./date');
+const { addDaysToIsoDate } = require('./date');
 const clock = require('./clock');
-const { resolveTemplateLessons } = require('./templateResolve');
 
 // 1 pair = 2 academic hours (2 × 45 min = 1.5 astronomical hours) — confirmed
 // against the department's own planning figures (32 planned hours = 16 pairs).
 const HOURS_PER_LESSON = 2;
 
 /**
- * Which weeks (1..weeksCount) have ANY specific-week row for this group,
- * regardless of which load_plan (if any) those rows belong to. Mirrors the
- * "no merge" rule already used by the public schedule: once a week has its
- * own materialized rows, the template is ignored for that week entirely —
- * see resolveVisibleLessons in tests/server.test.js and buildScheduleDays in
- * SchedulePage.jsx for the same rule applied to what students see.
+ * Which weeks (1..weeksCount) have ANY specific-week row for this group —
+ * the weeks entered as their own, whichever plan rows (if any) their pairs
+ * belong to. Only these weeks are shown to students and only they count.
  */
 function computeExceptionWeeks(groupLessons, weeksCount) {
     const exceptionWeeks = new Set();
@@ -32,63 +28,34 @@ function computeExceptionWeeks(groupLessons, weeksCount) {
 }
 
 /**
- * For one load_plan row, walk every week of the semester and decide whether
- * that week's occurrence of the linked lesson happened, using the exact same
- * "override replaces the template, no merge" rule the public schedule uses.
- * Returns per-week detail (for the "show your work" breakdown teachers can
- * point to) plus the resulting hour total.
+ * For one load_plan row, walk every week of the semester and collect the
+ * occurrences of its pairs — in weeks entered as their own only. The template
+ * is the specialist's draft (the constructor copies it into a week when the
+ * week is entered); a week never entered was never shown to a student, so it
+ * counts nothing. Returns per-week detail (for the "show your work" breakdown
+ * teachers can point to) plus the resulting hour total.
  *
  * @param {string} semesterStartDate - ISO date, the semester's week 1 Monday
  * @param {number} weeksCount - how many weeks the semester spans
  * @param {Array} linkedLessons - all lessons rows matching this plan's teacher/discipline/type/group/subgroup
- *   (any mix of template versions and specific-week rows for this exact slot)
  * @param {Set<number>} exceptionWeeks - from computeExceptionWeeks, scoped to the group
- * @param {Array} [templateRows] - ALL the group's template rows in the semester, of
- *   any teacher. A template cell shows its newest version whoever teaches it: the
- *   version is chosen among all of them first, and only then is it asked whether
- *   it is this row's pair. Chosen among the linked rows alone, a teacher replaced
- *   in the template kept "his" old version as the newest of his own and went on
- *   earning hours for every week after the change.
- * @param {number} [firstWeekParity] - the semester's week-1 parity (1 нечётная, 2 чётная);
- *   defaults to the calendar rule for semesterStartDate
  * @param {Date} [now] - injectable for tests; defaults to the server clock
  */
-function computeLoadProgress({
-    semesterStartDate, weeksCount, linkedLessons, exceptionWeeks, templateRows = null,
-    firstWeekParity = defaultFirstWeekParity(semesterStartDate),
-    now = clock.now()
-}) {
+function computeLoadProgress({ semesterStartDate, weeksCount, linkedLessons, exceptionWeeks, now = clock.now() }) {
     const occurrences = [];
-    const linkedIds = new Set(linkedLessons.map((lesson) => lesson.id));
 
     for (let weekNumber = 1; weekNumber <= weeksCount; weekNumber += 1) {
-        const weekMonday = addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7);
-        // The semester's own stored first-week parity, alternating — the same
-        // rule the student schedule resolves with (see getWeekTypeForSemesterWeek).
-        const weekType = getWeekTypeForSemesterWeek(firstWeekParity, weekNumber);
-        let resolvedLessons;
-
-        if (exceptionWeeks.has(weekNumber)) {
-            // This plan's slots only occur this week if THEY were among the rows
-            // materialized/kept for this specific week — an exception week with
-            // no matching row for this plan means that lesson was removed (or
-            // never carried into) that week's override set. is_removed is
-            // checked here too: such a row is invisible in the schedule, so
-            // counting it would bill hours for a pair nobody was shown.
-            resolvedLessons = linkedLessons.filter(
-                (lesson) => lesson.specific_week === weekNumber && !lesson.is_removed
-            );
-        } else {
-            const templateCandidates = (templateRows || linkedLessons).filter(
-                (lesson) => lesson.specific_week == null && (lesson.week_type === 0 || lesson.week_type === weekType)
-            );
-            resolvedLessons = resolveTemplateLessons(templateCandidates, weekNumber)
-                .filter((lesson) => linkedIds.has(lesson.id));
+        if (!exceptionWeeks.has(weekNumber)) {
+            continue;
         }
 
+        const weekMonday = addDaysToIsoDate(semesterStartDate, (weekNumber - 1) * 7);
+        // is_removed is checked here too: such a row is invisible in the
+        // schedule, so counting it would bill hours for a pair nobody was shown.
         // One plan row routinely owns SEVERAL slots in the same week — a lecture
-        // block is two consecutive pairs, and a language practical runs Mon and
-        // Wed. Counting only the first would halve those rows' hours.
+        // block is two consecutive pairs, a language practical runs Mon and Wed.
+        const resolvedLessons = linkedLessons.filter((lesson) => lesson.specific_week === weekNumber && !lesson.is_removed);
+
         for (const lesson of resolvedLessons) {
             const occurrenceDate = addDaysToIsoDate(weekMonday, lesson.day_of_week - 1);
             const occurrenceEndsAt = new Date(`${occurrenceDate}T${lesson.time_end}:00`);

@@ -5,7 +5,6 @@ const express = require('express');
 const { writeAuditLog } = require('../../audit');
 const { getDb } = require('../../db');
 const {
-    addDaysToIsoDate,
     formatLocalDate,
     getSemesterWeekMeta,
     getSemesterWeekType
@@ -16,9 +15,9 @@ const { attachPlanGroups } = require('../../utils/planGroups');
 const { computePlanRowProgress } = require('../../utils/planProgress');
 const { findTemplateSlotOccupant, findWeekSlotOccupant, lessonsClash } = require('../../utils/slots');
 const { templateWeekForSlot } = require('../../utils/templateWeek');
-const { createDayIndex, findAttestationConflicts, findAttestationsUnderLesson, timedAttestationError } = require('../../utils/attestationConflicts');
-const { selectAttestations } = require('../../utils/attestations');
+const { findAttestationsUnderLesson, timedAttestationError } = require('../../utils/attestationConflicts');
 const { getActiveSemester, getSemesterById } = require('../../utils/semesters');
+const { timedRecordOver } = require('../../utils/weekRows');
 const {
     validateMaterializeWeekBody,
     validateMoveLessonBody
@@ -243,11 +242,13 @@ router.post('/schedule/move-lesson', (req, res) => {
                     const statement = insertLesson();
                     let sortOrder = 0;
 
+                    const holdBy = db.prepare('UPDATE lessons SET is_removed = 1, hidden_by_attestation = ? WHERE id = ?');
+
                     for (const row of resolved) {
                         const key = `${row.day_of_week}|${row.time_start}|${row.time_end}|${row.subgroup}`;
                         const isMoved = key === movedKey;
 
-                        statement.run(
+                        const inserted = statement.run(
                             lesson.group_id,
                             row.subgroup,
                             isMoved ? payload.day_of_week : row.day_of_week,
@@ -260,6 +261,11 @@ router.post('/schedule/move-lesson', (req, res) => {
                             row.subject, row.room, row.lesson_type, row.teacher, row.teacher_id, row.discipline_id,
                             sortOrder, row.kind, semester.id
                         );
+                        // The rest of the template comes in as the week is entered: a pair
+                        // under an exam with an end time is taken out by it (see
+                        // weekRows.js; the moved pair itself was refused above if so).
+                        const heldBy = isMoved ? null : timedRecordOver(db, semester, lesson.group_id, payload.week_number, row);
+                        if (heldBy) holdBy.run(heldBy, inserted.lastInsertRowid);
                         sortOrder += 1;
                     }
                 });
@@ -331,7 +337,7 @@ router.post('/schedule/materialize-week', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
-    const beyond = payload.action === 'upsert' ? weekBeyondSemesterError(semester, payload.week_number) : null;
+    const beyond = payload.action !== 'remove' ? weekBeyondSemesterError(semester, payload.week_number) : null;
 
     if (beyond) {
         return res.status(409).json(beyond);
@@ -373,8 +379,15 @@ router.post('/schedule/materialize-week', (req, res) => {
     `).all(semester.id, payload.group_id, weekTypeNumber);
 
     const resolved = resolveTemplateLessons(templateRows, payload.week_number);
+
+    // «Внести как в шаблоне» with nothing in the template would enter nothing:
+    // a week with no rows of its own is still not entered.
+    if (payload.action === 'copy' && resolved.length === 0) {
+        return res.status(409).json({ error: 'В шаблоне этой недели нет пар — вносить нечего. Добавьте пары в неделю.' });
+    }
+
     const slotKey = (lesson) => `${lesson.day_of_week}|${lesson.time_start}|${lesson.time_end}|${lesson.subgroup}`;
-    const touchedKey = `${payload.day_of_week}|${payload.time_start}|${payload.time_end}|${payload.subgroup}`;
+    const touchedKey = payload.action === 'copy' ? null : `${payload.day_of_week}|${payload.time_start}|${payload.time_end}|${payload.subgroup}`;
 
     const finalLessons = [];
     let touchedHandled = false;
@@ -486,20 +499,23 @@ router.post('/schedule/materialize-week', (req, res) => {
                 group_id, subgroup, day_of_week, week_type, specific_week,
                 template_from_week, is_removed,
                 time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order,
-                kind, semester_id
+                kind, semester_id, hidden_by_attestation
             )
-            VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         let count = 0;
 
         for (const lesson of finalLessons) {
+            // A template pair under an exam with an end time comes in already
+            // taken out by it (the touched pair was refused above if so).
+            const heldBy = lesson.touched ? null : timedRecordOver(db, semester, payload.group_id, payload.week_number, lesson);
             insert.run(
                 payload.group_id,
                 lesson.subgroup,
                 lesson.day_of_week,
                 payload.week_number,
-                lesson.is_removed ? 1 : 0,
+                lesson.is_removed || heldBy ? 1 : 0,
                 lesson.time_start,
                 lesson.time_end,
                 lesson.subject,
@@ -510,7 +526,8 @@ router.post('/schedule/materialize-week', (req, res) => {
                 lesson.discipline_id ?? null,
                 count,
                 lesson.kind || 'lesson',
-                semester.id
+                semester.id,
+                heldBy
             );
             count += 1;
         }
@@ -570,35 +587,21 @@ function summarizeWeekClear(db, semester, groupId, weekNumber) {
     const countedHours = () => planRows.reduce((sum, row) => sum + computePlanRowProgress(db, row, semester).occurred_hours, 0);
 
     const before = countedHours();
-    const monday = addDaysToIsoDate(semester.start_date, (weekNumber - 1) * 7);
-    const records = selectAttestations(db, 'a.group_id = ? AND a.date BETWEEN ? AND ? AND a.time_end IS NOT NULL', [groupId, monday, addDaysToIsoDate(monday, 6)]);
     db.exec('SAVEPOINT week_clear_preview');
     let after;
-    let blockedBy = null;
 
     try {
         db.prepare('DELETE FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ?').run(semester.id, groupId, weekNumber);
         after = countedHours();
-        // The template coming back must not lie under an exam with an end
-        // time — the pair that exam took out of its day would be back under it.
-        const dayIndex = createDayIndex(db);
-        blockedBy = records.find((record) => findAttestationConflicts(db, record, [], dayIndex).clashing.length > 0) || null;
     } finally {
         db.exec('ROLLBACK TO week_clear_preview');
         db.exec('RELEASE week_clear_preview');
     }
 
-    return {
-        week_number: weekNumber,
-        pairs,
-        template_pairs: templatePairs,
-        hours_lost: Math.max(0, before - after),
-        // A template that comes back can also ADD hours to days already past.
-        hours_gained: Math.max(0, after - before),
-        blocked: blockedBy
-            ? `В этой неделе ${blockedBy.date.split('-').reverse().slice(0, 2).join('.')} ${blockedBy.time_start}–${blockedBy.time_end} стоит запись сессии «${blockedBy.subject}» — после очистки под ней встанет пара шаблона. Сначала перенесите или удалите запись.`
-            : null
-    };
+    // Cleared, the week is no longer entered: students see «Расписание не
+    // внесено» and its pairs stop counting. (The template is only the draft
+    // the constructor shows for it.)
+    return { week_number: weekNumber, pairs, template_pairs: templatePairs, hours_lost: Math.max(0, before - after) };
 }
 
 function readWeekQuery(req, res) {
@@ -654,19 +657,13 @@ router.delete('/schedule/week', (req, res) => {
         return res.status(409).json({ error: SEMESTER_CLOSED });
     }
 
-    // Hours already counted are not changed by one stray click: the client
-    // asks again, naming the hours lost or gained, and sends confirm=1.
+    // Pairs already counted to teachers are not wiped by one stray click:
+    // the client asks again, naming the hours, and sends confirm=1.
     const summary = summarizeWeekClear(db, semester, groupId, weekNumber);
 
-    if (summary.blocked) {
-        return res.status(409).json({ error: summary.blocked, ...summary });
-    }
-
-    if ((summary.hours_lost > 0 || summary.hours_gained > 0) && req.query.confirm !== '1') {
+    if (summary.hours_lost > 0 && req.query.confirm !== '1') {
         return res.status(409).json({
-            error: summary.hours_lost > 0
-                ? `Пары этой недели уже засчитаны преподавателям — пропадёт ${summary.hours_lost} ч.`
-                : `Шаблон добавит прошедшим дням ${summary.hours_gained} ч.`,
+            error: `Пары этой недели уже засчитаны преподавателям — пропадёт ${summary.hours_lost} ч.`,
             needs_confirm: true,
             ...summary
         });
@@ -683,7 +680,7 @@ router.delete('/schedule/week', (req, res) => {
         entityType: 'group_schedule',
         entityId: groupId,
         ipAddress: getClientAddress(req),
-        details: { group_id: groupId, week_number: weekNumber, deleted: result.changes, hours_lost: summary.hours_lost, hours_gained: summary.hours_gained }
+        details: { group_id: groupId, week_number: weekNumber, deleted: result.changes, hours_lost: summary.hours_lost }
     });
 
     res.json({ success: true, deleted: result.changes, hours_lost: summary.hours_lost });

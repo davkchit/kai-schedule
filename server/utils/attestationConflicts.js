@@ -223,6 +223,13 @@ function findAttestationsUnderLesson(db, semester, lesson) {
  * an end is only assumed to last an hour or a pair, so that one stays a warning.)
  */
 function timedAttestationError(db, semester, lesson, ignoreId = null) {
+    // A template pair is the specialist's draft: nobody sees it. When the
+    // week is entered, a pair under such a record is copied as taken out
+    // (weekRows.js timedRecordOver), so only a week's own pair is refused.
+    if (lesson.specific_week === null || lesson.specific_week === undefined) {
+        return null;
+    }
+
     const record = attestationsUnderLesson(db, semester, lesson, ignoreId).find((item) => item.time_end);
     return record ? `В это время у группы ${recordLabel(record)} — пару сюда поставить нельзя` : null;
 }

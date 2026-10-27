@@ -69,32 +69,31 @@ test('a closed semester stops changing — its hours and its schedule are final'
     };
     const lesson = await ok('POST', '/api/admin/lessons', pair);
 
-    // Week 3: three Mondays have happened.
+    // Week 3: three Mondays have gone by, but only week 3 was entered (from the template).
     at('2026-09-16T12:00:00');
-    assert.equal(await adminHours(plan.id), 6);
+    await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: 3, action: 'copy' });
+    assert.equal(await adminHours(plan.id), 2, 'only an entered week counts');
 
-    // Weeks 1 and 2 finished without anyone entering what actually happened:
-    // their hours came from the template, and that has to be visible.
+    // Weeks 1 and 2 finished without being entered: no hours, and that has to be visible.
     const coverage = await ok('GET', `/api/admin/semesters/${semester.id}/week-coverage`);
     assert.equal(coverage.current_week, 3);
     assert.deepEqual(coverage.unconfirmed_weeks, [1, 2]);
 
-    // Entering week 2 as it actually ran (same pair) takes it off the list
-    // without changing the total.
+    // Entering week 2 as it actually ran takes it off the list and counts it.
     await ok('POST', '/api/admin/schedule/materialize-week', {
         group_id: groupId, week_number: 2, action: 'upsert', day_of_week: 1,
         time_start: '08:00', time_end: '09:30', subject: 'Физика', lesson_type: 'Лекция', teacher: 'Иванов И.И.',
         teacher_id: teacherId, discipline_id: disciplineId
     });
     assert.deepEqual((await ok('GET', `/api/admin/semesters/${semester.id}/week-coverage`)).unconfirmed_weeks, [1]);
-    assert.equal(await adminHours(plan.id), 6, 'entering a week as it ran changes nothing');
+    assert.equal(await adminHours(plan.id), 4, 'entering a week as it ran counts it');
 
     const closed = await ok('POST', `/api/admin/semesters/${semester.id}/close`);
-    assert.deepEqual(closed.unconfirmed_weeks, [1], 'closing records which weeks were counted from the template');
+    assert.deepEqual(closed.unconfirmed_weeks, [1], 'closing records which weeks were never entered');
     assert.equal(closed.closed, true);
     assert.equal(closed.closed_at, '2026-09-16');
     assert.equal(closed.plan_rows, 1);
-    assert.equal(closed.total_hours, 6);
+    assert.equal(closed.total_hours, 4);
     assert.equal((await call('POST', `/api/admin/semesters/${semester.id}/close`)).status, 409, 'closing twice is refused');
 
     // Nothing in a closed semester can be edited any more.
@@ -121,18 +120,21 @@ test('a closed semester stops changing — its hours and its schedule are final'
 
     // The semester ran to its end; the reported total stays what it was at closing.
     at('2026-12-01T12:00:00');
-    assert.equal(await adminHours(plan.id), 6, 'the clock moving on does not add hours to a closed semester');
+    assert.equal(await adminHours(plan.id), 4, 'the clock moving on does not add hours to a closed semester');
 
     const teacherView = await ok('GET', `/api/teachers/${teacherId}/load?semester_id=${semester.id}`);
     assert.equal(teacherView.semester.closed, true);
-    assert.equal(teacherView.plan[0].occurred_hours, 6);
+    assert.equal(teacherView.plan[0].occurred_hours, 4);
 
     const publicList = await ok('GET', '/api/semesters');
     assert.equal(publicList.find((row) => row.id === semester.id).closed, true);
 
-    // Reopening goes back to a live calculation: ten weeks have now run.
+    // Reopening goes back to a live calculation: entering the other weeks now counts them.
     const reopened = await ok('POST', `/api/admin/semesters/${semester.id}/reopen`);
     assert.equal(reopened.closed, false);
+    for (const week of [1, 4, 5, 6, 7, 8, 9, 10]) {
+        await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: week, action: 'copy' });
+    }
     assert.equal(await adminHours(plan.id), 20);
     assert.equal((await call('POST', `/api/admin/semesters/${semester.id}/reopen`)).status, 409, 'reopening an open semester is refused');
     assert.equal((await call('POST', '/api/admin/lessons', { ...pair, day_of_week: 2 })).status, 201, 'editing works again');

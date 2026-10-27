@@ -1,5 +1,5 @@
-const { getSemesterWeekMeta } = require('./date');
-const { resolveTemplateLessons } = require('./templateResolve');
+const { addDaysToIsoDate, getSemesterWeekMeta } = require('./date');
+const { scheduleGroupId } = require('./groupJoin');
 const { findWeekSlotOccupant } = require('./slots');
 const { timedAttestationError } = require('./attestationConflicts');
 const { getSemesterById } = require('./semesters');
@@ -7,57 +7,42 @@ const { getSemesterById } = require('./semesters');
 /**
  * Takes pairs out of ONE date — an exam or a credit held in their place — so
  * students no longer see them that day and they stop counting toward hours.
+ * Only a week entered as its own has pairs to take out (students see nothing
+ * of a week still on the template); they get the removed marker, carrying
+ * `attestationId`, so restorePairsHiddenBy can bring them back.
  *
- * A week with its own rows: the pairs get the removed marker. A week still
- * run by the template: it first becomes its own (the template's pairs of that
- * week copied, exactly as the constructor's materialize-week does), with these
- * pairs copied as removed — so the rest of the week is unchanged and the
- * template itself, and every other week, is untouched.
- *
- * `pairs` are lesson rows as the day resolution returns them (template rows
- * or that week's own rows) of the group's schedule owner `groupId`. Hidden
- * rows carry `attestationId`, so restorePairsHiddenBy can bring them back.
+ * `pairs` are that week's own rows of the group's schedule owner `groupId`.
  */
 function hidePairsOnDate(db, semester, groupId, isoDate, pairs, attestationId = null) {
     if (pairs.length === 0) {
         return 0;
     }
 
-    const { weekNumber, weekTypeNumber } = getSemesterWeekMeta(semester, isoDate);
-    const ids = new Set(pairs.map((pair) => pair.id));
-    const ownWeek = db.prepare('SELECT 1 FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week = ? LIMIT 1')
-        .get(semester.id, groupId, weekNumber);
+    const { weekNumber } = getSemesterWeekMeta(semester, isoDate);
+    const hide = db.prepare('UPDATE lessons SET is_removed = 1, hidden_by_attestation = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND specific_week = ? AND is_removed = 0');
+    return pairs.reduce((count, pair) => count + hide.run(attestationId, pair.id, weekNumber).changes, 0);
+}
 
-    if (ownWeek) {
-        const hide = db.prepare('UPDATE lessons SET is_removed = 1, hidden_by_attestation = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND specific_week = ? AND is_removed = 0');
-        return pairs.reduce((count, pair) => count + hide.run(attestationId, pair.id, weekNumber).changes, 0);
+/**
+ * When the template is copied into a week (the week is entered), a pair of it
+ * falling under a session record with an end time on that date is copied as
+ * already taken out by that record — the record holds that part of the day.
+ * The record's id, or null. Only a record that takes the pair over entirely
+ * (the whole group's, or the pair's own subgroup's) does so.
+ */
+function timedRecordOver(db, semester, groupId, weekNumber, row) {
+    if (row.is_removed || row.kind === 'event') {
+        return null;
     }
 
-    const templateRows = db.prepare(`
-        SELECT * FROM lessons
-        WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND (week_type = 0 OR week_type = ?)
-    `).all(semester.id, groupId, weekTypeNumber);
-    const insert = db.prepare(`
-        INSERT INTO lessons (
-            group_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
-            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind, semester_id,
-            hidden_by_attestation
-        ) VALUES (?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    let hidden = 0;
-
-    resolveTemplateLessons(templateRows, weekNumber).forEach((row, index) => {
-        const removed = ids.has(row.id) ? 1 : 0;
-        hidden += removed;
-        insert.run(
-            groupId, row.subgroup, row.day_of_week, weekNumber, removed,
-            row.time_start, row.time_end, row.subject, row.room, row.lesson_type, row.teacher,
-            row.teacher_id, row.discipline_id, index, row.kind || 'lesson', semester.id,
-            removed ? attestationId : null
-        );
-    });
-
-    return hidden;
+    const date = addDaysToIsoDate(semester.start_date, (weekNumber - 1) * 7 + row.day_of_week - 1);
+    const record = db.prepare(`
+        SELECT id FROM attestations
+        WHERE group_id = ? AND date = ? AND time_end IS NOT NULL AND time_start < ? AND time_end > ?
+          AND (subgroup = 0 OR (? != 0 AND subgroup = ?))
+        ORDER BY id LIMIT 1
+    `).get(scheduleGroupId(db, groupId), date, row.time_end, row.time_start, row.subgroup, row.subgroup);
+    return record ? record.id : null;
 }
 
 /**
@@ -91,4 +76,4 @@ function restorePairsHiddenBy(db, attestationId) {
     return restored;
 }
 
-module.exports = { hidePairsOnDate, restorePairsHiddenBy };
+module.exports = { hidePairsOnDate, restorePairsHiddenBy, timedRecordOver };

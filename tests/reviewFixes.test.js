@@ -18,6 +18,8 @@ const bcrypt = require('bcryptjs');
 const { createApp } = require('../server/app');
 const { createToken } = require('../server/middleware/auth');
 const { closeDb, getDb } = require('../server/db');
+const { getSemesterWeekMeta } = require('../server/utils/date');
+const { resolveTemplateLessons } = require('../server/utils/templateResolve');
 
 const at = (localDateTime) => { process.env.KAI_FAKE_NOW = `${localDateTime}+03:00`; };
 const localDate = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -74,7 +76,21 @@ async function freshWorld() {
         const schedule = await ok('GET', `/api/schedule/${groupId}?date=${day}&days=1`);
         return ctx.resolveLessonsForDay(schedule, localDate(day)).map((item) => `${item.time_start} ${item.subject} ${item.room ?? ''}`.trim());
     };
-    return { groupId, semester, teacherA, teacherB, discipline, planA, planB, pair, hours, sees };
+    // The constructor's draft for a day — what entering that week would copy in.
+    const draft = (day) => {
+        const current = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semester.id);
+        const { weekNumber, weekTypeNumber } = getSemesterWeekMeta(current, day);
+        const rows = db.prepare('SELECT * FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND day_of_week = ? AND (week_type = 0 OR week_type = ?)')
+            .all(semester.id, groupId, localDate(day).getDay() || 7, weekTypeNumber);
+        return resolveTemplateLessons(rows, weekNumber).map((item) => `${item.time_start} ${item.subject} ${item.room ?? ''}`.trim()).sort();
+    };
+    // Weeks entered as the template has them (as the specialist does each Thursday); an empty draft enters nothing.
+    const enter = async (from, to) => {
+        for (let week = from; week <= to; week += 1) {
+            await ctx.call('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: week, action: 'copy' });
+        }
+    };
+    return { groupId, semester, teacherA, teacherB, discipline, planA, planB, pair, hours, sees, draft, enter };
 }
 
 test('1. a teacher replaced in the template stops earning hours from the week of the change', async () => {
@@ -86,6 +102,8 @@ test('1. a teacher replaced in the template stops earning hours from the week of
     const replaced = await ok('POST', '/api/admin/lessons', { ...w.pair, teacher_id: w.teacherB, replaces_lesson_id: original.id });
     assert.equal(replaced.template_from_week, 4);
 
+    // Each week entered from the draft as it stood for that week.
+    await w.enter(1, 17);
     at('2026-12-27T12:00:00'); // Sunday of week 17
     assert.equal(await w.hours(w.planA), 6, 'А: weeks 1–3 only');
     assert.equal(await w.hours(w.planB), 28, 'Б: weeks 4–17');
@@ -110,12 +128,13 @@ test('2–3. a version made this week, then moved or deleted the same week, leav
             await ok('DELETE', `/api/admin/lessons/${roomFix.id}`);
         }
 
-        // Week 5: Tuesday 29.09, Thursday 01.10. Week 3 (the past) unchanged.
+        // Every week entered from the draft; then week 5: Tuesday 29.09, Thursday 01.10. Week 3 unchanged.
+        await w.enter(1, 17);
+        at('2026-12-27T12:00:00');
         assert.deepEqual(await w.sees('2026-09-29'), [], `${how}: the old Tuesday version does not come back`);
         assert.deepEqual(await w.sees('2026-10-01'), how === 'delete' ? [] : ['08:00 Физика 202'], `${how}: Thursday`);
         assert.deepEqual(await w.sees('2026-09-15'), ['08:00 Физика 101'], `${how}: week 3 as it was`);
 
-        at('2026-12-27T12:00:00');
         assert.equal(await w.hours(w.planA), how === 'delete' ? 6 : 6 + 28, `${how}: hours follow what students saw`);
     }
 });
@@ -133,7 +152,7 @@ test('7. a drag from a stale constructor tab is refused instead of rewriting the
     const stale = await call('POST', '/api/admin/schedule/move-lesson', { lesson_id: original.id, mode: 'week', week_number: 9, day_of_week: 4, time_start: '08:00', time_end: '09:30' });
     assert.equal(stale.status, 409);
     assert.match(stale.data.error, /обновите страницу/);
-    assert.deepEqual(await w.sees('2026-09-22'), ['08:00 Физика 101', '11:30 Физика 101'], 'a past Tuesday keeps its pairs');
+    assert.deepEqual(w.draft('2026-09-22'), ['08:00 Физика 101', '11:30 Физика 101'], 'the draft of a past Tuesday keeps its pairs');
 
     // A week row dragged in the template view is refused too.
     const weekRow = ctx.db.prepare('SELECT id FROM lessons WHERE specific_week = 9 AND is_removed = 0 LIMIT 1').get();
@@ -160,8 +179,9 @@ test('4. pairs an exam took out of its day come back when the exam moves or is d
     await ok('POST', '/api/admin/lessons', w.pair);
     const exam = { semester_id: w.semester.id, group_id: w.groupId, kind: 'exam', date: '2026-11-03', time_start: '08:00', discipline_id: w.discipline, teacher_id: w.teacherA, confirm: true, remove_pairs: true };
 
-    at('2026-10-21T12:00:00');
-    // A week still run by the template (week 10, 03.11) and one with its own rows (week 11, 10.11).
+    at('2026-11-02T07:00:00'); // Monday of week 10; week 11 entered, so open too
+    // Week 10 (03.11) entered as the template has it; week 11 (10.11) with a pair added.
+    await w.enter(10, 10);
     await ok('POST', '/api/admin/schedule/materialize-week', { group_id: w.groupId, week_number: 11, action: 'upsert', day_of_week: 2, time_start: '11:30', time_end: '13:00', subgroup: 0, subject: 'Физика', room: '101', lesson_type: 'Лекция', teacher_id: w.teacherA, discipline_id: w.discipline });
     const first = await ok('POST', '/api/admin/attestations', exam);
     assert.equal(first.removed_pairs, 1);
@@ -270,51 +290,30 @@ test('a session record with an end time and a pair of the group never overlap �
     // …but not moved, edited or dragged onto it.
     assert.equal((await call('PUT', `/api/admin/lessons/${after.id}`, { time_start: '09:00', time_end: '10:30' })).status, 409);
     assert.equal((await call('POST', '/api/admin/schedule/move-lesson', { lesson_id: after.id, mode: 'week', week_number: 10, day_of_week: 2, time_start: '08:00', time_end: '09:30' })).status, 409);
-    // A template pair that would run on that date is refused as well.
+    // A template pair is only the draft: allowed, and when week 10 is entered
+    // from it, the pair under the exam comes in already taken out by it.
     ctx.db.exec('DELETE FROM lessons WHERE specific_week = 10');
-    assert.equal((await call('POST', '/api/admin/lessons', { ...w.pair, time_start: '09:00', time_end: '10:30' })).status, 409);
-    // In a week that is its own the template does not run: no clash there.
-    await ok('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10, day_of_week: 5 });
-    assert.ok((await ok('POST', '/api/admin/lessons', { ...w.pair, time_start: '09:00', time_end: '10:30' })).id);
-});
-
-test('«Очистить неделю»: not under an exam with an end time, and asked about hours gained as well as lost', async () => {
-    const { ok, call } = ctx;
-    const w = await freshWorld();
-    await ok('POST', '/api/admin/lessons', w.pair); // template, Tuesday 08:00
-    at('2026-10-21T12:00:00');
-
-    // An exam takes the pair out of 10.11 (week 11 becomes its own).
-    await ok('POST', '/api/admin/attestations', { semester_id: w.semester.id, group_id: w.groupId, kind: 'exam', date: '2026-11-10', time_start: '08:00', time_end: '09:30', discipline_id: w.discipline, teacher_id: w.teacherA, remove_pairs: true });
-    const blocked = await call('DELETE', `/api/admin/schedule/week?group_id=${w.groupId}&week_number=11&confirm=1`);
-    assert.equal(blocked.status, 409);
-    assert.match(blocked.data.error, /запись сессии/);
-    assert.deepEqual(await w.sees('2026-11-10'), ['08:00 Физика'], 'only the exam that day');
-
-    // A past week made its own by removing the pair: clearing it brings 2 h back to a day gone by.
-    await ok('POST', '/api/admin/schedule/materialize-week', { group_id: w.groupId, week_number: 3, action: 'remove', day_of_week: 2, time_start: '08:00', time_end: '09:30', subgroup: 0 });
-    const summary = await ok('GET', `/api/admin/schedule/week-summary?group_id=${w.groupId}&week_number=3`);
-    assert.equal(summary.hours_gained, 2);
-    const unasked = await call('DELETE', `/api/admin/schedule/week?group_id=${w.groupId}&week_number=3`);
-    assert.equal(unasked.status, 409);
-    assert.equal(unasked.data.needs_confirm, true);
-    await ok('DELETE', `/api/admin/schedule/week?group_id=${w.groupId}&week_number=3&confirm=1`);
+    await ok('POST', '/api/admin/lessons', { ...w.pair, time_start: '09:00', time_end: '10:30' });
+    await w.enter(10, 10);
+    const copied = ctx.db.prepare("SELECT is_removed, hidden_by_attestation FROM lessons WHERE specific_week = 10 AND time_start = '09:00'").get();
+    assert.equal(copied.is_removed, 1);
+    assert.equal(copied.hidden_by_attestation, placed.id);
 });
 
 test('a semester change does not move pairs under a session record with an end time', async () => {
     const { ok, call } = ctx;
     const w = await freshWorld();
-    await ok('POST', '/api/admin/lessons', w.pair); // template, Tuesday 08:00
-    at('2026-10-21T12:00:00');
-    // Week 19 (after 18 teaching weeks): a credit on Tuesday 05.01 08:00–09:30, no pair there yet.
-    await ok('POST', '/api/admin/attestations', { semester_id: w.semester.id, group_id: w.groupId, kind: 'credit', date: '2027-01-05', time_start: '08:00', time_end: '09:30', discipline_id: w.discipline, teacher_id: w.teacherA });
+    at('2026-08-25T10:00:00');
+    // Week 10 entered: Tuesday 03.11 08:00. A credit the Tuesday after, 10.11 08:00–09:30.
+    await ok('POST', '/api/admin/lessons', { ...w.pair, specific_week: 10 });
+    await ok('POST', '/api/admin/attestations', { semester_id: w.semester.id, group_id: w.groupId, kind: 'credit', date: '2026-11-10', time_start: '08:00', time_end: '09:30', discipline_id: w.discipline, teacher_id: w.teacherA });
 
-    const preview = await ok('GET', `/api/admin/semesters/${w.semester.id}/impact?weeks_count=19`);
+    // Starting a week later moves week 10 onto 10.11 — under the credit.
+    const preview = await ok('GET', `/api/admin/semesters/${w.semester.id}/impact?start_date=2026-09-07`);
     assert.match(preview.blocked.error, /под записи сессии/);
-    const refused = await call('PUT', `/api/admin/semesters/${w.semester.id}`, { weeks_count: 19 });
+    const refused = await call('PUT', `/api/admin/semesters/${w.semester.id}`, { start_date: '2026-09-07' });
     assert.equal(refused.status, 409);
-    assert.equal(ctx.db.prepare('SELECT weeks_count FROM semesters WHERE id = ?').get(w.semester.id).weeks_count, 18, 'nothing changed');
-    assert.deepEqual(await w.sees('2027-01-05'), ['08:00 Физика'], 'only the credit that day');
+    assert.equal(ctx.db.prepare('SELECT start_date FROM semesters WHERE id = ?').get(w.semester.id).start_date, '2026-08-31', 'nothing changed');
 
     // A change that leaves the dates alone is not held up by it.
     await ok('PUT', `/api/admin/semesters/${w.semester.id}`, { label: 'Осень 2026' });
@@ -328,14 +327,15 @@ test('a pair added to a week run by a non-empty template is refused; a removal m
     const stale = await call('POST', '/api/admin/lessons', { ...w.pair, day_of_week: 4, specific_week: 10 });
     assert.equal(stale.status, 409);
     assert.match(stale.data.error, /обновите страницу/);
-    assert.deepEqual(await w.sees('2026-11-03'), ['08:00 Физика 101'], 'the week still runs on the template');
+    assert.deepEqual(w.draft('2026-11-03'), ['08:00 Физика 101'], 'the week is still not entered: the draft holds');
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE specific_week = 10').get().n, 0);
 
     const original = ctx.db.prepare('SELECT id FROM lessons WHERE specific_week IS NULL').get();
     await ok('DELETE', `/api/admin/lessons/${original.id}`); // tombstone from now on
     const tombstone = ctx.db.prepare('SELECT id FROM lessons WHERE is_removed = 1').get();
     assert.equal((await call('DELETE', `/api/admin/lessons/${tombstone.id}`)).status, 409);
-    assert.deepEqual(await w.sees('2026-10-27'), [], 'the removal stays');
-    assert.deepEqual(await w.sees('2026-09-15'), ['08:00 Физика 101'], 'the past keeps its pair');
+    assert.deepEqual(w.draft('2026-10-27'), [], 'the removal stays');
+    assert.deepEqual(w.draft('2026-09-15'), ['08:00 Физика 101'], 'the past keeps its pair');
 });
 
 test('minor 7–10: restore under another record, unjoin keeps the link, join and closed records, preview Monday', async () => {
@@ -388,32 +388,17 @@ test('an edit made «from next week» can be edited again the same week', async 
     const second = await ok('POST', '/api/admin/lessons', { ...w.pair, room: '303', replaces_lesson_id: original.id });
     assert.equal(second.template_from_week, 9);
 
-    assert.deepEqual(await w.sees('2026-10-20'), ['08:00 Физика 101'], 'this week as it was');
-    assert.deepEqual(await w.sees('2026-10-27'), ['08:00 Физика 303'], 'next week: the latest edit only');
+    assert.deepEqual(w.draft('2026-10-20'), ['08:00 Физика 101'], 'this week as it was');
+    assert.deepEqual(w.draft('2026-10-27'), ['08:00 Физика 303'], 'next week: the latest edit only');
     assert.equal(ctx.db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE template_from_week = 9').get().n, 1, 'one version from week 9');
-});
-
-test('with a template running, weeks already begun are neither cut off nor added', async () => {
-    const { ok, call } = ctx;
-    const w = await freshWorld();
-    await ok('POST', '/api/admin/lessons', w.pair);
-    at('2026-11-04T12:00:00'); // week 10
-    const cut = await call('PUT', `/api/admin/semesters/${w.semester.id}`, { weeks_count: 6 });
-    assert.equal(cut.status, 409);
-    assert.match(cut.data.error, /Недели 7–10 уже начались/);
-    await ok('PUT', `/api/admin/semesters/${w.semester.id}`, { weeks_count: 12 }); // weeks 13–18 are still ahead
-
-    at('2027-01-20T12:00:00'); // after the end: week 21
-    const late = await call('PUT', `/api/admin/semesters/${w.semester.id}`, { weeks_count: 20 });
-    assert.equal(late.status, 409);
-    assert.match(late.data.error, /задним числом/);
 });
 
 test('a semester closed mid-term: the breakdown stops where the total stopped', async () => {
     const { ok } = ctx;
     const w = await freshWorld();
     await ok('POST', '/api/admin/lessons', w.pair);
-    at('2026-09-23T12:00:00'); // week 4: three Tuesdays held
+    at('2026-09-23T12:00:00'); // week 4: four Tuesdays held
+    await w.enter(1, 6);
     await ok('POST', `/api/admin/semesters/${w.semester.id}/close`);
     at('2026-12-01T12:00:00'); // weeks later
     const row = (await ok('GET', `/api/admin/load-plan?semester_id=${w.semester.id}`)).find((plan) => plan.id === w.planA);

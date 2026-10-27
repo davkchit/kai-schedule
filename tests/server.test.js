@@ -13,7 +13,7 @@ const { ADMIN_COOKIE_NAME } = require('../server/config');
 const { createToken } = require('../server/middleware/auth');
 const { closeDb, getDb } = require('../server/db');
 const { parseTrustProxy } = require('../server/config');
-const { formatLocalDate, getWeekMeta } = require('../server/utils/date');
+const { formatLocalDate, getSemesterWeekType, getWeekMeta } = require('../server/utils/date');
 const { resolveTemplateLessons } = require('../server/utils/templateResolve');
 const { computeLoadProgress } = require('../server/utils/loadCalc');
 const { templateWeekForSlot } = require('../server/utils/templateWeek');
@@ -471,6 +471,29 @@ function resolveVisibleLessons(lessonsForDay, weekNumber, weekType, exceptionWee
     return resolveTemplateLessons(templateCandidates, weekNumber);
 }
 
+/**
+ * Every week of the semester entered from the draft, as the constructor's
+ * «Внести неделю как в шаблоне» does: only entered weeks are shown and counted.
+ */
+function enterTemplateWeeks(db, semesterId, groupId) {
+    const semester = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semesterId);
+    const template = db.prepare('SELECT * FROM lessons WHERE group_id = ? AND specific_week IS NULL').all(groupId);
+    const insert = db.prepare(`
+        INSERT INTO lessons (group_id, semester_id, subgroup, day_of_week, week_type, specific_week, template_from_week, is_removed,
+            time_start, time_end, subject, room, lesson_type, teacher, teacher_id, discipline_id, sort_order, kind)
+        VALUES (?, ?, ?, ?, 0, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (let week = 1; week <= semester.weeks_count; week += 1) {
+        const weekType = getSemesterWeekType(semester, week);
+        const rows = template.filter((row) => row.week_type === 0 || row.week_type === weekType);
+        for (const row of resolveTemplateLessons(rows, week)) {
+            insert.run(groupId, semesterId, row.subgroup, row.day_of_week, week, row.time_start, row.time_end, row.subject, row.room,
+                row.lesson_type, row.teacher, row.teacher_id, row.discipline_id, row.sort_order, row.kind || 'lesson');
+        }
+    }
+}
+
 test('editing the template mid-semester does not rewrite history for past weeks', async () => {
     const context = await createTestContext();
     const db = getDb();
@@ -485,6 +508,10 @@ test('editing the template mid-semester does not rewrite history for past weeks'
         )
         VALUES (?, 0, 1, 1, NULL, 5, 0, '09:40', '11:10', 'Дискретная математика', '305 каб.', 'Лекция', 'Иванов И.И.', 1)
     `).run(context.primaryGroupId);
+
+    // The template is the draft weeks are entered from: week 3 entered gets
+    // the old version, week 5 the new one — whenever they are entered.
+    enterTemplateWeeks(db, context.semesterId, context.primaryGroupId);
 
     const pastResponse = await fetch(`${context.baseUrl}/api/schedule/${context.primaryGroupId}?date=2026-02-23&days=1`);
     const pastBody = await pastResponse.json();
@@ -619,11 +646,10 @@ test('a materialized week fully suppresses the template for that week (no merge)
 
     assert.deepEqual(body.exception_weeks, [3]);
 
-    // The server still returns the raw template row for Monday alongside the
-    // cloned specific_week=3 row — the "no merge" guarantee is enforced by the
-    // client's visibility filter, not by the API pre-filtering it away.
+    // Only the week's own rows come back: the template is the specialist's
+    // draft and is never sent to the public page.
     const mondayRaw = body.by_day[1] || [];
-    assert.ok(mondayRaw.some((lesson) => lesson.specific_week === null && lesson.subject === 'Высшая математика'));
+    assert.ok(mondayRaw.every((lesson) => lesson.specific_week !== null));
     assert.ok(mondayRaw.some((lesson) => lesson.specific_week === 3 && lesson.subject === 'Высшая математика'));
 
     const mondayVisible = resolveVisibleLessons(mondayRaw, 3, 1, new Set(body.exception_weeks));
@@ -633,7 +659,7 @@ test('a materialized week fully suppresses the template for that week (no merge)
     await context.close();
 });
 
-test('deleting a materialized week reverts the group back to the template', async () => {
+test('deleting a materialized week makes it a week not entered again', async () => {
     const context = await createTestContext();
 
     await fetch(`${context.baseUrl}/api/admin/schedule/materialize-week`, {
@@ -667,9 +693,8 @@ test('deleting a materialized week reverts the group back to the template', asyn
     const body = await response.json();
 
     assert.deepEqual(body.exception_weeks, []);
-
-    const mondayVisible = resolveVisibleLessons(body.by_day[1] || [], 3, 1, new Set(body.exception_weeks));
-    assert.deepEqual(mondayVisible.map((lesson) => lesson.subject), ['Высшая математика']);
+    // Students see «Расписание не внесено», not the draft.
+    assert.deepEqual(body.lessons, []);
 
     await context.close();
 });
@@ -912,22 +937,6 @@ test('deleting a template pair mid-semester retires it forward instead of erasin
         WHERE id = ?
     `).run(teacherId, disciplineId, lesson.id);
 
-    const hoursNow = () => {
-        const response = db.prepare(`
-            SELECT * FROM lessons WHERE teacher_id = ? AND discipline_id = ? AND lesson_type = 'Лекция' AND group_id = ? AND subgroup = 0
-        `).all(teacherId, disciplineId, context.primaryGroupId);
-        return computeLoadProgress({
-            semesterStartDate: '2026-02-09',
-            weeksCount: 6,
-            linkedLessons: response,
-            exceptionWeeks: new Set(),
-            now: new Date('2026-12-31T00:00:00')
-        }).occurred_hours;
-    };
-
-    const before = hoursNow();
-    assert.ok(before > 0, 'fixture must produce some elapsed hours to begin with');
-
     const response = await fetch(`${context.baseUrl}/api/admin/lessons/${lesson.id}`, {
         method: 'DELETE', headers: context.authHeaders
     });
@@ -937,7 +946,10 @@ test('deleting a template pair mid-semester retires it forward instead of erasin
 
     // The original row must still exist — that is what keeps past weeks intact.
     assert.ok(db.prepare('SELECT id FROM lessons WHERE id = ?').get(lesson.id), 'the original row must survive');
-    assert.equal(hoursNow(), before, 'hours already taught must not change when a pair is removed going forward');
+    // The past weeks entered from it keep the version they were entered from.
+    const draftAt = (week) => resolveTemplateLessons(db.prepare('SELECT * FROM lessons WHERE group_id = ? AND specific_week IS NULL AND day_of_week = ?')
+        .all(context.primaryGroupId, lesson.day_of_week), week).map((row) => row.id);
+    assert.deepEqual(draftAt(1), [lesson.id], 'week 1 still drafts the pair');
 
     // And the tombstone must carry the same identity, or the counter cannot see the slot stop.
     const tombstone = db.prepare(`
@@ -1344,10 +1356,11 @@ test('the Excel export writes a week the way the official sheet posted to VK doe
     const universityId = db.prepare("SELECT id FROM universities WHERE short_name = 'КНИТУ-КАИ'").get().id;
     const addGroup = (name) => db.prepare('INSERT INTO groups_ (university_id, name, direction) VALUES (?, ?, ?)')
         .run(universityId, name, '09.03.01 Информатика и вычислительная техника').lastInsertRowid;
+    // Week 1 entered as its own: the sheet prints what students see.
     const insert = db.prepare(`
-        INSERT INTO lessons (group_id, semester_id, subgroup, day_of_week, week_type, template_from_week,
+        INSERT INTO lessons (group_id, semester_id, subgroup, day_of_week, week_type, specific_week, template_from_week,
             time_start, time_end, subject, room, lesson_type, teacher)
-        VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 0, 1, 1, ?, ?, ?, ?, ?, ?)
     `);
     const first = addGroup('23101');
     insert.run(first, autumnId, 0, 1, '08:00', '09:30', 'Математика', '104', 'Лекция', 'Николаева Г.А.');
@@ -2219,6 +2232,7 @@ test('the impact preview reports how many teachers a semester date/length change
         UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = 'Лекция', subgroup = 0, template_from_week = 1
         WHERE id = ?
     `).run(teacherId, disciplineId, lesson.id);
+    enterTemplateWeeks(db, semesterId, context.primaryGroupId);
 
     const response = await fetch(
         `${context.baseUrl}/api/admin/semesters/${semesterId}/impact?weeks_count=4`,
@@ -2361,6 +2375,8 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     const lessonRow = db.prepare('SELECT * FROM lessons WHERE group_id = ? LIMIT 1').get(context.primaryGroupId);
     db.prepare('UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = ? WHERE id = ?')
         .run(teacherId, disciplineId, 'Лаб', lessonRow.id);
+    // Entered week by week from the draft — only entered weeks count.
+    enterTemplateWeeks(db, semester.id, context.primaryGroupId);
 
     const listResponse = await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semester.id}`, {
         headers: context.authHeaders
@@ -2373,14 +2389,14 @@ test('load plan end-to-end: create a plan, link a schedule lesson, and see real 
     assert.equal(updatedPlan.progress.occurred_hours, 4);
     assert.equal(updatedPlan.progress.remaining_hours, 4);
 
-    // Picking a different discipline for that same pair brings it back to
-    // zero — the old plan row simply stops matching.
+    // Picking a different discipline for that pair in the weeks it ran brings
+    // it back to zero — the old plan row simply stops matching.
     const otherDisciplineId = (await (await fetch(`${context.baseUrl}/api/admin/disciplines`, {
         method: 'POST',
         headers: { ...context.authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'Другая дисциплина' })
     })).json()).id;
-    db.prepare('UPDATE lessons SET discipline_id = ? WHERE id = ?').run(otherDisciplineId, lessonRow.id);
+    db.prepare('UPDATE lessons SET discipline_id = ? WHERE group_id = ? AND discipline_id = ?').run(otherDisciplineId, context.primaryGroupId, disciplineId);
     const afterUnlink = await (await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semester.id}`, {
         headers: context.authHeaders
     })).json();
@@ -2426,6 +2442,7 @@ test('load plan full-row edit: fixing a wrongly entered teacher/discipline/type/
         UPDATE lessons SET teacher_id = ?, discipline_id = ?, lesson_type = 'Практика', subgroup = 0, template_from_week = 1
         WHERE id = ?
     `).run(rightTeacherId, disciplineId, lessonRow.id);
+    enterTemplateWeeks(db, semesterId, context.primaryGroupId);
     const beforeMove = await (await fetch(`${context.baseUrl}/api/admin/load-plan?semester_id=${semesterId}`, { headers: context.authHeaders })).json();
     assert.ok(beforeMove.find((row) => row.id === planId).progress.occurred_hours > 0, 'the pair must count before the move');
 

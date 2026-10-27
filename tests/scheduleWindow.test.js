@@ -12,6 +12,8 @@ const { pathToFileURL } = require('node:url');
 // semester, an own-week override, a retired template version, the weeks after
 // the last teaching week, and the rollover into the next semester.
 
+// After every day below, so none is held back as «not open yet».
+process.env.KAI_FAKE_NOW = '2027-08-01T12:00:00+03:00';
 process.env.JWT_SECRET = 'test-secret';
 process.env.API_RATE_LIMIT_MAX = '100000';
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-window-'));
@@ -190,18 +192,11 @@ test('windows: a run assembled from many windows resolves every day as a request
 
     // The days worth checking really do differ, so the comparison above is not
     // a comparison of empty lists.
-    assert.deepEqual(seen.get('2026-09-21'), ['Своя неделя 3'], 'an own week ignores the template');
-    assert.deepEqual(seen.get('2026-09-14'), ['Каждую неделю А'], 'week 2');
-    assert.deepEqual(seen.get('2026-09-09'), ['Старая версия'], 'before the newer version');
-    assert.deepEqual(seen.get('2026-10-07'), ['Новая версия'], 'from the newer version');
-    assert.deepEqual(seen.get('2026-10-22'), ['Уйдёт'], 'before the tombstone');
-    assert.deepEqual(seen.get('2026-10-29'), [], 'after the tombstone');
-    assert.deepEqual(seen.get('2026-09-08'), ['Чёт А'], 'week 1 is even');
-    assert.deepEqual(seen.get('2026-09-15'), ['Нечёт А'], 'week 2 is odd');
+    assert.deepEqual(seen.get('2026-09-21'), ['Своя неделя 3'], 'an entered week shows its own pairs');
+    assert.deepEqual(seen.get('2026-09-14'), [], 'the template is never shown (week 2 not entered)');
+    assert.deepEqual(seen.get('2026-10-07'), [], 'nor its newer versions');
     assert.deepEqual(seen.get('2027-01-11'), ['Сессия'], 'an entered week past the last teaching week');
-    assert.deepEqual(seen.get('2027-01-18'), [], 'the template stops after the last teaching week');
-    assert.deepEqual(seen.get('2027-02-08'), ['Каждую неделю В'], 'spring begins');
-    assert.deepEqual(seen.get('2027-02-12'), ['Нечёт В'], 'spring week 1 is odd: the parity flipped at the rollover');
+    assert.deepEqual(seen.get('2027-02-08'), [], 'nor is spring\'s template');
     assert.deepEqual(seen.get('2027-02-16'), ['Своя неделя В2'], 'a removed marker in an own week hides nothing else');
     assert.deepEqual(seen.get('2026-08-31'), [], 'before any semester there is nothing to show');
 });

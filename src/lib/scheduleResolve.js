@@ -1,4 +1,4 @@
-import { formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeForSemesterWeek, getWeekTypeNumber } from './date.js';
+import { formatLocalDateForApi, getSemesterWeekNumber, getWeekTypeNumber } from './date.js';
 import { resolveTemplateLessons } from './templateResolve.js';
 
 /**
@@ -16,6 +16,11 @@ import { resolveTemplateLessons } from './templateResolve.js';
  * day and spring's from the first spring day — never an autumn row read as a
  * spring week.
  *
+ * Only weeks entered as their own are shown: the template is the specialist's
+ * draft, never sent here. Pairs are open up to `visible_until` (the end of this
+ * week, or of the next once it is entered); after it a day shows only its
+ * exams, credits and consultations, which are published in advance.
+ *
  * @param {object} scheduleData - the /api/schedule/:groupId response
  * @param {Date} date - a local calendar date
  */
@@ -25,9 +30,58 @@ export function resolveLessonsForDay(scheduleData, date) {
     }
 
     const attestations = attestationsForDay(scheduleData, date);
-    const lessons = resolveTeachingForDay(scheduleData, date);
+    const lessons = dayStatus(scheduleData, date) === 'closed' ? [] : resolveTeachingForDay(scheduleData, date);
 
     return attestations.length ? sortLessons([...lessons, ...attestations]) : lessons;
+}
+
+/**
+ * What the day's pairs are, for the page to say so:
+ * 'open' — shown (no pairs then means a day off);
+ * 'not_entered' — a teaching week nobody has entered yet («Расписание не внесено»);
+ * 'closed' — after the open weeks: nothing but session records shows.
+ */
+export function dayStatus(scheduleData, date) {
+    if (!scheduleData || !Array.isArray(scheduleData.semesters)) {
+        return 'open';
+    }
+
+    const isoDate = formatLocalDateForApi(date);
+
+    if (scheduleData.visible_until && isoDate > scheduleData.visible_until) {
+        return 'closed';
+    }
+
+    const semester = semesterOn(scheduleData, isoDate);
+
+    if (!semester) {
+        return 'open';
+    }
+
+    const weekNumber = getSemesterWeekNumber(semester.start_date, date);
+
+    if (weekIsOwn(scheduleData, semester, weekNumber)) {
+        return 'open';
+    }
+
+    // Past the last teaching week (сессия, каникулы) there are no pairs to enter.
+    const teaching = weekNumber >= 1 && (!Number.isInteger(semester.weeks_count) || weekNumber <= semester.weeks_count);
+    return teaching ? 'not_entered' : 'open';
+}
+
+/** The semester in effect on a date: the latest one starting on or before it. */
+function semesterOn(scheduleData, isoDate) {
+    return [...scheduleData.semesters]
+        .filter((candidate) => candidate.start_date <= isoDate)
+        .sort((left, right) => (left.start_date < right.start_date ? -1 : 1))
+        .pop() || null;
+}
+
+/** own_weeks counts the whole group (a week with only the other subgroup's rows is still its own); an older saved answer lacks it. */
+function weekIsOwn(scheduleData, semester, weekNumber) {
+    return Array.isArray(semester.own_weeks)
+        ? semester.own_weeks.includes(weekNumber)
+        : (scheduleData.lessons || []).some((lesson) => lesson.semester_id === semester.id && lesson.specific_week === weekNumber);
 }
 
 const ATTESTATION_LABELS = { exam: 'Экзамен', credit: 'Зачёт', consultation: 'Консультация' };
@@ -68,43 +122,23 @@ function resolveTeachingForDay(scheduleData, date) {
     }
 
     const isoDate = formatLocalDateForApi(date);
-    const semester = [...scheduleData.semesters]
-        .filter((candidate) => candidate.start_date <= isoDate)
-        .sort((left, right) => (left.start_date < right.start_date ? -1 : 1))
-        .pop();
+    const semester = semesterOn(scheduleData, isoDate);
 
     if (!semester) {
         // Before any semester has started there is no timetable to show.
         return [];
     }
 
-    const semesterLessons = (scheduleData.lessons || []).filter((lesson) => lesson.semester_id === semester.id);
     const weekNumber = getSemesterWeekNumber(semester.start_date, date);
-    // own_weeks counts the whole group (a week with only the other subgroup's
-    // own rows is still its own); an older saved answer lacks it.
-    const hasOwnRows = Array.isArray(semester.own_weeks)
-        ? semester.own_weeks.includes(weekNumber)
-        : semesterLessons.some((lesson) => lesson.specific_week === weekNumber);
-    const dayLessons = semesterLessons.filter((lesson) => lesson.day_of_week === isoDayOfWeek);
 
-    if (hasOwnRows) {
-        // A week with its own rows ignores the template entirely (no merging).
-        return sortLessons(dayLessons.filter((lesson) => lesson.specific_week === weekNumber && !lesson.is_removed));
-    }
-
-    if (Number.isInteger(semester.weeks_count) && weekNumber > semester.weeks_count) {
-        // Past the last teaching week (сессия, каникулы) the template no longer
-        // runs — the hour counter stops at weeks_count too. Only weeks entered
-        // explicitly (an exam week, say) show anything.
+    if (!weekIsOwn(scheduleData, semester, weekNumber)) {
+        // Not entered (or past the teaching weeks): nothing to show — the
+        // template is only the constructor's draft.
         return [];
     }
 
-    const weekType = getWeekTypeForSemesterWeek(semester.first_week_parity, weekNumber);
-    const candidates = dayLessons.filter(
-        (lesson) => lesson.specific_week == null && (lesson.week_type === 0 || lesson.week_type === weekType)
-    );
-
-    return sortLessons(resolveTemplateLessons(candidates, weekNumber));
+    return sortLessons((scheduleData.lessons || []).filter((lesson) => lesson.semester_id === semester.id
+        && lesson.day_of_week === isoDayOfWeek && lesson.specific_week === weekNumber && !lesson.is_removed));
 }
 
 /**

@@ -39,8 +39,8 @@ export default function PlanSection({ viewedSemester, isLoading, semesters, plan
                 {unconfirmedWeeks.length > 0 && (
                     <p className="load-unconfirmed-note">
                         На {unconfirmedWeeks.length === 1 ? 'неделю' : 'недели'} {unconfirmedWeeks.join(', ')} расписание
-                        не вносили — часы за {unconfirmedWeeks.length === 1 ? 'неё' : 'них'} посчитаны по шаблону.
-                        Если там были отмены или переносы, откройте нужную неделю в конструкторе и внесите, как было.
+                        не вносили — студенты видели «Расписание не внесено», часы за {unconfirmedWeeks.length === 1 ? 'неё' : 'них'} не посчитаны.
+                        Если занятия были, откройте нужную неделю в конструкторе и внесите, как было.
                     </p>
                 )}
 

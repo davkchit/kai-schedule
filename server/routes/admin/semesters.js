@@ -35,13 +35,10 @@ const router = express.Router();
  * writing anything. Computes only, never writes.
  */
 /**
- * Weeks that have already finished without anyone entering what actually
- * happened in them — the hours for those weeks were taken from the template.
- *
- * The system cannot tell "the week really did go by the template" from "we
- * forgot about that week": both look like a week with no rows of its own. So
- * it says which weeks those are and lets the person who was there decide —
- * especially before closing the semester, where the number becomes final.
+ * Teaching weeks that have already finished without being entered: students
+ * saw «Расписание не внесено» and no hours were counted for them. Said out
+ * loud — especially before closing the semester, where the number becomes
+ * final — so a forgotten week can still be entered as it ran.
  */
 function findUnconfirmedWeeks(db, semester) {
     const currentWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
@@ -222,34 +219,14 @@ router.post('/semesters', (req, res) => {
 });
 
 /**
- * A change of the number of weeks that would rewrite what was shown: weeks
- * already begun (with a template running), or weeks entered on their own cut
- * off — hidden from students and hours alike while the rows stay. The refusal
- * (with the weeks named) or null.
+ * Shrinking past weeks that were entered on their own would hide them — from
+ * students and from hours alike — while the rows stay. The refusal (with the
+ * weeks named) or null; the specialist clears them first if that is intended.
+ * (Only entered weeks are shown and counted, so adding weeks, or cutting ones
+ * still on the template, changes nothing anybody saw.)
  */
 function weeksCutError(db, semester, nextWeeksCount) {
-    if (nextWeeksCount === semester.weeks_count) {
-        return null;
-    }
-
-    // Weeks that have already begun, cut off or added: with a template, that
-    // takes its pairs away from days gone by, or gives them pairs (and hours)
-    // they never had. The past never changes.
-    const startedWeek = getSemesterWeekMeta(semester, formatLocalDate()).weekNumber;
-    const [from, to] = nextWeeksCount < semester.weeks_count
-        ? [nextWeeksCount + 1, semester.weeks_count]
-        : [semester.weeks_count + 1, nextWeeksCount];
-    const hasTemplate = db.prepare('SELECT 1 FROM lessons WHERE semester_id = ? AND specific_week IS NULL AND is_removed = 0 LIMIT 1').get(semester.id);
-
-    if (hasTemplate && from <= startedWeek) {
-        const last = Math.min(to, startedWeek);
-        const range = from === last ? `Неделя ${from} уже началась` : `Недели ${from}–${last} уже начались`;
-        return nextWeeksCount < semester.weeks_count
-            ? { error: `${range} — сократить семестр задним числом нельзя: пропадут прошедшие пары шаблона и их часы` }
-            : { error: `${range} — продлить семестр на них задним числом нельзя: прошедшим дням добавятся пары шаблона и часы` };
-    }
-
-    if (nextWeeksCount > semester.weeks_count) {
+    if (nextWeeksCount >= semester.weeks_count) {
         return null;
     }
 
@@ -267,8 +244,9 @@ function weeksCutError(db, semester, nextWeeksCount) {
 /**
  * Session records with an end time that lie over a pair of their group —
  * as ids, with a label for the refusal. Taken before and after a change to
- * the semester's dates: new dates must not move template pairs under an exam
- * («the past never changes» aside, a record with an end time is a fixed block).
+ * the semester's dates: new dates move every entered week to other days, and
+ * must not move its pairs under an exam (a record with an end time is a fixed
+ * block).
  */
 function timedRecordsOverPairs(db) {
     const dayIndex = createDayIndex(db);

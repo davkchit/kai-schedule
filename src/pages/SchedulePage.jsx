@@ -5,7 +5,7 @@ import { capitalize, formatLocalDateForApi, normalizeDate } from '../lib/date';
 import ErrorScreen from '../components/ErrorScreen';
 import { clearSelection, getSavedSelection } from '../lib/storage';
 import { chooseTheme, currentTheme, onThemeChange } from '../lib/theme';
-import { resolveLessonsForDay } from '../lib/scheduleResolve';
+import { dayStatus, resolveLessonsForDay } from '../lib/scheduleResolve';
 import { useDaySwipe } from '../lib/useDaySwipe';
 import {
     maxIso,
@@ -542,7 +542,7 @@ export default function SchedulePage() {
     }, []);
 
     const scheduleDays = useMemo(() => buildScheduleDays(schedule), [schedule]);
-    const calendarDays = buildCalendarDays(pickerDate, currentDate);
+    const calendarDays = buildCalendarDays(pickerDate, currentDate, schedule?.data);
 
     // The date button names the month of the day at the left edge of the strip,
     // which is what the reader is looking at, not the day they once picked.
@@ -755,6 +755,17 @@ export default function SchedulePage() {
                 <span className="rest-day-text">
                     <span className="rest-day-title">Отдыхаем</span>
                     <span className="rest-day-subtitle">Занятий нет</span>
+                </span>
+            </div>
+        );
+    }
+
+    // A teaching week nobody has entered yet: the same card, just saying so.
+    function renderNotEnteredState(mobile = false) {
+        return (
+            <div className={`rest-day is-not-entered ${mobile ? 'mobile' : ''}`}>
+                <span className="rest-day-text">
+                    <span className="rest-day-title">Расписание не внесено</span>
                 </span>
             </div>
         );
@@ -1008,6 +1019,7 @@ export default function SchedulePage() {
                             {day.isRestDay && (
                                 renderRestDayState()
                             )}
+                            {day.isNotEntered && renderNotEnteredState()}
                             {!day.isRestDay && day.lessons.map((lesson) => renderLessonCard(lesson))}
                         </div>
                     ))}
@@ -1062,6 +1074,7 @@ export default function SchedulePage() {
                             {day.isRestDay && (
                                 renderRestDayState(true)
                             )}
+                            {day.isNotEntered && renderNotEnteredState(true)}
                             {!day.isRestDay && day.lessons.map((lesson) => renderLessonCard(lesson, true))}
                         </div>
                     ))}
@@ -1262,10 +1275,20 @@ function buildScheduleDays(schedule) {
         const lessons = schedule.previousData
             ? withLessonMotion(resolveLessonsForDay(schedule.previousData, iterDate), resolveLessonsForDay(scheduleData, iterDate))
             : resolveLessonsForDay(scheduleData, iterDate);
+        const status = dayStatus(scheduleData, iterDate);
 
-        // Any day without pairs gets the same «Отдыхаем · Занятий нет» card —
-        // a weekday used to show a bare «Нет занятий» line instead.
-        const isRestDay = lessons.length === 0;
+        // After the open weeks only the days of exams, credits and
+        // consultations are shown — the strip and the swipe end there.
+        if (status === 'closed' && lessons.length === 0) {
+            iterDate = new Date(iterDate);
+            iterDate.setDate(iterDate.getDate() + 1);
+            continue;
+        }
+
+        // A teaching week not entered yet says so; any other day without pairs
+        // gets the same «Отдыхаем · Занятий нет» card.
+        const isNotEntered = status === 'not_entered' && lessons.length === 0;
+        const isRestDay = lessons.length === 0 && !isNotEntered;
         // An exam or consultation may have only a start time: just «15:00» then.
         const dayEnd = lessons.reduce((latest, lesson) => (lesson.time_end && lesson.time_end > latest ? lesson.time_end : latest), '');
         const timeRange = !lessons.length
@@ -1291,7 +1314,8 @@ function buildScheduleDays(schedule) {
             shortDate: `${String(iterDate.getDate()).padStart(2, '0')}.${String(iterDate.getMonth() + 1).padStart(2, '0')}`,
             lessons,
             timeRange,
-            isRestDay
+            isRestDay,
+            isNotEntered
         });
 
         iterDate = new Date(iterDate);
@@ -1301,7 +1325,10 @@ function buildScheduleDays(schedule) {
     return result;
 }
 
-function buildCalendarDays(pickerDate, currentDate) {
+function buildCalendarDays(pickerDate, currentDate, scheduleData) {
+    // Days after the open weeks can't be picked, except a session day.
+    const openUntil = scheduleData?.visible_until || null;
+    const sessionDays = new Set((scheduleData?.attestations || []).map((item) => item.date));
     const year = pickerDate.getFullYear();
     const month = pickerDate.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -1324,7 +1351,7 @@ function buildCalendarDays(pickerDate, currentDate) {
             date,
             isSelected: date.getTime() === currentDate.getTime(),
             isToday: date.getTime() === today.getTime(),
-            isDisabled: date > MAX_DATE
+            isDisabled: date > MAX_DATE || Boolean(openUntil && formatLocalDateForApi(date) > openUntil && !sessionDays.has(formatLocalDateForApi(date)))
         });
     }
 

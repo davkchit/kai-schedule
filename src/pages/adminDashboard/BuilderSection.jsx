@@ -7,7 +7,7 @@ import GroupPicker from './GroupPicker';
 // a cell shows is decided here; saving, moving and deleting stay in the page.
 // Moved verbatim from AdminDashboardPage.jsx, every value and handler is a prop
 // of the same name.
-export default function BuilderSection({ activeSection, workingSemester, groups, selectedGroupId, setSelectedGroupId, lessons, builderMode, setBuilderMode, builderWeekStart, setBuilderWeekStart, builderWeekEnd, builderTemplateWeekType, setBuilderTemplateWeekType, builderWeekNumber, builderWeekMaterialized, isBuilderWeekBeforeSemester, todayWeekNumber, isExporting, handleClearWeek, handleExport, draggedLesson, setDraggedLesson, dragOverCellKey, setDragOverCellKey, handleDropOnCell, openEditModal, openCreateModal, justSavedCell }) {
+export default function BuilderSection({ activeSection, workingSemester, groups, selectedGroupId, setSelectedGroupId, lessons, builderMode, setBuilderMode, builderWeekStart, setBuilderWeekStart, builderWeekEnd, builderTemplateWeekType, setBuilderTemplateWeekType, builderWeekNumber, builderWeekMaterialized, isBuilderWeekBeforeSemester, todayWeekNumber, isExporting, handleClearWeek, handleCopyWeek, handleExport, draggedLesson, setDraggedLesson, dragOverCellKey, setDragOverCellKey, handleDropOnCell, openEditModal, openCreateModal, justSavedCell }) {
     // The usual slots, plus a row for every other time a pair of this view
     // has (entered with «Своё время»): a cell only shows pairs of its exact
     // time, so without its own row such a pair could not be seen, opened or
@@ -18,6 +18,10 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
     const extraSlots = [...new Map(lessons.filter(inThisView)
         .filter((lesson) => !BUILDER_TIME_SLOTS.some(([start, end]) => start === lesson.time_start && end === lesson.time_end))
         .map((lesson) => [`${lesson.time_start}-${lesson.time_end}`, [lesson.time_start, lesson.time_end]])).values()];
+    // «Внести неделю как в шаблоне» only when the draft has pairs that week.
+    const draftHasPairs = builderWeekNumber !== null && workingSemester && builderWeekNumber <= workingSemester.weeks_count
+        && resolveTemplateLessons(lessons.filter((lesson) => lesson.specific_week == null && (lesson.week_type === 0
+            || lesson.week_type === getWeekTypeForSemesterWeek(workingSemester.first_week_parity, builderWeekNumber))), builderWeekNumber).length > 0;
     const gridSlots = [...BUILDER_TIME_SLOTS.map((slot) => [...slot, false]), ...extraSlots.map((slot) => [...slot, true])]
         .sort((left, right) => left[0].localeCompare(right[0]) || left[1].localeCompare(right[1]));
 
@@ -252,9 +256,18 @@ export default function BuilderSection({ activeSection, workingSemester, groups,
             )}
 
             {builderMode === 'week' && selectedGroupId && builderWeekNumber !== null && !builderWeekMaterialized && (
-                <p className="builder-hint">
-                    Сейчас показан шаблон для этой недели. Любое изменение сохранит всю неделю как отдельную копию — прошлые и другие недели не затронет.
-                </p>
+                <div className="builder-not-entered">
+                    <p className="builder-hint">
+                        {draftHasPairs
+                            ? 'Неделя не внесена — студенты её не видят. Ниже показан шаблон как заготовка: внесите неделю как есть или поменяйте нужные пары — любое изменение внесёт всю неделю.'
+                            : 'Неделя не внесена — студенты видят «Расписание не внесено». Добавьте пары — неделя внесётся с первой же.'}
+                    </p>
+                    {draftHasPairs && (
+                        <button type="button" className="btn btn-primary" onClick={handleCopyWeek}>
+                            Внести неделю как в шаблоне
+                        </button>
+                    )}
+                </div>
             )}
 
             {workingSemester?.closed && (

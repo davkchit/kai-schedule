@@ -8,8 +8,9 @@ const { pathToFileURL } = require('node:url');
 
 // Editing and removing pairs in the template view, over a semester with a
 // moving clock. An edit is a new version from "this week": earlier weeks keep
-// the old version, the teacher's hours follow whichever version students saw,
-// and removing a pair stops its hours from that week on.
+// the old version. The template is the draft each week is entered from, so a
+// week entered later still gets the version that was current for it, and the
+// teacher's hours follow what those entered weeks show.
 
 process.env.JWT_SECRET = 'test-secret';
 process.env.API_RATE_LIMIT_MAX = '100000';
@@ -95,13 +96,6 @@ test('template view: edit, move and remove keep past weeks and hours right', asy
     await ok('POST', '/api/admin/lessons', { ...pair, room: '202', time_start: '09:40', time_end: '11:10', is_removed: true, replaces_lesson_id: monday.id });
     await ok('POST', '/api/admin/lessons', { ...pair, day_of_week: 3, is_removed: true });
 
-    assert.deepEqual(await mondays(['2026-09-07', '2026-09-21', '2026-10-05', '2026-10-19']), {
-        '2026-09-07': ['08:00 101'], // week 2: original
-        '2026-09-21': ['08:00 202'], // week 4: new room
-        '2026-10-05': ['09:40 202'], // week 6: moved, and only once — the old cell is retired
-        '2026-10-19': [] // week 8: removed
-    });
-
     // A pair added this week and corrected this week is fixed in place, not
     // stacked. A different teacher/discipline than Monday's, on purpose —
     // otherwise it would count toward mondayPlan too, since matching cares
@@ -115,11 +109,23 @@ test('template view: edit, move and remove keep past weeks and hours right', asy
     assert.equal(corrected.id, fresh.id);
     assert.equal(db.prepare('SELECT COUNT(*) AS c FROM lessons').get().c, rowsBefore);
 
-    // After the semester: both pairs ran in weeks 1–7. They were removed on
-    // week 7's Wednesday at noon, when that week's Monday and Wednesday pairs
-    // had already been held — so the removal starts with week 8 and those
-    // two stay counted (templateWeekForSlot).
+    // Every week entered from the draft as it stood for that week.
+    for (let week = 1; week <= 10; week += 1) {
+        await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: week, action: 'copy' });
+    }
+
+    // After the semester.
     at('2026-11-20T12:00:00');
+    assert.deepEqual(await mondays(['2026-09-07', '2026-09-21', '2026-10-05', '2026-10-19']), {
+        '2026-09-07': ['08:00 101'], // week 2: original
+        '2026-09-21': ['08:00 202'], // week 4: new room
+        '2026-10-05': ['09:40 202'], // week 6: moved, and only once — the old cell is retired
+        '2026-10-19': [] // week 8: removed
+    });
+
+    // Both pairs ran in weeks 1–7. They were removed on week 7's Wednesday at
+    // noon, when that week's Monday and Wednesday pairs had already been held —
+    // so the removal starts with week 8 and those two stay (templateWeekForSlot).
     assert.equal(await hours(mondayPlan.id), 14);
     assert.equal(await hours(wednesdayPlan.id), 14);
 });
@@ -250,7 +256,8 @@ test('a substitute teacher or a one-off replacement simply stops matching the or
     assert.equal(newVersion.subject, 'Совсем другой предмет', 'the dictionary\'s own text wins over whatever was typed');
     assert.notEqual(newVersion.id, lesson.id, 'a live row gets a new version, not an in-place update');
 
-    // Students see the swap; the old teacher's hours stop where the swap started.
+    // Week 4, entered from the draft, shows the swap to students (open: next week, entered).
+    await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: 4, action: 'copy' });
     const schedule = await ok('GET', `/api/schedule/${groupId}?date=2026-09-21&days=7`);
     assert.deepEqual(
         resolveLessonsForDay(schedule, localDate('2026-09-21')).map((l) => l.subject),

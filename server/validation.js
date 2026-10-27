@@ -158,8 +158,17 @@ function validateLessonUpdateBody(body) {
 function validateMaterializeWeekBody(body) {
     assertPlainObject(body, 'Тело запроса должно быть объектом');
 
-    if (!['upsert', 'remove'].includes(body.action)) {
-        throw createValidationError('Поле action должно быть upsert или remove');
+    if (!['upsert', 'remove', 'copy'].includes(body.action)) {
+        throw createValidationError('Поле action должно быть upsert, remove или copy');
+    }
+
+    // copy: the week entered exactly as the template has it — no pair named.
+    if (body.action === 'copy') {
+        return {
+            group_id: readInteger(body.group_id, 'group_id', { min: 1 }),
+            week_number: readInteger(body.week_number, 'week_number', { min: 1 }),
+            action: 'copy'
+        };
     }
 
     const timeStart = readRequiredString(body.time_start, 'Время начала', 5);

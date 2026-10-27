@@ -6,6 +6,7 @@ const { attachPlanGroups } = require('../utils/planGroups');
 const { computePlanRowProgress } = require('../utils/planProgress');
 const { getActiveSemester, getSemesterById, getSemesterForDate, getSemestersOverlapping } = require('../utils/semesters');
 const { notify } = require('../alerts');
+const { visibleUntil } = require('../utils/visibility');
 const { selectAttestations } = require('../utils/attestations');
 const { handleAlice } = require('../alice');
 const { ALICE_WEBHOOK_TOKEN } = require('../config');
@@ -131,6 +132,10 @@ router.get('/schedule/:groupId', (req, res) => {
     // own, so the page never reads an autumn row's "week 1" as spring's week 1.
     const semesters = getSemestersOverlapping(db, dateStr, rangeEndDate);
     const primary = semesters.find((semester) => semester.start_date <= dateStr) || semesters[0] || null;
+    // Pairs are public only up to the end of this week (or the next one, once
+    // entered) and only from weeks entered as their own: the template is the
+    // specialist's draft. Not sent at all, so it can't be read off the API.
+    const openUntil = visibleUntil(db, groupId);
 
     let sql = `
         SELECT id, semester_id, subgroup, day_of_week, week_type, specific_week,
@@ -138,7 +143,7 @@ router.get('/schedule/:groupId', (req, res) => {
                time_start, time_end, subject, room, lesson_type, teacher, sort_order, kind
         FROM lessons
         WHERE group_id = ? AND semester_id = ?
-          AND (specific_week IS NULL OR specific_week BETWEEN ? AND ?)
+          AND specific_week BETWEEN ? AND ?
     `;
 
     if (subgroup === 1 || subgroup === 2) {
@@ -166,9 +171,16 @@ router.get('/schedule/:groupId', (req, res) => {
         // that window are someone else's calendar weeks and are left out.
         const portionStart = semester.start_date > dateStr ? semester.start_date : dateStr;
         const next = semesters[index + 1];
-        const portionEnd = next && addDaysToIsoDate(next.start_date, -1) < rangeEndDate
+        let portionEnd = next && addDaysToIsoDate(next.start_date, -1) < rangeEndDate
             ? addDaysToIsoDate(next.start_date, -1)
             : rangeEndDate;
+        if (portionEnd > openUntil) portionEnd = openUntil;
+
+        if (portionEnd < portionStart) {
+            ownWeeks.set(semester.id, []);
+            return;
+        }
+
         const weekFrom = getSemesterWeekMeta(semester, portionStart).weekNumber;
         const weekTo = getSemesterWeekMeta(semester, portionEnd).weekNumber;
 
@@ -182,7 +194,8 @@ router.get('/schedule/:groupId', (req, res) => {
     });
 
     // Exams, credits and consultations fall on real dates, so they are simply
-    // the ones inside the requested range; the page places them by date.
+    // the ones inside the requested range — future ones too: they are
+    // published in advance, unlike the pairs. The page places them by date.
     const attestationWhere = ['a.group_id = ?', 'a.date BETWEEN ? AND ?'];
     const attestationParams = [scheduleGroupId(db, groupId), dateStr, rangeEndDate];
     if (subgroup === 1 || subgroup === 2) {
@@ -233,6 +246,8 @@ router.get('/schedule/:groupId', (req, res) => {
         requested_date: dateStr,
         range_days: rangeDays,
         range_end: rangeEndDate,
+        // The last day whose pairs are open; after it only session days show.
+        visible_until: openUntil,
         exception_weeks: primaryExceptionWeeks,
         lessons,
         by_day: byDay,
@@ -356,6 +371,15 @@ router.get('/teachers/:id/load', (req, res) => {
         || a.group_name.localeCompare(b.group_name, 'ru'));
 
     const progressCache = new Map();
+    // The teacher's pairs are listed only as far ahead as students may look
+    // (utils/visibility.js), group by group; their hours are what has passed.
+    const groupOfLesson = db.prepare('SELECT group_id FROM lessons WHERE id = ?');
+    const openUntilByGroup = new Map();
+    const isOpen = (occurrence) => {
+        const groupId = groupOfLesson.get(occurrence.lesson_id)?.group_id;
+        if (!openUntilByGroup.has(groupId)) openUntilByGroup.set(groupId, visibleUntil(db, groupId));
+        return occurrence.date <= openUntilByGroup.get(groupId);
+    };
 
     const plan = planRows.map((row) => {
         const progress = computePlanRowProgress(db, row, semester, { cache: progressCache });
@@ -370,7 +394,7 @@ router.get('/teachers/:id/load', (req, res) => {
             planned_hours: row.planned_hours,
             occurred_hours: progress.occurred_hours,
             remaining_hours: row.planned_hours === null ? null : Math.max(0, row.planned_hours - progress.occurred_hours),
-            occurrences: progress.occurrences
+            occurrences: progress.occurrences.filter(isOpen)
         };
     });
 

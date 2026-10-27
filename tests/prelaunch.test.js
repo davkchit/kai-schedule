@@ -81,6 +81,18 @@ async function getContext() {
             const schedule = await ok('GET', `/api/schedule/${groupId}?date=${day}&days=1`);
             return resolveLessonsForDay(schedule, localDate(day)).map((item) => `${item.time_start} ${item.subject}`);
         },
+        // What the constructor's draft (the template) holds for that day — what
+        // entering the week would copy in. Students never see it as such.
+        draftSees: (day) => {
+            const { getSemesterWeekMeta } = require('../server/utils/date');
+            const { resolveTemplateLessons } = require('../server/utils/templateResolve');
+            const current = db.prepare('SELECT * FROM semesters WHERE id = ?').get(semester.id);
+            const { weekNumber, weekTypeNumber } = getSemesterWeekMeta(current, day);
+            const weekday = localDate(day).getDay() || 7;
+            const rows = db.prepare('SELECT * FROM lessons WHERE semester_id = ? AND group_id = ? AND specific_week IS NULL AND day_of_week = ? AND (week_type = 0 OR week_type = ?)')
+                .all(semester.id, groupId, weekday, weekTypeNumber);
+            return resolveTemplateLessons(rows, weekNumber).map((item) => `${item.time_start} ${item.subject}`).sort();
+        },
         close: () => new Promise((resolve) => server.close(() => { closeDb(); resolve(); }))
     };
 
@@ -101,7 +113,7 @@ test('clearing a past week says what it removes and does not wipe counted hours 
     assert.equal(await hours(), 4);
 
     const summary = await ok('GET', `/api/admin/schedule/week-summary?group_id=${groupId}&week_number=2`);
-    assert.deepEqual(summary, { week_number: 2, pairs: 2, template_pairs: 0, hours_lost: 4, hours_gained: 0, blocked: null });
+    assert.deepEqual(summary, { week_number: 2, pairs: 2, template_pairs: 0, hours_lost: 4 });
     assert.equal(await hours(), 4, 'the preview changes nothing');
 
     const refused = await call('DELETE', `/api/admin/schedule/week?group_id=${groupId}&week_number=2`);
@@ -186,7 +198,7 @@ test('a week still run by the template: no second pair dropped or added into a f
 });
 
 test('a template change on a Wednesday leaves this week\'s already-held Monday as it was', async () => {
-    const { ok, groupId, studentSees } = await getContext();
+    const { ok, groupId, draftSees: studentSees } = await getContext();
     const monday = { group_id: groupId, day_of_week: 1, time_start: '15:00', time_end: '16:30', subject: 'Шаблонная', lesson_type: 'Практика', week_type: 0 };
 
     at('2026-11-01T12:00:00'); // Sunday of week 9
@@ -242,16 +254,24 @@ test('an exam over a pair: confirmed with remove_pairs, the pair leaves that day
     assert.equal(await hours(), withPair - 2, 'the replaced pair no longer counts');
     at('2026-11-10T12:00:00');
 
-    // A week still run by the template: it becomes its own, only the covered pair is out.
+    // A week not entered yet has nothing to take out; when it is entered as the
+    // template has it, the pair under a credit with an end time comes in already out.
     const tuesday = { group_id: groupId, day_of_week: 2, lesson_type: 'Практика', week_type: 0 };
     await ok('POST', '/api/admin/lessons', { ...tuesday, time_start: '08:00', time_end: '09:30', subject: 'Утро' });
     await ok('POST', '/api/admin/lessons', { ...tuesday, time_start: '09:40', time_end: '11:10', subject: 'Вторая' });
-    await ok('POST', '/api/admin/attestations', {
-        kind: 'credit', group_id: groupId, date: '2026-11-24', time_start: '08:00', discipline_text: 'Зачёт', confirm: true, remove_pairs: true
+    const credit = await ok('POST', '/api/admin/attestations', {
+        kind: 'credit', group_id: groupId, date: '2026-11-24', time_start: '08:00', time_end: '09:30', discipline_text: 'Зачёт', confirm: true, remove_pairs: true
     });
+    assert.equal(credit.removed_pairs, 0, 'week 13 not entered: no pair is shown, none to take out');
+    await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: 13, action: 'copy' });
+    at('2026-11-24T07:00:00');
     assert.deepEqual(await studentSees('2026-11-24'), ['08:00 Зачёт', '09:40 Вторая'], 'the rest of that day stays');
-    assert.deepEqual(await studentSees('2026-12-01'), ['08:00 Утро', '09:40 Вторая'], 'the next week is untouched');
+    // The credit moves away: the pair it held comes back.
+    await ok('PUT', `/api/admin/attestations/${credit.id}`, { kind: 'credit', group_id: groupId, date: '2026-11-25', time_start: '15:00', time_end: '16:30', discipline_text: 'Зачёт' });
+    assert.deepEqual(await studentSees('2026-11-24'), ['08:00 Утро', '09:40 Вторая']);
+    at('2026-11-10T12:00:00');
     db().prepare('DELETE FROM lessons WHERE specific_week IS NULL OR specific_week = 13').run();
+    db().prepare('DELETE FROM attestations WHERE id = ?').run(credit.id);
 
     // Constructor: a pair saved on top of a consultation is reported.
     await ok('POST', '/api/admin/attestations', {
@@ -274,7 +294,7 @@ test('small guards: a row keeps its week, types come from the plan\'s list, the 
     assert.equal((await call('POST', '/api/admin/lessons', { ...pair, day_of_week: 4, specific_week: 14, lesson_type: 'лекция' })).status, 400);
     await ok('POST', '/api/admin/lessons', { group_id: groupId, day_of_week: 5, specific_week: 14, time_start: '08:00', time_end: '09:30', subject: 'Линейка', kind: 'event' });
 
-    // Past the last teaching week (now 20) the template is not printed, as students don't see it.
+    // The sheet prints what students see: a week entered, never the bare template.
     await ok('POST', '/api/admin/lessons', { group_id: groupId, day_of_week: 1, week_type: 0, time_start: '16:40', time_end: '18:10', subject: 'Шаблонная пара', lesson_type: 'Практика' });
     const ExcelJS = require('exceljs');
     const sheetText = async (weekStart) => {
@@ -285,9 +305,11 @@ test('small guards: a row keeps its week, types come from the plan\'s list, the 
         workbook.eachSheet((sheet) => sheet.eachRow((r) => r.eachCell((cell) => parts.push(String(cell.value?.richText ? cell.value.richText.map((t) => t.text).join('') : cell.value ?? '')))));
         return parts.join(' | ');
     };
-    assert.match(await sheetText('2026-11-23'), /Шаблонная пара/, 'week 13: the template is printed');
+    assert.doesNotMatch(await sheetText('2026-11-23'), /Шаблонная пара/, 'week 13 not entered: not printed');
+    await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: 13, action: 'copy' });
+    assert.match(await sheetText('2026-11-23'), /Шаблонная пара/, 'entered as the template has it: printed');
     assert.doesNotMatch(await sheetText('2027-01-18'), /Шаблонная пара/, 'week 21: not any more');
-    db().prepare('DELETE FROM lessons WHERE specific_week IS NULL').run();
+    db().prepare('DELETE FROM lessons WHERE specific_week IS NULL OR specific_week = 13').run();
 
     // A consultation in the gap after autumn belongs to autumn — until spring is created starting before it.
     const consultation = await ok('POST', '/api/admin/attestations', {

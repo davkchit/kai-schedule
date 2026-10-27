@@ -8,13 +8,16 @@ const { pathToFileURL } = require('node:url');
 
 // The server's day resolution (server/utils/dayResolve.js — Alice, session
 // clash checks) and the student page's (src/lib/scheduleResolve.js) must
-// agree on every day: template versions and tombstones, both parities, a
-// week with its own rows (and one with only a removed marker), the cutoff
-// after the last teaching week, and the rollover into the next semester.
+// agree on every day, pairs and status alike: weeks entered as their own
+// (one with only a removed marker), the template ignored by both, a teaching
+// week not entered, an entered week after the last teaching one, and the
+// rollover into the next semester.
 
 process.env.JWT_SECRET = 'test-secret';
 process.env.API_RATE_LIMIT_MAX = '100000';
 process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'kai-dayparity-')), 'schedule.db');
+// After everything below, so no day is held back as «not open yet».
+process.env.KAI_FAKE_NOW = '2027-06-01T12:00:00+03:00';
 
 const { createApp } = require('../server/app');
 const { closeDb, getDb } = require('../server/db');
@@ -22,7 +25,7 @@ const { resolveGroupLessons } = require('../server/utils/dayResolve');
 const { addDaysToIsoDate } = require('../server/utils/date');
 
 test('server and student page resolve every day identically', async (t) => {
-    const { resolveLessonsForDay } = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'lib', 'scheduleResolve.js')).href);
+    const { dayStatus, resolveLessonsForDay } = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'lib', 'scheduleResolve.js')).href);
     const db = getDb();
     db.exec('DELETE FROM lessons; DELETE FROM semesters; DELETE FROM groups_; DELETE FROM universities;');
     const uni = db.prepare("INSERT INTO universities (name, short_name) VALUES ('КНИТУ-КАИ', 'КНИТУ-КАИ')").run().lastInsertRowid;
@@ -47,8 +50,14 @@ test('server and student page resolve every day identically', async (t) => {
     row(autumn, 4, 0, 2, 1, 0, '13:10', 'Своя неделя 2');
     row(autumn, 5, 0, 5, 1, 1, '15:00', 'Только отметка — неделя 5 пустая');
     row(autumn, 6, 0, 8, 1, 0, '08:00', 'Отработка после последней недели');
+    for (const week of [1, 3, 4, 6]) {
+        row(autumn, 1, 0, week, 1, 0, '08:00', `Своя неделя ${week}, понедельник`);
+        row(autumn, 3, 0, week, 1, 0, '11:30', `Своя неделя ${week}, среда`);
+        row(autumn, 5, 0, week, 1, week === 4 ? 1 : 0, '09:40', `Своя неделя ${week}, пятница`);
+    }
     row(spring, 1, 0, null, 1, 0, '08:00', 'Весна');
     row(spring, 3, 2, null, 1, 0, '09:40', 'Весна чётная');
+    row(spring, 2, 0, 2, 1, 0, '09:40', 'Весна, своя неделя 2');
 
     const { app } = createApp();
     const server = http.createServer(app);
@@ -64,13 +73,16 @@ test('server and student page resolve every day identically', async (t) => {
         for (let i = 0; i < 28; i += 1) {
             const iso = addDaysToIsoDate(from, i);
             const [y, m, d] = iso.split('-').map(Number);
-            const page = resolveLessonsForDay(data, new Date(y, m - 1, d)).map((l) => l.id);
-            const server = resolveGroupLessons(db, group, iso).lessons.map((l) => l.id);
+            const date = new Date(y, m - 1, d);
+            const page = resolveLessonsForDay(data, date).map((l) => l.id);
+            const resolved = resolveGroupLessons(db, group, iso);
+            const server = resolved.lessons.map((l) => l.id);
             assert.deepEqual(server, page, iso);
+            assert.equal(resolved.status === 'not_entered' ? 'not_entered' : 'open', dayStatus(data, date), `${iso} status`);
             compared += 1;
             if (page.length) withPairs += 1;
         }
     }
 
-    assert.ok(compared > 120 && withPairs >= 18, `${compared} days, ${withPairs} with pairs`);
+    assert.ok(compared > 120 && withPairs >= 12, `${compared} days, ${withPairs} with pairs`);
 });

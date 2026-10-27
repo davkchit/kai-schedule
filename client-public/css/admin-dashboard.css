@@ -720,3 +720,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helv
         scroll-behavior: auto !important;
     }
 }
+/* A week not entered yet: the hint and «Внести неделю как в шаблоне» side by side. */
+.builder-not-entered { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.builder-not-entered .builder-hint { flex: 1 1 320px; margin: 0; }

@@ -1,7 +1,6 @@
 const { HOURS_PER_LESSON, computeExceptionWeeks, computeLoadProgress } = require('./loadCalc');
 const { scheduleGroupId } = require('./groupJoin');
 const { getPlanGroupIds } = require('./planGroups');
-const { resolveFirstWeekParity } = require('./date');
 
 /**
  * Hours for one load_plan row, computed strictly inside that row's semester.
@@ -84,12 +83,7 @@ function computeGroupOccurrences(db, planRow, groupId, semester, effective, cach
             SELECT specific_week FROM lessons
             WHERE group_id = ? AND semester_id = ? AND specific_week IS NOT NULL
         `).all(groupId, semester.id);
-        // Every template row of the group, whoever teaches it: a cell's
-        // version is chosen among all of them (see computeLoadProgress).
-        const templateRows = db.prepare(`
-            SELECT * FROM lessons WHERE group_id = ? AND semester_id = ? AND specific_week IS NULL
-        `).all(groupId, semester.id);
-        groupRows = { exceptionWeeks: computeExceptionWeeks(overrideRows, effective.weeks_count), templateRows };
+        groupRows = { exceptionWeeks: computeExceptionWeeks(overrideRows, effective.weeks_count) };
         cache.set(cacheKey, groupRows);
     }
 
@@ -108,9 +102,7 @@ function computeGroupOccurrences(db, planRow, groupId, semester, effective, cach
         semesterStartDate: effective.start_date,
         weeksCount: effective.weeks_count,
         linkedLessons,
-        exceptionWeeks: groupRows.exceptionWeeks,
-        templateRows: groupRows.templateRows,
-        firstWeekParity: resolveFirstWeekParity(effective)
+        exceptionWeeks: groupRows.exceptionWeeks
     }).occurrences;
 }
 

@@ -893,6 +893,39 @@ export default function AdminDashboardPage() {
         }
     }
 
+    // The week entered exactly as the template has it: the usual way when
+    // nothing changes from the draft.
+    async function handleCopyWeek() {
+        if (!selectedGroupId || builderWeekNumber === null) {
+            return;
+        }
+
+        try {
+            const response = await api('/api/admin/schedule/materialize-week', {
+                method: 'POST',
+                body: JSON.stringify({ group_id: Number(selectedGroupId), week_number: builderWeekNumber, action: 'copy' })
+            });
+            const data = await response.json();
+
+            if (response.status === 409 && data.needs_extension) {
+                setToastMessage(data.error);
+                return;
+            }
+
+            if (!response.ok) {
+                setToastMessage(data.error || 'Не удалось внести неделю');
+                return;
+            }
+
+            setToastMessage('Неделя внесена — студенты её видят, как только она откроется');
+            loadLessons(selectedGroupId);
+        } catch (error) {
+            if (error.message !== 'UNAUTHORIZED') {
+                setToastMessage('Ошибка сети');
+            }
+        }
+    }
+
     async function handleClearWeek() {
         if (!selectedGroupId || builderWeekNumber === null) {
             return;
@@ -911,29 +944,22 @@ export default function AdminDashboardPage() {
                 return;
             }
 
-            if (summary.blocked) {
-                setToastMessage(summary.blocked);
-                return;
-            }
-
-            const shouldClear = window.confirm(summary.template_pairs > 0
-                ? `Удалить ${summary.pairs} пар(ы) этой недели и вернуть шаблон (${summary.template_pairs} пар(ы))? Действие необратимо.`
-                : `Удалить все ${summary.pairs} пар(ы) этой недели? Шаблона нет — неделя станет пустой. Действие необратимо.`);
+            const shouldClear = window.confirm(
+                `Удалить все ${summary.pairs} пар(ы) этой недели? Неделя станет невнесённой: студенты увидят «Расписание не внесено», пока вы не внесёте её снова. Действие необратимо.`
+            );
 
             if (!shouldClear) {
                 return;
             }
 
-            const hoursChange = summary.hours_lost > 0
-                ? `Эти пары уже засчитаны преподавателям: они потеряют ${summary.hours_lost} ч.`
-                : summary.hours_gained > 0 ? `Шаблон добавит прошедшим дням этой недели ${summary.hours_gained} ч.` : '';
-
-            if (hoursChange && !window.confirm(`${hoursChange} Всё равно продолжить?`)) {
+            if (summary.hours_lost > 0 && !window.confirm(
+                `Эти пары уже засчитаны преподавателям: они потеряют ${summary.hours_lost} ч. Всё равно удалить?`
+            )) {
                 return;
             }
 
             const response = await api(
-                `/api/admin/schedule/week?${weekQuery}${hoursChange ? '&confirm=1' : ''}`,
+                `/api/admin/schedule/week?${weekQuery}${summary.hours_lost > 0 ? '&confirm=1' : ''}`,
                 { method: 'DELETE' }
             );
 
@@ -943,7 +969,7 @@ export default function AdminDashboardPage() {
                 return;
             }
 
-            setToastMessage(summary.template_pairs > 0 ? 'Неделя очищена — показывается шаблон' : 'Неделя очищена');
+            setToastMessage('Неделя очищена — студенты видят «Расписание не внесено»');
             loadLessons(selectedGroupId);
         } catch (error) {
             if (error.message !== 'UNAUTHORIZED') {
@@ -1170,6 +1196,7 @@ export default function AdminDashboardPage() {
                     todayWeekNumber={todayWeekNumber}
                     isExporting={isExporting}
                     handleClearWeek={handleClearWeek}
+                    handleCopyWeek={handleCopyWeek}
                     handleExport={handleExport}
                     draggedLesson={draggedLesson}
                     setDraggedLesson={setDraggedLesson}

@@ -97,8 +97,9 @@ test('first time: asks for the group, remembers it, then answers days', async ()
     assert.match(week.text, /^Неделя с 19 октября: среда — 2 занятия, с 8:00; четверг — 1 занятие, с 11:30; пятница — 2 занятия, с 8:00\./);
 
     // «понедельник» holds «недел» inside: still a day, not the week.
-    assert.match((await say('расписание на понедельник', { state })).text, /^В понедельник, 26 октября/);
-    assert.match((await say('что на следующую неделю', { state })).text, /^На неделе с 26 октября пар нет/);
+    // Next week isn't entered: its pairs aren't out, and Alice says so.
+    assert.equal((await say('расписание на понедельник', { state })).text, 'В понедельник, 26 октября: расписание ещё не внесено.');
+    assert.equal((await say('что на следующую неделю', { state })).text, 'На неделю с 26 октября расписание ещё не внесено.');
     // A date said in words, with no entity from Alice.
     assert.match((await say('что 22 октября', { state })).text, /22 октября, 1 пара\. Первая — в 11:30, Информатика/);
 

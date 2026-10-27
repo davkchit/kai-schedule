@@ -11,6 +11,7 @@ const { addDaysToIsoDate, formatLocalDate, isValidIsoDate } = require('./utils/d
 const { resolveGroupLessons, sortByTime, weekdayOf } = require('./utils/dayResolve');
 const { scheduleGroupId } = require('./utils/groupJoin');
 const { selectAttestations } = require('./utils/attestations');
+const { visibleUntil } = require('./utils/visibility');
 
 const MAX_TEXT = 1024;
 const WEEKDAYS = ['', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу', 'воскресенье'];
@@ -54,14 +55,26 @@ function dayLabel(iso, today) {
     return relative ? `${relative}, ${inWeekday}, ${date}` : `${inWeekday[0].toUpperCase()}${inWeekday.slice(1)}, ${date}`;
 }
 
-/** Pairs, events and session records of a group on one date, in time order. */
-function dayItems(db, groupId, iso) {
+/**
+ * What a group has on one date, in time order, as the student page shows it:
+ * pairs and events only up to the end of the open weeks (utils/visibility.js)
+ * and only from a week entered as its own; session records any day.
+ * `unknown` — the day's pairs aren't out yet (a week not entered, or not open).
+ */
+function dayView(db, groupId, iso, today) {
     const owner = scheduleGroupId(db, groupId);
-    const { lessons } = resolveGroupLessons(db, owner, iso);
     const attestations = selectAttestations(db, 'a.group_id = ? AND a.date = ?', [owner, iso])
         .map((record) => ({ ...record, attestation: true }));
-    return sortByTime([...lessons, ...attestations]);
+
+    if (iso > visibleUntil(db, groupId, today)) {
+        return { items: sortByTime(attestations), unknown: true };
+    }
+
+    const { lessons, status } = resolveGroupLessons(db, owner, iso);
+    return { items: sortByTime([...lessons, ...attestations]), unknown: status === 'not_entered' };
 }
+
+const NOT_ENTERED = 'расписание ещё не внесено';
 
 /** What and where, without the time: «Математика, лекция, аудитория 305». */
 function itemBody(item) {
@@ -88,9 +101,16 @@ const lowerFirst = (text) => `${text[0].toLowerCase()}${text.slice(1)}`;
  * by their order («Первая — в 8:00, …»), an event or an exam by its time.
  */
 function describeDay(db, groupId, iso, today) {
-    const items = dayItems(db, groupId, iso);
+    const { items, unknown } = dayView(db, groupId, iso, today);
     const label = dayLabel(iso, today);
     const past = iso < today;
+
+    if (unknown) {
+        // Only a session record may be known that day.
+        return items.length === 0
+            ? `${label}: ${NOT_ENTERED}.`
+            : `${label}: ${items.map((item) => `в ${spokenTime(item.time_start)} — ${itemBody(item)}`).join('; ')}. Расписание пар ещё не внесено.`;
+    }
 
     if (items.length === 0) {
         return past ? `${label}, пар не было.` : `${label}, пар нет.`;
@@ -109,9 +129,14 @@ function describeDay(db, groupId, iso, today) {
 
 /** «первая пара», «последняя пара», «сколько пар» about one day. */
 function describePick(db, groupId, iso, today, pick) {
-    const pairs = dayItems(db, groupId, iso).filter(isPair);
+    const { items, unknown } = dayView(db, groupId, iso, today);
+    const pairs = items.filter(isPair);
     const label = dayLabel(iso, today);
     const past = iso < today;
+
+    if (unknown) {
+        return `${label}: ${NOT_ENTERED}.`;
+    }
 
     if (pairs.length === 0) {
         return past ? `${label}, пар не было.` : `${label}, пар нет.`;
@@ -139,7 +164,13 @@ function describePick(db, groupId, iso, today, pick) {
 
 /** «какая сейчас пара», «следующая пара»: from this minute on, today and then the coming days. */
 function describeNow(db, groupId, today, nowTime) {
-    const pairs = dayItems(db, groupId, today).filter(isPair);
+    const todayView = dayView(db, groupId, today, today);
+
+    if (todayView.unknown) {
+        return `На сегодня ${NOT_ENTERED}.`;
+    }
+
+    const pairs = todayView.items.filter(isPair);
     const current = pairs.find((pair) => pair.time_start <= nowTime && nowTime < (pair.time_end || pair.time_start));
     const next = pairs.find((pair) => pair.time_start > nowTime);
 
@@ -152,11 +183,20 @@ function describeNow(db, groupId, today, nowTime) {
         return `Следующая пара — в ${spokenTime(next.time_start)}: ${itemBody(next)}.`;
     }
 
+    const lead = pairs.length > 0 ? 'На сегодня пары закончились' : 'Сегодня пар нет';
+
     for (let offset = 1; offset <= 14; offset += 1) {
         const iso = addDaysToIsoDate(today, offset);
-        const first = dayItems(db, groupId, iso).filter(isPair)[0];
+        const view = dayView(db, groupId, iso, today);
+
+        // Further on the pairs aren't out yet: said so, not «no pairs».
+        if (view.unknown) {
+            return `${lead}. Дальше ${NOT_ENTERED}.`;
+        }
+
+        const first = view.items.filter(isPair)[0];
         if (first) {
-            return `${pairs.length > 0 ? 'На сегодня пары закончились' : 'Сегодня пар нет'}. Ближайшая — ${lowerFirst(dayLabel(iso, today))}, в ${spokenTime(first.time_start)}: ${itemBody(first)}.`;
+            return `${lead}. Ближайшая — ${lowerFirst(dayLabel(iso, today))}, в ${spokenTime(first.time_start)}: ${itemBody(first)}.`;
         }
     }
 
@@ -176,7 +216,7 @@ function describeSubject(db, groupId, text, today, nowTime) {
 
     for (let offset = 0; offset <= 21; offset += 1) {
         const iso = addDaysToIsoDate(today, offset);
-        const found = dayItems(db, groupId, iso).find((item) => {
+        const found = dayView(db, groupId, iso, today).items.find((item) => {
             if (offset === 0 && (item.time_end || item.time_start) <= nowTime) return false;
             const subject = normalize(item.subject);
             return item.kind !== 'event' && stems.every((stem) => subject.includes(stem));
@@ -213,16 +253,25 @@ function describeSession(db, groupId, today) {
 
 function describeWeek(db, groupId, mondayIso, today) {
     const parts = [];
+    let unknownDays = 0;
 
     for (let offset = 0; offset < 7; offset += 1) {
         const iso = addDaysToIsoDate(mondayIso, offset);
-        const items = dayItems(db, groupId, iso);
+        const { items, unknown } = dayView(db, groupId, iso, today);
+        if (unknown) unknownDays += 1;
         if (items.length === 0) continue;
         const first = items[0];
         parts.push(`${WEEKDAYS[weekdayOf(iso)].replace(/у$/, 'а')} — ${items.length} ${plural(items.length, 'занятие', 'занятия', 'занятий')}, с ${spokenTime(first.time_start)}`);
     }
 
     const [, month, day] = mondayIso.split('-').map(Number);
+
+    if (unknownDays === 7) {
+        return parts.length === 0
+            ? `На неделю с ${day} ${MONTHS[month - 1]} ${NOT_ENTERED}.`
+            : `На неделю с ${day} ${MONTHS[month - 1]} ${NOT_ENTERED}, но уже назначено: ${parts.join('; ')}.`;
+    }
+
     return parts.length === 0
         ? `На неделе с ${day} ${MONTHS[month - 1]} пар нет.`
         : `Неделя с ${day} ${MONTHS[month - 1]}: ${parts.join('; ')}. Спросите про конкретный день, чтобы услышать пары.`;
@@ -481,7 +530,7 @@ function handleAlice(db, body, now = clock.now()) {
  * (evening), tomorrow, which is what someone asking then wants.
  */
 function defaultDay(db, groupId, today, nowTime) {
-    const todayItems = dayItems(db, groupId, today);
+    const todayItems = dayView(db, groupId, today, today).items;
     const last = todayItems.reduce((latest, item) => ((item.time_end || item.time_start) > latest ? (item.time_end || item.time_start) : latest), '');
 
     if (todayItems.length > 0 && last > nowTime) {

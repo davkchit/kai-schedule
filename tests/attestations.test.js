@@ -82,12 +82,14 @@ test('exams, credits and consultations: entered, shown, counted and exported', a
     assert.equal(bad.status, 400, 'no semester on that date');
     assert.equal((await call('POST', '/api/admin/attestations', { kind: 'party', group_id: groupId, date: '2027-05-17', time_start: '09:40', discipline_text: 'Физика' })).status, 400);
 
-    // Students see it on its date, next to that Monday's pair, which stays.
+    // Students see it on its date months ahead — session days are published
+    // early — while that week's pairs aren't out (nor is the template, ever).
     const week = await ok('GET', `/api/schedule/${groupId}?date=2027-05-17&days=7`);
     assert.equal(week.attestations.length, 1);
     assert.equal(week.attestations[0].kind, 'exam');
     assert.equal(week.attestations[0].date, '2027-05-17');
-    assert.ok(week.lessons.some((lesson) => lesson.specific_week == null), 'the template still runs that week');
+    assert.equal(week.lessons.length, 0, 'no pairs of a week not open yet, no template rows');
+    assert.equal(week.visible_until, '2027-02-07');
     assert.equal((await ok('GET', `/api/schedule/${otherGroupId}?date=2027-05-17&days=7`)).attestations.length, 0);
 
     // The teacher's page lists it; the plan's hours don't change.
@@ -133,7 +135,8 @@ test('exams, credits and consultations: entered, shown, counted and exported', a
     assert.ok(list.by_teacher.some((row) => row.teacher_id === null && row.teacher === 'Петрова А.А.'), 'an unmatched name is still counted');
 
     // ── Collisions: refused only when it is the same record twice, otherwise confirmed ──
-    // Monday 24 May, week 16: the template's 08:00–09:30 pair is on.
+    // Monday 24 May, week 16, entered as the template has it: its 08:00–09:30 pair is on.
+    await ok('POST', '/api/admin/schedule/materialize-week', { group_id: groupId, week_number: 16, action: 'copy' });
     const onPair = { kind: 'exam', group_id: groupId, date: '2027-05-24', time_start: '08:30', discipline_text: 'Химия', teacher_id: teacherId };
     const clash = await call('POST', '/api/admin/attestations', onPair);
     assert.equal(clash.status, 409);
@@ -163,7 +166,7 @@ test('exams, credits and consultations: entered, shown, counted and exported', a
     // A pair added later in the constructor shows on the row it now covers.
     const freeExam = await ok('POST', '/api/admin/attestations', { kind: 'exam', group_id: groupId, date: '2027-05-25', time_start: '13:10', discipline_text: 'Экономика' });
     await ok('POST', '/api/admin/lessons', {
-        group_id: groupId, day_of_week: 2, time_start: '13:10', time_end: '14:40', week_type: 0,
+        group_id: groupId, day_of_week: 2, time_start: '13:10', time_end: '14:40', week_type: 0, specific_week: 16,
         subject: 'Экономика', lesson_type: 'Практика'
     });
     const rechecked = (await ok('GET', `/api/admin/attestations?semester_id=${spring.id}`)).items;

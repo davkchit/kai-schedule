@@ -595,3 +595,8 @@ body {
         @keyframes headerHairlineDark { from { box-shadow: 0 1px 0 transparent; } to { box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08); } }
     }
 }
+
+/* A teaching week not entered yet: the rest-day card, just its text, quieter. */
+.rest-day.is-not-entered, .day-column .rest-day.is-not-entered, .rest-day.is-not-entered.mobile { justify-content: center; text-align: center; }
+.rest-day.is-not-entered .rest-day-text { align-items: center; }
+.rest-day.is-not-entered .rest-day-title, .day-column .rest-day.is-not-entered .rest-day-title, .rest-day.is-not-entered.mobile .rest-day-title { color: var(--text-secondary); font-weight: 600; }
