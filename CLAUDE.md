@@ -160,7 +160,7 @@ Every pair is entered in the constructor (`routes/admin/lessons.js`); a pair tak
 
 ### Dark Theme
 
-Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored in `localStorage` as `kai_schedule_theme`. Applied globally to `document.documentElement` via `data-theme="dark"` attribute on app startup (`src/main.jsx`). CSS variables are overridden under `[data-theme="dark"]` in `schedule.css` and `welcome.css`.
+Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored in `localStorage` as `kai_schedule_theme`. Applied globally to `document.documentElement` via `data-theme="dark"` attribute before the first paint by `client-public/theme-boot.js` (a plain script in `index.html`'s head — the CSP forbids inline scripts — with the matching `html` background inline, so a dark-theme launch never flashes white), and again on app startup (`src/main.jsx`); it repeats `lib/theme.js`'s key and colours. CSS variables are overridden under `[data-theme="dark"]` in `schedule.css` and `welcome.css`.
 
 ### Schedule page: the whole semester
 

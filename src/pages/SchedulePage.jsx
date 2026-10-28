@@ -91,6 +91,9 @@ export default function SchedulePage() {
     const [savedSelection, setSavedSelection] = useState(() => getSavedSelection());
     const [currentDate, setCurrentDate] = useState(() => normalizeDate(new Date()));
     const [pickerDate, setPickerDate] = useState(() => normalizeDate(new Date()));
+    // Which arrow turned the calendar's month (1 next, -1 previous, 0 just opened):
+    // the new month slides in from that side.
+    const [pickerShift, setPickerShift] = useState(0);
     const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
     // What is on screen: a window of consecutive days [from, to] (ISO dates) around
     // the chosen day, the /api/schedule response that covers it, and a token that
@@ -126,6 +129,8 @@ export default function SchedulePage() {
     const awaitingNetworkRef = useRef(false);
     // The silent refresh, callable at once (a saved copy shown on opening).
     const refreshNowRef = useRef(null);
+    // A copy shown instantly on opening is waiting for its fresh ask.
+    const refreshOnceShownRef = useRef(false);
     const scheduleRef = useRef(null);
     scheduleRef.current = schedule;
     const currentDateRef = useRef(currentDate);
@@ -294,7 +299,7 @@ export default function SchedulePage() {
                     lastFetchTimeRef.current = Date.now();
 
                     if (savedCopy === 'instant') {
-                        window.setTimeout(() => refreshNowRef.current?.(), 0);
+                        refreshOnceShownRef.current = true;
                         window.setTimeout(() => {
                             if (!ignore && awaitingNetworkRef.current) {
                                 setStaleNotice((current) => current || savedCopyNotice('unreachable', savedAt));
@@ -561,6 +566,17 @@ export default function SchedulePage() {
         };
     }, []);
 
+    // The fresh ask for a copy shown instantly goes out once that copy is on
+    // screen. Asked before React had shown it, the refresh found nothing
+    // loaded and waited for its 5-second tick — so the «Связь тормозит» notice
+    // came up on every launch, however good the network.
+    useEffect(() => {
+        if (schedule && refreshOnceShownRef.current) {
+            refreshOnceShownRef.current = false;
+            refreshNowRef.current?.();
+        }
+    }, [schedule]);
+
     const scheduleDays = useMemo(() => buildScheduleDays(schedule), [schedule]);
     const calendarDays = buildCalendarDays(pickerDate, currentDate, schedule?.data);
 
@@ -634,11 +650,13 @@ export default function SchedulePage() {
     }, [activeMobileTab]);
 
     function toggleDatePicker() {
+        setPickerShift(0);
         setPickerDate(new Date(labelDate.getFullYear(), labelDate.getMonth(), 1));
         setIsDatePickerOpen((previous) => !previous);
     }
 
     function shiftPickerMonth(offset) {
+        setPickerShift(offset);
         setPickerDate((previous) => {
             const next = new Date(previous.getFullYear(), previous.getMonth() + offset, 1);
 
@@ -962,7 +980,14 @@ export default function SchedulePage() {
                                 <div className="dp-day-header" key={label}>{label}</div>
                             ))}
                         </div>
-                        <div className="dp-grid" id="calendarGrid">
+                        {/* Keyed by month: each month gets fresh day buttons, so the
+                            28th of one month does not fade from «selected» into the
+                            next month's greyed-out 28th. */}
+                        <div
+                            className={`dp-grid${pickerShift > 0 ? ' dp-month-next' : pickerShift < 0 ? ' dp-month-prev' : ''}`}
+                            id="calendarGrid"
+                            key={`${pickerDate.getFullYear()}-${pickerDate.getMonth()}`}
+                        >
                             {calendarDays.map((item) => {
                                 if (item.type === 'empty') {
                                     return <div className="dp-empty-cell" key={item.key} aria-hidden="true"></div>;

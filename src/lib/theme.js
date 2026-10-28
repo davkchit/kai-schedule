@@ -4,6 +4,8 @@
 // system shows anyway: then the choice is forgotten and the app follows the
 // system again. So one plain toggle covers «auto» without a third button.
 
+// client-public/theme-boot.js repeats this key and these colours: it sets the
+// theme before the app loads. Change both together.
 const THEME_KEY = 'kai_schedule_theme';
 const THEME_EVENT = 'kai-theme-change';
 // The phone's status bar of the installed app follows the theme too.

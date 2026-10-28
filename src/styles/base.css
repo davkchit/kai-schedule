@@ -2,6 +2,13 @@ html, body, #root {
     min-height: 100%;
 }
 
+/* Two quick taps (the theme toggle, a menu row) made Safari on iPhone zoom
+   the whole page in. Double-tap zoom off; pinch zoom stays for anyone who
+   needs larger text. */
+html {
+    touch-action: manipulation;
+}
+
 :root {
     /* Critically-damped "settle" curve — the default motion feel across the app.
        No overshoot: correct for menus/sheets/theme changes, not for flicks. */

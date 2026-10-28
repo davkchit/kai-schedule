@@ -7,6 +7,13 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <!-- The background of the very first frame, before the app's styles load:
+         dark for a dark theme, so opening the app at night is not a white flash. -->
+    <style>
+        html { background: #ffffff; color-scheme: light; }
+        html[data-theme="dark"] { background: #0f172a; color-scheme: dark; }
+    </style>
+    <script src="/theme-boot.js"></script>
     <link rel="preload" href="/css/welcome.css" as="style">
     <link rel="preload" href="/css/schedule.css" as="style">
     <link rel="preload" href="/css/schedule-mobile.css" as="style">
