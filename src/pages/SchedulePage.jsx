@@ -43,6 +43,9 @@ const BRAND_LOGO_SRC = '/assets/logo-trim.png';
 // How long a pair that appeared or vanished in a live update animates — must
 // cover the lesson-leave / lesson-enter keyframes in schedule.css.
 const LESSON_MOTION_MS = 500;
+// A saved copy shown on opening gets the «показываем сохранённое» notice only
+// if the fresh schedule hasn't replaced it by then.
+const INSTANT_NOTICE_DELAY_MS = 1500;
 // How long the saved-copy notice takes to fade and close — must cover the
 // stale-notice keyframes in schedule.css.
 const STALE_NOTICE_LEAVE_MS = 650;
@@ -121,6 +124,8 @@ export default function SchedulePage() {
     // On screen is a saved copy shown because the network did not answer:
     // the silent refresh then retries every few seconds instead of a minute.
     const awaitingNetworkRef = useRef(false);
+    // The silent refresh, callable at once (a saved copy shown on opening).
+    const refreshNowRef = useRef(null);
     const scheduleRef = useRef(null);
     scheduleRef.current = schedule;
     const currentDateRef = useRef(currentDate);
@@ -280,10 +285,22 @@ export default function SchedulePage() {
                         data
                     });
                     // A saved copy is shown at once; the silent refresh below
-                    // then replaces it as soon as the network answers.
-                    setStaleNotice(savedCopy ? savedCopyNotice(savedCopy, savedAt) : '');
-                    awaitingNetworkRef.current = savedCopy === 'unreachable';
+                    // then replaces it as soon as the network answers. One
+                    // shown instantly on opening ('instant') is asked about
+                    // right away, and earns its notice only if the fresh one
+                    // takes long — on a good connection it is swapped unnoticed.
+                    setStaleNotice(savedCopy && savedCopy !== 'instant' ? savedCopyNotice(savedCopy, savedAt) : '');
+                    awaitingNetworkRef.current = savedCopy === 'unreachable' || savedCopy === 'instant';
                     lastFetchTimeRef.current = Date.now();
+
+                    if (savedCopy === 'instant') {
+                        window.setTimeout(() => refreshNowRef.current?.(), 0);
+                        window.setTimeout(() => {
+                            if (!ignore && awaitingNetworkRef.current) {
+                                setStaleNotice((current) => current || savedCopyNotice('unreachable', savedAt));
+                            }
+                        }, INSTANT_NOTICE_DELAY_MS);
+                    }
                 }
             } catch (error) {
                 if (ignore) {
@@ -502,7 +519,9 @@ export default function SchedulePage() {
                 lastFetchTimeRef.current = Date.now();
 
                 if (savedCopy) {
-                    return; // still no answer from the server: keep the copy and its notice
+                    // Still no answer from the server: keep the copy, and say so.
+                    setStaleNotice((current) => current || savedCopyNotice(savedCopy, null));
+                    return;
                 }
 
                 // The server answered: whatever notice said the schedule might
@@ -532,6 +551,7 @@ export default function SchedulePage() {
             }
         }
 
+        refreshNowRef.current = refreshSilently;
         const timer = window.setInterval(refreshSilently, 5_000);
         window.addEventListener('online', refreshSilently);
 

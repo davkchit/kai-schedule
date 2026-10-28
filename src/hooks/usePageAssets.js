@@ -31,7 +31,9 @@ export default function usePageAssets({ title, description, stylesheets = [], li
         for (const href of stylesheets) {
             const link = document.createElement('link');
             link.rel = 'stylesheet';
-            link.href = href;
+            // The build's version (vite.config.js) lets the service worker
+            // serve a saved copy at once; absent in a plain dev run.
+            link.href = typeof __BUILD_ID__ !== 'undefined' ? `${href}?v=${__BUILD_ID__}` : href;
             stylesheetPromises.push(new Promise((resolve) => {
                 link.addEventListener('load', resolve, { once: true });
                 link.addEventListener('error', resolve, { once: true });

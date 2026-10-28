@@ -174,7 +174,7 @@ Motion across the app is one family: the `--ease-spring` curve (critically dampe
 
 ### PWA Auto-Refresh
 
-`SchedulePage` listens to `visibilitychange` — when the user returns to the app after 60+ seconds, schedule data is re-fetched from the server. Service worker uses network-first strategy for all `/api/schedule/` requests, so data is always fresh when online.
+The app opens like a messenger: the service worker serves the saved page shell at once (the network's copy replaces it for the next launch), stylesheets by the build's version (`?v=` from `vite.config.js`, so a saved copy never pairs new code with old styles), and a saved schedule at once marked `X-Kai-Saved-Copy: instant`. The page then asks again right away with `X-Kai-Wait` and swaps in the fresh answer; only if that takes over 1.5 s does the «показываем сохранённое» notice appear. Other public data (teacher page, group lists) still waits for the network. `SchedulePage` also listens to `visibilitychange` — back after 60+ seconds, it reloads.
 
 ### Security Model
 

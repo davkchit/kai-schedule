@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v8';
+const CACHE_VERSION = 'v9';
 const SHELL_CACHE = `anti-vuz-shell-${CACHE_VERSION}`;
 const STATIC_CACHE = `anti-vuz-static-${CACHE_VERSION}`;
 // Saved schedules are not tied to a release: a new version must not throw
@@ -7,7 +7,6 @@ const DATA_CACHE = 'anti-vuz-data-v5';
 // The campus network tends to hang rather than fail: a request can sit for
 // 10–20 s without an error. Past these limits the saved copy is shown, and the
 // network's answer, when it does come, is saved for next time.
-const NAVIGATION_TIMEOUT_MS = 2000;
 const STYLESHEET_TIMEOUT_MS = 1500;
 const DATA_TIMEOUT_MS = 2500;
 // Set on a saved schedule handed out instead of the network's: 'unreachable'
@@ -78,13 +77,13 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Stylesheets keep the same name across releases (unlike the hashed
-    // bundles), so a cached copy would pair the new code with the old styles
-    // for one launch — on iOS that showed unstyled system-blue buttons. Hence
-    // the network first; the saved copy only when the network is slow, and
-    // then the page itself most likely came from the cache as well.
+    // Stylesheets keep their file names across releases, so the page asks
+    // for them with the build's version (?v=…, see vite.config.js): such a URL
+    // never changes content, and the saved copy is served at once. Without a
+    // version (an older page) the network comes first — a cached copy would
+    // pair new code with old styles for one launch (unstyled buttons on iOS).
     if (url.pathname.startsWith('/css/')) {
-        event.respondWith(networkFirstStatic(event));
+        event.respondWith(url.searchParams.has('v') ? staleWhileRevalidate(request, STATIC_CACHE) : networkFirstStatic(event));
         return;
     }
 
@@ -228,13 +227,20 @@ function withinTimeout(promise, ms) {
     ]);
 }
 
+// The saved page opens at once, like a messenger: the network's answer
+// replaces it in the cache for the next launch. Waiting for the network first
+// cost a student on a weak connection seconds on every launch. Only without a
+// saved page (the very first visit) is the network waited for.
 async function handleNavigation(event) {
     const cache = await caches.open(SHELL_CACHE);
     const network = fetchAndSave(event, cache, APP_SHELL_URL);
     const cachedShell = (await cache.match(event.request)) || (await cache.match(APP_SHELL_URL));
-    const response = cachedShell
-        ? await withinTimeout(network, NAVIGATION_TIMEOUT_MS)
-        : await network;
+
+    if (cachedShell) {
+        return cachedShell;
+    }
+
+    const response = await network;
 
     if (response && response.ok) {
         return response;
@@ -246,9 +252,18 @@ async function handleNavigation(event) {
 async function networkFirstData(event) {
     const { request } = event;
     const cache = await caches.open(DATA_CACHE);
-    const network = fetchAndSave(event, cache, request, stampSavedAt);
     const waitForNetwork = request.headers.get(WAIT_HEADER) === '1';
     const saved = waitForNetwork ? null : await findCachedDataResponse(request, cache);
+
+    // The schedule page shows a saved copy at once ('instant') and asks again
+    // right away with X-Kai-Wait for the fresh one, which then replaces it on
+    // screen — so the request is not sent twice. Other data (the teacher page,
+    // group lists) has no such second ask and keeps waiting for the network.
+    if (saved && new URL(request.url).pathname.startsWith('/api/schedule/')) {
+        return markSavedCopy(saved, 'instant');
+    }
+
+    const network = fetchAndSave(event, cache, request, stampSavedAt);
     const response = saved
         ? await withinTimeout(network, DATA_TIMEOUT_MS)
         : await network;
