@@ -6,9 +6,9 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 
-// The schedule page shows a run of days built from several windows, each one a
-// request to /api/schedule. A day in that run must look exactly as it would if
-// the page had asked for that day alone, including across the start of a
+// The schedule page shows a long run of days from one request to
+// /api/schedule. A day in that run must look exactly as it would if the page
+// had asked for that day alone, including across the start of a
 // semester, an own-week override, a retired template version, the weeks after
 // the last teaching week, and the rollover into the next semester.
 
@@ -26,7 +26,7 @@ const importLib = (name) => import(pathToFileURL(path.join(__dirname, '..', 'src
 const LIMITS = { earliest: '2026-01-01', latest: '2027-12-31' };
 
 test('windows: a first window is two weeks back and two weeks on, and never leaves the limits', async () => {
-    const { planInitialWindow, planExtension, requestDays } = await importLib('scheduleWindow.js');
+    const { planInitialWindow, requestDays } = await importLib('scheduleWindow.js');
 
     assert.deepEqual(planInitialWindow('2026-10-08', LIMITS), { from: '2026-09-24', to: '2026-10-22' });
     assert.equal(requestDays('2026-09-24', '2026-10-22'), 29);
@@ -36,58 +36,10 @@ test('windows: a first window is two weeks back and two weeks on, and never leav
     assert.deepEqual(planInitialWindow('2027-12-29', LIMITS), { from: '2027-12-15', to: '2027-12-31' });
     // A day outside the limits (the calendar can reach one) still gets its own window.
     assert.deepEqual(planInitialWindow('2025-06-10', LIMITS), { from: '2025-06-10', to: '2025-06-24' });
-
-    const run = { from: '2026-09-24', to: '2026-10-22' };
-    assert.deepEqual(planExtension(run, 'before', LIMITS), { from: '2026-09-10', to: '2026-09-23' });
-    assert.deepEqual(planExtension(run, 'after', LIMITS), { from: '2026-10-23', to: '2026-11-05' });
-    assert.equal(planExtension({ from: '2026-01-01', to: '2026-02-01' }, 'before', LIMITS), null);
-    assert.equal(planExtension({ from: '2026-10-01', to: '2027-12-31' }, 'after', LIMITS), null);
-    assert.deepEqual(planExtension({ from: '2026-01-05', to: '2026-02-01' }, 'before', LIMITS), { from: '2026-01-01', to: '2026-01-04' });
 });
 
-test('windows: extensions abut the run with no gap and no overlap, in both directions', async () => {
-    const { planInitialWindow, planExtension, shiftIsoDate } = await importLib('scheduleWindow.js');
-    let run = planInitialWindow('2026-10-08', LIMITS);
-
-    for (let step = 0; step < 6; step += 1) {
-        const plan = planExtension(run, 'after', LIMITS);
-        assert.equal(plan.from, shiftIsoDate(run.to, 1), 'the next window starts the day after the run');
-        run = { from: run.from, to: plan.to };
-    }
-
-    for (let step = 0; step < 6; step += 1) {
-        const plan = planExtension(run, 'before', LIMITS);
-        assert.equal(plan.to, shiftIsoDate(run.from, -1), 'the previous window ends the day before the run');
-        run = { from: plan.from, to: run.to };
-    }
-});
-
-test('windows: merging keeps every semester and lesson once, and the later response wins', async () => {
-    const { isMergeable, mergeScheduleData } = await importLib('scheduleWindow.js');
-    const first = {
-        group: { id: 1 },
-        semesters: [{ id: 1, label: 'A' }],
-        lessons: [{ id: 10, subject: 'старое' }, { id: 11, subject: 'общее' }]
-    };
-    const second = {
-        semesters: [{ id: 1, label: 'A' }, { id: 2, label: 'B' }],
-        lessons: [{ id: 10, subject: 'новое' }, { id: 12, subject: 'только во втором' }]
-    };
-
-    const merged = mergeScheduleData(first, second);
-    assert.deepEqual(merged.semesters.map((semester) => semester.id).sort(), [1, 2]);
-    assert.deepEqual(merged.lessons.map((lesson) => lesson.id).sort(), [10, 11, 12]);
-    assert.equal(merged.lessons.find((lesson) => lesson.id === 10).subject, 'новое');
-    assert.equal(merged.group.id, 1);
-
-    // A copy from before semester scoping has no semesters and is read by a
-    // legacy path that understands one window only: it is never combined.
-    assert.equal(isMergeable(first, second), true);
-    assert.equal(isMergeable(first, { lessons: [], by_day: {} }), false);
-});
-
-test('windows: a run assembled from many windows resolves every day as a request for that day alone', async (t) => {
-    const { planInitialWindow, planExtension, mergeScheduleData, requestDays } = await importLib('scheduleWindow.js');
+test('windows: a long run of days resolves every day as a request for that day alone', async (t) => {
+    const { requestDays } = await importLib('scheduleWindow.js');
     const { resolveLessonsForDay } = await importLib('scheduleResolve.js');
     const { formatLocalDateForApi } = await importLib('date.js');
 
@@ -150,22 +102,9 @@ test('windows: a run assembled from many windows resolves every day as a request
         return response.json();
     };
 
-    // The reader picks a day in autumn week 5, then scrolls back past the start
-    // of the semester and forward through the session into spring.
-    let run = planInitialWindow('2026-10-08', LIMITS);
-    let data = await fetchWindow(run);
-
-    for (let step = 0; step < 3; step += 1) {
-        const plan = planExtension(run, 'before', LIMITS);
-        data = mergeScheduleData(data, await fetchWindow(plan));
-        run = { from: plan.from, to: run.to };
-    }
-
-    for (let step = 0; step < 9; step += 1) {
-        const plan = planExtension(run, 'after', LIMITS);
-        data = mergeScheduleData(data, await fetchWindow(plan));
-        run = { from: run.from, to: plan.to };
-    }
+    // One request from before autumn, through the session, into spring.
+    const run = { from: '2026-08-31', to: '2027-03-07' };
+    const data = await fetchWindow(run);
 
     assert.ok(run.from < '2026-09-07', 'the run reaches back before the semester');
     assert.ok(run.to > '2027-02-15', 'the run reaches forward into spring');

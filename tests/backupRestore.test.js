@@ -92,4 +92,16 @@ test('backup → mistake → restore, and refusing files that would break the ap
     // And the app keeps serving from the restored file.
     const universities = await fetch(`${baseUrl}/api/universities`);
     assert.equal(universities.status, 200);
+
+    // A file where the restorer's id belongs to another login: no session is
+    // handed out under that other name — the restorer logs in again.
+    login();
+    const otherLoginPath = path.join(tempDir, 'other-login.db');
+    getDb().prepare('VACUUM INTO ?').run(otherLoginPath);
+    const otherLogin = new Database(otherLoginPath);
+    otherLogin.prepare('UPDATE admins SET username = ? WHERE id = ?').run('someone_else', admin.id);
+    otherLogin.close();
+    const swapped = await post('/api/admin/backups/upload-restore', fs.readFileSync(otherLoginPath), octet);
+    assert.equal(swapped.status, 200, JSON.stringify(swapped.data));
+    assert.equal(swapped.data.relogin, true, 'not logged in as someone_else');
 });

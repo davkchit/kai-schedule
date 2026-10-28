@@ -25,7 +25,7 @@ Each of these was a real bug or a deliberate decision; the sections below explai
 8. **No hard-coded calendar dates** in app code (`tests/codeGuards.test.js`); every audit action needs a Russian label in `src/pages/adminDashboard/format.js` (same test).
 9. **One-off data fixes run once per database** (`runDataFixOnce`); schema migrations must be idempotent; a boot snapshot is taken before them.
 10. **Never commit databases or real people's data** (`data/*.db`, `seed/*.db`, real teacher names in tests/fixtures — use made-up names).
-11. Run `npm test` after any change; it must stay green (131 tests).
+11. Run `npm test` after any change; it must stay green (132 tests).
 
 ## Commands
 
@@ -166,7 +166,7 @@ Toggle in `SchedulePage` header (desktop) and burger menu (mobile). Theme stored
 
 The page loads the **whole semester the chosen day falls in** in one request, but the answer holds only entered weeks up to `visible_until` (see invariant 1); `dayStatus` in `scheduleResolve.js` says per day 'open' / 'not_entered' / 'closed', the strip ends at the last open day (later only session days), not-entered days show «Расписание не внесено», and the calendar greys out closed dates: `GET /api/schedule/:groupId?date=&span=semester` (`semesterSpan` in `routes/api.js`) answers from the semester's first Monday to the day before the next semester — or, with no next semester yet, to the end of its session (teaching weeks + 8, never before the group's last exam). Outside any semester (before the first, a long summer gap) it answers two weeks either side of the date. Every schedule answer carries `range_start`/`range_end` and the header `X-Kai-Range: from/to`; the silent refresh re-asks the same days with `date=&days=` (up to 400). Picking a date inside the loaded semester only scrolls; a date outside loads that one. Browsing is bounded to a year either side of today (`getMinDate`/`getMaxDate` in `SchedulePage.jsx`). `tests/scheduleSpan.test.js` covers the edges.
 
-Offline, the service worker answers a `span=semester` request with the newest saved answer of the same group whose `X-Kai-Range` covers the day (the URL's date moves every morning), and keeps only the last 3 saved schedules per group. `planExtension`/`mergeScheduleData` in `src/lib/scheduleWindow.js` (the old endless-scroll groundwork) are no longer used by the page; `planInitialWindow` remains only as a fallback for an old saved copy without `range_start`.
+Offline, the service worker answers a `span=semester` request with the newest saved answer of the same group whose `X-Kai-Range` covers the day (the URL's date moves every morning), and keeps only the last 3 saved schedules per group. `tests/serviceWorker.test.js` runs the real worker against an in-memory Cache Storage. `planInitialWindow` in `src/lib/scheduleWindow.js` remains only as a fallback for an old saved copy without `range_start`.
 
 On a phone the day tabs and the list cover the same semester; the list opens scrolled to the chosen day (`scroll-margin-top` under the sticky header) with every earlier day above it, and the day view draws only the open day (a semester is ~130–180 days). The date picker opens from the burger menu («Выбрать дату») as a bottom sheet. In the day view a horizontal swipe turns the day (`src/lib/useDaySwipe.js`: 1:1 tracking on `transform` only, rubber band at the window's ends, the flick's projected landing decides; `touch-action: pan-y` keeps vertical scrolling native, the tab strip is `data-swipe-ignore`). A new day enters from its side (`--day-from` on `.day-content`).
 

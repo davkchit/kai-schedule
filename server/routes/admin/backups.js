@@ -66,8 +66,9 @@ router.get('/backups/:fileName/download', async (req, res) => {
 
 function respondRestored(req, res, result, source) {
     const db = getDb();
-    // The restored file has its own admins: the one restoring may not exist there.
-    const admin = db.prepare('SELECT id, username FROM admins WHERE id = ?').get(req.admin.id);
+    // The restored file has its own admins: the one restoring may not exist
+    // there, or its id may belong to someone else — so the login must match too.
+    const admin = db.prepare('SELECT id, username FROM admins WHERE id = ? AND username = ?').get(req.admin.id, req.admin.username);
 
     // The audit row goes into the restored database — the one that stays.
     writeAuditLog(db, {
