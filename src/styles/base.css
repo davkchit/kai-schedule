@@ -9,6 +9,13 @@ html {
     touch-action: manipulation;
 }
 
+/* Pulled past the top or bottom, the whole page — sticky header and day
+   strip with it — stretched like rubber, which no app does. The day swipe is
+   our own code and the tab strip scrolls sideways, so neither is affected. */
+html, body {
+    overscroll-behavior-y: none;
+}
+
 :root {
     /* Critically-damped "settle" curve — the default motion feel across the app.
        No overshoot: correct for menus/sheets/theme changes, not for flicks. */
