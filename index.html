@@ -10,7 +10,10 @@
     <!-- The background of the very first frame, before the app's styles load:
          dark for a dark theme, so opening the app at night is not a white flash. -->
     <style>
-        html { background: #ffffff; color-scheme: light; }
+        /* No light background on html: it would stop body's colour from
+           filling the canvas, and a long list would turn white below the
+           first screen. Dark body is the same #0f172a, so dark is safe. */
+        html { color-scheme: light; }
         html[data-theme="dark"] { background: #0f172a; color-scheme: dark; }
     </style>
     <script src="/theme-boot.js"></script>
