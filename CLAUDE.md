@@ -176,6 +176,8 @@ Motion across the app is one family: the `--ease-spring` curve (critically dampe
 
 The app opens like a messenger: the service worker serves the saved page shell at once (the network's copy replaces it for the next launch), stylesheets by the build's version (`?v=` from `vite.config.js`, so a saved copy never pairs new code with old styles), and a saved schedule at once marked `X-Kai-Saved-Copy: instant`. The page then asks again right away with `X-Kai-Wait` and swaps in the fresh answer; only if that takes over 1.5 s does the «показываем сохранённое» notice appear. Other public data (teacher page, group lists) still waits for the network. `SchedulePage` also listens to `visibilitychange` — back after 60+ seconds, it reloads.
 
+An iPhone cold-starts a home-screen app after a few idle hours (~2.5 s before the page can paint) and ignores the manifest meanwhile, so `index.html` lists `apple-touch-startup-image` launch screens (`client-public/splash/`, light and dark per iPhone screen size). iOS reads them when the icon is added: an existing icon needs re-adding to pick up new ones.
+
 ### Security Model
 
 - Admin auth: JWT in an httpOnly, SameSite=Strict cookie that only names a server-side session (`admin_sessions`, `server/sessions.js`): logout ends that session, a password change ends all others, «Выйти на всех устройствах» ends every one; 4 h idle / 12 h absolute timeout. A restore from a backup ends all sessions
