@@ -603,8 +603,15 @@ export default function SchedulePage() {
         navigate('/', { replace: true });
     }
 
-    function toggleTheme() {
-        chooseTheme(isDark ? 'light' : 'dark');
+    function toggleTheme(event) {
+        // Where it was tapped, so the new theme opens out from there; a key
+        // press has no point (0, 0) — then from the middle of the button.
+        const box = event.currentTarget.getBoundingClientRect();
+        const origin = event.clientX || event.clientY
+            ? { x: event.clientX, y: event.clientY }
+            : { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+
+        chooseTheme(isDark ? 'light' : 'dark', origin);
     }
 
     /** Shows another day on the phone, entering from the side it lies on. */

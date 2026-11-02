@@ -42,6 +42,14 @@ html, body {
     animation-timing-function: var(--ease-spring);
 }
 
+/* Flipped from the toggle: no cross-fade — the new theme opens out as a
+   circle over the old one (the clip-path animation is in lib/theme.js). */
+:root.theme-reveal::view-transition-old(root),
+:root.theme-reveal::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         animation-duration: 0.001ms !important;

@@ -13,6 +13,11 @@ const STEPS = [
 
 const SUBGROUP_OPTIONS = ['1 подгруппа', '2 подгруппа'];
 
+// The list shows about five options and scrolls for the rest (the next one
+// peeks out, so it is plain there is more): fifteen lines at once ran under
+// the keyboard. Matches max-height of .suggestions-list in welcome.css.
+const LIST_MAX_HEIGHT = 270;
+
 export default function WelcomePage() {
     const isAssetsReady = usePageAssets({
         title: 'Найдите своё расписание',
@@ -39,6 +44,9 @@ export default function WelcomePage() {
     const [isInvalid, setIsInvalid] = useState(false);
     const [isFinishing, setIsFinishing] = useState(false);
     const [isInputFocused, setIsInputFocused] = useState(false);
+    // On a phone the list waits for the keyboard to slide in and the field to
+    // move up, then eases in — appearing at once, it jumped with the page.
+    const [isListReady, setIsListReady] = useState(true);
     const inputRef = useRef(null);
     const listRef = useRef(null);
 
@@ -179,15 +187,17 @@ export default function WelcomePage() {
 
             const visibleBottom = viewport.offsetTop + viewport.height;
             const room = visibleBottom - list.getBoundingClientRect().top - 12;
-            list.style.maxHeight = `${Math.max(112, Math.round(room))}px`;
+            list.style.maxHeight = `${Math.min(LIST_MAX_HEIGHT, Math.max(112, Math.round(room)))}px`;
         }
 
         let scrollTimer = null;
 
         if (isPhone) {
             root.classList.add('keyboard-open');
+            setIsListReady(false);
             // After the keyboard has slid in, or the scroll would aim at the old viewport.
             scrollTimer = window.setTimeout(() => {
+                setIsListReady(true);
                 inputRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
                 window.setTimeout(fitList, 350);
             }, 300);
@@ -199,6 +209,7 @@ export default function WelcomePage() {
 
         return () => {
             window.clearTimeout(scrollTimer);
+            setIsListReady(true);
             root.classList.remove('keyboard-open');
             viewport?.removeEventListener('resize', fitList);
             viewport?.removeEventListener('scroll', fitList);
@@ -388,12 +399,13 @@ export default function WelcomePage() {
                             <div
                                 ref={listRef}
                                 id="suggestions"
-                                className={`suggestions-list ${!showSuggestions || suggestions.length === 0 || isFinishing ? 'hidden' : ''}`}
+                                className={`suggestions-list ${!showSuggestions || !isListReady || suggestions.length === 0 || isFinishing ? 'hidden' : ''}`}
                             >
-                                {suggestions.map((option) => (
+                                {suggestions.map((option, index) => (
                                     <div
                                         key={option}
                                         className="suggestion-item"
+                                        style={{ '--i': Math.min(index, 6) }}
                                         onMouseDown={(event) => {
                                             event.preventDefault();
                                             selectSuggestion(option);

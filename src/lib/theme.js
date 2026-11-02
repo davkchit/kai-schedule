@@ -35,15 +35,29 @@ export function currentTheme() {
     return storedTheme() || systemTheme();
 }
 
-export function applyTheme() {
+function applyThemeColor(theme) {
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[theme]);
+}
+
+export function applyTheme({ themeColor = true } = {}) {
     const theme = currentTheme();
     document.documentElement.setAttribute('data-theme', theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[theme]);
+
+    if (themeColor) {
+        applyThemeColor(theme);
+    }
+
     window.dispatchEvent(new CustomEvent(THEME_EVENT, { detail: theme }));
 }
 
-/** The toggle was flipped to `theme`. */
-export function chooseTheme(theme) {
+// How long the new theme takes to spread from the toggle over the screen.
+const REVEAL_MS = 450;
+
+/**
+ * The toggle was flipped to `theme`. `origin` ({ x, y } in viewport pixels,
+ * where it was tapped) makes the new theme open out as a circle from there.
+ */
+export function chooseTheme(theme, origin = null) {
     try {
         if (theme === systemTheme()) {
             localStorage.removeItem(THEME_KEY);
@@ -54,18 +68,48 @@ export function chooseTheme(theme) {
         // Storage unavailable: the choice still applies until the page closes.
     }
 
-    // The whole page eases from one theme to the other in one composited
-    // cross-fade, instead of some parts flipping at once while others fade —
-    // an abrupt brightness jump is exactly what a theme switch must not do.
-    // Browsers without View Transitions (or with reduced motion asked for)
-    // just switch.
+    // The whole page changes in one View Transition, instead of some parts
+    // flipping at once while others fade. Browsers without View Transitions
+    // (or with reduced motion asked for) just switch.
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
-    if (document.startViewTransition && !reduceMotion) {
-        document.startViewTransition(applyTheme);
-    } else {
+    if (!document.startViewTransition || reduceMotion) {
         applyTheme();
+        return;
     }
+
+    // From the toggle the new theme opens out as a circle over the old one
+    // (theme-reveal in base.css turns the cross-fade off). A cross-fade of
+    // light into dark passes through a muddy grey, and on a mid-range Android
+    // phone that blend drops frames — the switch looked torn.
+    const root = document.documentElement;
+    const reveal = Boolean(origin);
+
+    if (reveal) {
+        root.classList.add('theme-reveal');
+    }
+
+    // The status bar can't be animated: it flips halfway through, not at the
+    // tap while the page still shows the old theme.
+    const transition = document.startViewTransition(() => applyTheme({ themeColor: false }));
+
+    transition.ready
+        .then(() => {
+            if (reveal) {
+                const { x, y } = origin;
+                const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+
+                root.animate(
+                    { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+                    { duration: REVEAL_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', pseudoElement: '::view-transition-new(root)' }
+                );
+            }
+
+            window.setTimeout(() => applyThemeColor(currentTheme()), REVEAL_MS / 2);
+        })
+        .catch(() => applyThemeColor(currentTheme()));
+
+    transition.finished.finally(() => root.classList.remove('theme-reveal'));
 }
 
 /** Re-applies the theme when the system switches and nothing was chosen. */
